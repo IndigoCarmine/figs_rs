@@ -49,6 +49,15 @@ impl FontStore {
         }
     }
 
+    /// Raw font program bytes and face index for a font id, for embedding in a
+    /// PDF. `None` if the id is unknown.
+    pub fn font_data(&self, id: cosmic_text::fontdb::ID) -> Option<(Vec<u8>, u32)> {
+        self.system
+            .borrow()
+            .db()
+            .with_face_data(id, |data, index| (data.to_vec(), index))
+    }
+
     /// Rasterize a single glyph at a physical pixel size, returning its coverage
     /// mask. Returns `None` for color/bitmap glyphs (not supported yet) or empty
     /// glyphs (e.g. spaces).

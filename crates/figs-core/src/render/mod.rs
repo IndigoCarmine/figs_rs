@@ -7,8 +7,10 @@
 //! later milestones as additional trait methods with no-op defaults, so adding
 //! them won't break existing renderers.
 
+pub mod pdf;
 pub mod png;
 
+pub use pdf::{render_pdf, PdfError, PdfRenderer};
 pub use png::{render_png, PngError, TinySkiaRenderer};
 
 use crate::assets::Assets;

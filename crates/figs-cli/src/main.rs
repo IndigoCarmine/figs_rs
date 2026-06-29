@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use figs_core::{layout, render_png, Assets, Document};
+use figs_core::{layout, render_pdf, render_png, Assets, Document};
 
 #[derive(Parser)]
 #[command(name = "figs", version, about = "Compose figures/posters from TOML")]
@@ -55,9 +55,9 @@ fn build(input: &Path, output: &Path) -> Result<()> {
 
     let bytes = match output.extension().and_then(|e| e.to_str()) {
         Some("png") => render_png(&computed, &assets).context("rendering PNG")?,
-        Some("pdf") => bail!("PDF output is not implemented yet"),
+        Some("pdf") => render_pdf(&computed, &assets).context("rendering PDF")?,
         other => bail!(
-            "unsupported output extension {:?}; use .png",
+            "unsupported output extension {:?}; use .png or .pdf",
             other.unwrap_or("(none)")
         ),
     };
