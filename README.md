@@ -5,10 +5,9 @@ A fast, declarative tool for composing paper figures and posters. You describe
 size for you (no manual positioning), then renders to PNG/PDF. Think
 Flutter/XAML-style relative layout, aimed at research figures.
 
-> Status: **Phase 1 in progress.** The layout engine core (parse → resolve →
-> layout → IR) is implemented and tested. Text shaping, PNG/PDF renderers, the
-> CLI watcher and the egui live-preview window are landing milestone by
-> milestone (see [the plan](#milestones)).
+> Status: **Phase 1 feature-complete.** TOML → layout → PNG/PDF works
+> end-to-end with shaped text (incl. CJK), images, a file-watching CLI, and an
+> egui live-preview window. See [Usage](#usage) and [Milestones](#milestones).
 
 ## Why
 
@@ -90,19 +89,42 @@ Modeled on Flutter's `BoxConstraints`/`RenderFlex`:
   `aspect_ratio` derives the cross axis from the (possibly flex-imposed) main
   axis. Overflow clamps and warns — it never panics.
 
+## Usage
+
+```sh
+# Render once (format from the output extension)
+cargo run -p figs-cli -- build examples/four_panel.toml -o out.png
+cargo run -p figs-cli -- build examples/poster.toml     -o out.pdf
+
+# Re-render on every change to the document
+cargo run -p figs-cli -- watch examples/poster.toml -o out.png
+
+# Live preview window (needs a desktop; not built in headless CI)
+cargo run -p figs-preview -- examples/poster.toml
+```
+
+PDF output embeds subset fonts (selectable text, including CJK) and images as
+XObjects; PNG rasterizes at `page.dpi` (default 300).
+
 ## Build & test
 
 ```sh
-cargo test          # unit + layout integration tests
+cargo test                 # core + cli (figs-preview is excluded by default)
 cargo clippy --all-targets
+cargo check -p figs-preview # type-check the GUI crate
 ```
 
 ## Milestones
 
-M0 workspace · **M1 schema+resolve** ✓ · **M2 layout (column/row/rect, flex,
-align, aspect, overflow)** ✓ · M3 text (cosmic-text) · M4 PNG backend · M5 image
-+ aspect/fit · M6 PDF backend · M7 CLI + file watch · M7′ egui live preview ·
-M8 hardening.
+All Phase 1 milestones are implemented:
+
+M0 workspace ✓ · M1 schema+resolve ✓ · M2 layout (column/row/rect, flex, align,
+aspect, overflow) ✓ · M3 text shaping (cosmic-text) ✓ · M4 PNG backend ✓ ·
+M5 image + aspect/fit ✓ · M6 PDF backend (printpdf, embedded fonts) ✓ ·
+M7 CLI + file watch ✓ · M7′ egui live preview ✓.
+
+Next: M8 hardening (bundled default font for cross-machine determinism, richer
+diagnostics) and Phase 2 (Tauri WYSIWYG editor with TOML round-tripping).
 
 ## License
 

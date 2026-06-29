@@ -11,7 +11,7 @@ pub mod pdf;
 pub mod png;
 
 pub use pdf::{render_pdf, PdfError, PdfRenderer};
-pub use png::{render_png, PngError, TinySkiaRenderer};
+pub use png::{render_png, render_rgba, PngError, TinySkiaRenderer};
 
 use crate::assets::Assets;
 use crate::geom::{Color, ImageFit, Rect};
