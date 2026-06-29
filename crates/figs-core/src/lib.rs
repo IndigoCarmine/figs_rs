@@ -10,10 +10,12 @@
 
 pub mod geom;
 pub mod layout;
+pub mod render;
 pub mod schema;
 pub mod units;
 
 pub use layout::{layout, ComputedLayout, LeafMeasure, NullMeasurer};
+pub use render::{render_png, PngError};
 pub use schema::Document;
 
 /// Top-level error for the parse → resolve pipeline.

@@ -11,3 +11,4 @@ serde.workspace = true
 toml.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+tiny-skia = "0.11"

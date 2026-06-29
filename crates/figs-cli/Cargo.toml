@@ -1,0 +1,18 @@
+[package]
+name = "figs-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Command-line front-end for figs: render a TOML layout to PNG/PDF."
+
+[[bin]]
+name = "figs"
+path = "src/main.rs"
+
+[dependencies]
+figs-core = { path = "../figs-core" }
+clap = { version = "4", features = ["derive"] }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
