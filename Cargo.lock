@@ -1108,6 +1108,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tiny-skia",
  "toml",
+ "toml_edit 0.22.27",
  "tracing",
 ]
 
