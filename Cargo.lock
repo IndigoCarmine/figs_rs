@@ -1113,6 +1113,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "figs-editor"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "eframe",
+ "egui",
+ "figs-core",
+]
+
+[[package]]
 name = "figs-preview"
 version = "0.1.0"
 dependencies = [

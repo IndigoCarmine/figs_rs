@@ -1,0 +1,17 @@
+[package]
+name = "figs-editor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Native egui WYSIWYG editor for figs: edit a TOML layout visually with bidirectional sync."
+
+[[bin]]
+name = "figs-editor"
+path = "src/main.rs"
+
+[dependencies]
+figs-core = { path = "../figs-core" }
+eframe = { version = "0.29", default-features = false, features = ["glow", "default_fonts"] }
+egui = "0.29"
+anyhow = { workspace = true }

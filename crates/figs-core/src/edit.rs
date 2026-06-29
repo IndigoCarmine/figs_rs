@@ -82,6 +82,52 @@ impl EditableDocument {
         Ok(())
     }
 
+    // ---- reads (raw authored values, in the page unit) ----
+
+    /// All node ids, in document order.
+    pub fn node_ids(&self) -> Vec<String> {
+        self.doc
+            .get("nodes")
+            .and_then(Item::as_table)
+            .map(|t| t.iter().map(|(k, _)| k.to_string()).collect())
+            .unwrap_or_default()
+    }
+
+    /// The parent id of `id`, if any.
+    pub fn parent_of(&self, id: &str) -> Option<String> {
+        let nodes = self.doc.get("nodes").and_then(Item::as_table)?;
+        nodes.iter().find_map(|(parent, item)| {
+            read_children(item)
+                .iter()
+                .any(|c| c == id)
+                .then(|| parent.to_string())
+        })
+    }
+
+    /// Read a numeric property (float or integer) in its authored units.
+    pub fn get_f64(&self, id: &str, key: &str) -> Option<f64> {
+        let v = self.node(id)?.get(key)?.as_value()?;
+        v.as_float().or_else(|| v.as_integer().map(|i| i as f64))
+    }
+
+    /// Read a string property.
+    pub fn get_string(&self, id: &str, key: &str) -> Option<String> {
+        self.node(id)?.get(key)?.as_str().map(String::from)
+    }
+
+    /// Read a boolean property.
+    pub fn get_bool(&self, id: &str, key: &str) -> Option<bool> {
+        self.node(id)?.get(key)?.as_bool()
+    }
+
+    fn node(&self, id: &str) -> Option<&Table> {
+        self.doc
+            .get("nodes")
+            .and_then(Item::as_table)?
+            .get(id)
+            .and_then(Item::as_table)
+    }
+
     // ---- structural edits ----
 
     /// The ordered children ids of a container node (empty if none).
@@ -329,6 +375,19 @@ type = "rect"
         assert!(!out.contains("[nodes.g]"), "{out}");
         assert!(!out.contains("[nodes.a]"), "subtree not removed:\n{out}");
         assert_eq!(d.children("root").unwrap(), vec!["b"]);
+    }
+
+    #[test]
+    fn reads_raw_authored_values() {
+        let d = doc();
+        assert_eq!(d.get_string("root", "type").as_deref(), Some("column"));
+        assert_eq!(d.get_f64("root", "spacing"), Some(2.0));
+        assert_eq!(d.get_string("a", "fill").as_deref(), Some("#ff0000"));
+        assert_eq!(d.parent_of("a").as_deref(), Some("root"));
+        assert_eq!(d.parent_of("root"), None);
+        let mut ids = d.node_ids();
+        ids.sort();
+        assert_eq!(ids, vec!["a", "b", "root"]);
     }
 
     #[test]
