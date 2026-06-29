@@ -1,0 +1,48 @@
+# A 2x2 grid of equal panels. Exercises nested column/row with equal flex.
+[page]
+width = 20
+height = 20
+unit = "cm"
+root = "root"
+background = "#ffffff"
+
+[nodes.root]
+type = "column"
+spacing = 1
+padding = 1
+cross_axis_alignment = "stretch"
+children = ["top", "bottom"]
+
+[nodes.top]
+type = "row"
+flex = 1
+spacing = 1
+cross_axis_alignment = "stretch"
+children = ["a", "b"]
+
+[nodes.bottom]
+type = "row"
+flex = 1
+spacing = 1
+cross_axis_alignment = "stretch"
+children = ["c", "d"]
+
+[nodes.a]
+type = "rect"
+flex = 1
+fill = "#e0635a"
+
+[nodes.b]
+type = "rect"
+flex = 1
+fill = "#6aa9e0"
+
+[nodes.c]
+type = "rect"
+flex = 1
+fill = "#7bbf6a"
+
+[nodes.d]
+type = "rect"
+flex = 1
+fill = "#e0c25a"
