@@ -1,13 +1,10 @@
-//! `figs` — render a TOML layout document to an image.
-//!
-//! Phase 1 entry point. This milestone supports `figs build IN.toml -o OUT.png`.
-//! PDF output and a `watch` mode land in later milestones.
+//! `figs` — render a TOML layout document to PNG/PDF, once or on every change.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use anyhow::{bail, Context, Result};
+use anyhow::Result;
 use clap::{Parser, Subcommand};
-use figs_core::{layout, render_pdf, render_png, Assets, Document};
+use figs_cli::{pipeline, watch};
 
 #[derive(Parser)]
 #[command(name = "figs", version, about = "Compose figures/posters from TOML")]
@@ -18,11 +15,19 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Render a document once to an output file (format inferred from extension).
+    /// Render a document once (format inferred from the output extension).
     Build {
         /// Input TOML document.
         input: PathBuf,
-        /// Output path. Extension selects the format (.png).
+        /// Output path (.png or .pdf).
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    /// Watch the document and re-render on every change until interrupted.
+    Watch {
+        /// Input TOML document.
+        input: PathBuf,
+        /// Output path (.png or .pdf).
         #[arg(short, long)]
         output: PathBuf,
     },
@@ -39,36 +44,12 @@ fn main() -> Result<()> {
 
     let cli = Cli::parse();
     match cli.command {
-        Command::Build { input, output } => build(&input, &output),
+        Command::Build { input, output } => {
+            let assets = pipeline::assets_for(&input);
+            let n = pipeline::render_once(&input, &output, &assets)?;
+            eprintln!("wrote {} ({n} bytes)", output.display());
+            Ok(())
+        }
+        Command::Watch { input, output } => watch::run(&input, &output),
     }
-}
-
-fn build(input: &Path, output: &Path) -> Result<()> {
-    let src = std::fs::read_to_string(input)
-        .with_context(|| format!("reading input `{}`", input.display()))?;
-    let doc = Document::from_toml(&src)
-        .with_context(|| format!("parsing `{}`", input.display()))?;
-    // Image `src` paths resolve relative to the document's directory.
-    let base = input.parent().filter(|p| !p.as_os_str().is_empty());
-    let assets = Assets::new(base.unwrap_or_else(|| Path::new(".")));
-    let computed = layout(&doc, &assets);
-
-    let bytes = match output.extension().and_then(|e| e.to_str()) {
-        Some("png") => render_png(&computed, &assets).context("rendering PNG")?,
-        Some("pdf") => render_pdf(&computed, &assets).context("rendering PDF")?,
-        other => bail!(
-            "unsupported output extension {:?}; use .png or .pdf",
-            other.unwrap_or("(none)")
-        ),
-    };
-
-    std::fs::write(output, &bytes)
-        .with_context(|| format!("writing output `{}`", output.display()))?;
-    eprintln!(
-        "wrote {} ({} bytes) at {:.0} dpi",
-        output.display(),
-        bytes.len(),
-        computed.page.dpi
-    );
-    Ok(())
 }
