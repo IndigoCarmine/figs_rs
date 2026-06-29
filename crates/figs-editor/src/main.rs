@@ -8,6 +8,7 @@
 //! Needs a desktop (opens a window); excluded from workspace default members so
 //! headless CI never builds it.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use eframe::egui;
@@ -126,6 +127,12 @@ impl eframe::App for EditorApp {
             });
         });
 
+        egui::SidePanel::left("tree")
+            .default_width(220.0)
+            .show(ctx, |ui| {
+                dirty |= self.tree_panel(ui);
+            });
+
         egui::SidePanel::right("properties")
             .default_width(240.0)
             .show(ctx, |ui| {
@@ -143,6 +150,128 @@ impl eframe::App for EditorApp {
 }
 
 impl EditorApp {
+    /// The node tree with structural-edit buttons. Returns true if an edit was
+    /// made (so the caller re-renders).
+    fn tree_panel(&mut self, ui: &mut egui::Ui) -> bool {
+        ui.heading("Tree");
+        let has_sel = self.selected.is_some();
+        let mut action: Option<TreeAction> = None;
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(has_sel, egui::Button::new("+ child"))
+                .clicked()
+            {
+                action = Some(TreeAction::AddChild);
+            }
+            if ui.add_enabled(has_sel, egui::Button::new("Delete")).clicked() {
+                action = Some(TreeAction::Delete);
+            }
+            if ui.add_enabled(has_sel, egui::Button::new("↑")).clicked() {
+                action = Some(TreeAction::MoveUp);
+            }
+            if ui.add_enabled(has_sel, egui::Button::new("↓")).clicked() {
+                action = Some(TreeAction::MoveDown);
+            }
+        });
+        ui.separator();
+
+        let rows = self.tree_rows();
+        let mut clicked: Option<String> = None;
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            for (id, depth) in &rows {
+                ui.horizontal(|ui| {
+                    ui.add_space(*depth as f32 * 14.0);
+                    let kind = self
+                        .editable
+                        .as_ref()
+                        .and_then(|e| e.get_string(id, "type"))
+                        .unwrap_or_default();
+                    let selected = self.selected.as_deref() == Some(id.as_str());
+                    if ui
+                        .selectable_label(selected, format!("{id}  ({kind})"))
+                        .clicked()
+                    {
+                        clicked = Some(id.clone());
+                    }
+                });
+            }
+        });
+        if let Some(id) = clicked {
+            self.selected = Some(id);
+        }
+
+        match action {
+            Some(a) => self.apply_tree_action(a),
+            None => false,
+        }
+    }
+
+    /// Flatten the node tree into `(id, depth)` rows via preorder DFS, guarding
+    /// against cycles.
+    fn tree_rows(&self) -> Vec<(String, usize)> {
+        let mut rows = Vec::new();
+        if let Some(editable) = &self.editable {
+            if let Some(root) = editable.root_id() {
+                let mut visited = HashSet::new();
+                collect_tree(editable, root, 0, &mut visited, &mut rows);
+            }
+        }
+        rows
+    }
+
+    /// Apply a structural edit to the selected node. Returns true on change.
+    fn apply_tree_action(&mut self, action: TreeAction) -> bool {
+        let (Some(editable), Some(sel)) = (&mut self.editable, self.selected.clone()) else {
+            return false;
+        };
+        match action {
+            TreeAction::AddChild => {
+                let id = unique_id(editable);
+                let index = editable.children(&sel).map(|c| c.len()).unwrap_or(0);
+                if editable.add_node(&id, "rect", &sel, index).is_ok() {
+                    self.selected = Some(id);
+                    return true;
+                }
+            }
+            TreeAction::Delete => {
+                if editable.root_id().as_deref() == Some(sel.as_str()) {
+                    self.status = "cannot delete the root node".into();
+                    return false;
+                }
+                let parent = editable.parent_of(&sel);
+                if editable.remove_node(&sel).is_ok() {
+                    self.selected = parent;
+                    return true;
+                }
+            }
+            TreeAction::MoveUp => return self.move_sibling(&sel, -1),
+            TreeAction::MoveDown => return self.move_sibling(&sel, 1),
+        }
+        false
+    }
+
+    /// Swap the selected node with its previous/next sibling.
+    fn move_sibling(&mut self, id: &str, delta: i32) -> bool {
+        let Some(editable) = &mut self.editable else {
+            return false;
+        };
+        let Some(parent) = editable.parent_of(id) else {
+            return false;
+        };
+        let Ok(mut kids) = editable.children(&parent) else {
+            return false;
+        };
+        let Some(pos) = kids.iter().position(|c| c == id) else {
+            return false;
+        };
+        let target = pos as i32 + delta;
+        if target < 0 || target >= kids.len() as i32 {
+            return false;
+        }
+        kids.swap(pos, target as usize);
+        editable.set_children(&parent, &kids).is_ok()
+    }
+
     /// The property editor for the selected node. Returns true if an edit was
     /// made (so the caller re-renders).
     fn properties_panel(&mut self, ui: &mut egui::Ui) -> bool {
@@ -228,6 +357,43 @@ impl EditorApp {
             }
         }
     }
+}
+
+/// A structural edit requested from the tree panel.
+#[derive(Clone, Copy)]
+enum TreeAction {
+    AddChild,
+    Delete,
+    MoveUp,
+    MoveDown,
+}
+
+/// Preorder DFS collecting `(id, depth)` rows, guarding against cycles.
+fn collect_tree(
+    editable: &EditableDocument,
+    id: String,
+    depth: usize,
+    visited: &mut HashSet<String>,
+    rows: &mut Vec<(String, usize)>,
+) {
+    if !visited.insert(id.clone()) {
+        return;
+    }
+    rows.push((id.clone(), depth));
+    if let Ok(kids) = editable.children(&id) {
+        for k in kids {
+            collect_tree(editable, k, depth + 1, visited, rows);
+        }
+    }
+}
+
+/// Pick a node id not already used in the document (`node_1`, `node_2`, …).
+fn unique_id(editable: &EditableDocument) -> String {
+    let existing: HashSet<String> = editable.node_ids().into_iter().collect();
+    (1..)
+        .map(|i| format!("node_{i}"))
+        .find(|id| !existing.contains(id))
+        .expect("infinite range yields a free id")
 }
 
 /// Smallest node whose rect contains the point (the most specific selection).

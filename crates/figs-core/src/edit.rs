@@ -84,6 +84,16 @@ impl EditableDocument {
 
     // ---- reads (raw authored values, in the page unit) ----
 
+    /// The root node id declared in `[page].root`, if present.
+    pub fn root_id(&self) -> Option<String> {
+        self.doc
+            .get("page")
+            .and_then(Item::as_table)
+            .and_then(|t| t.get("root"))
+            .and_then(Item::as_str)
+            .map(String::from)
+    }
+
     /// All node ids, in document order.
     pub fn node_ids(&self) -> Vec<String> {
         self.doc
@@ -385,6 +395,7 @@ type = "rect"
         assert_eq!(d.get_string("a", "fill").as_deref(), Some("#ff0000"));
         assert_eq!(d.parent_of("a").as_deref(), Some("root"));
         assert_eq!(d.parent_of("root"), None);
+        assert_eq!(d.root_id().as_deref(), Some("root"));
         let mut ids = d.node_ids();
         ids.sort();
         assert_eq!(ids, vec!["a", "b", "root"]);
