@@ -3,7 +3,8 @@
 //! consumes. Every node carries its stable `id` so a canvas hit-test can map
 //! straight back to a TOML node (needed by the Phase 2 editor).
 
-use crate::geom::{Color, ImageFit, Rect, TextAlign};
+use crate::geom::{Color, Edges, ImageFit, Rect, TextAlign};
+use crate::text::ShapedText;
 
 /// A laid-out page: geometry plus a flat list of nodes in paint order
 /// (a parent always appears before its children).
@@ -32,9 +33,8 @@ pub struct ComputedNode {
 
 /// What a node paints. Containers paint nothing themselves.
 ///
-/// Text currently carries its resolved properties; once the text backend lands
-/// (M3) this variant will instead hold fully shaped glyph runs so PNG and PDF
-/// draw identical geometry.
+/// Text is shaped during layout (at the node's final content width), so PNG and
+/// PDF receive identical glyph geometry.
 #[derive(Debug, Clone)]
 pub enum PaintContent {
     Container,
@@ -48,17 +48,16 @@ pub enum PaintContent {
         src: std::path::PathBuf,
         fit: ImageFit,
     },
-    Text(TextBox),
+    Text(PaintText),
 }
 
-/// Resolved text ready to be shaped/painted within its node rect.
+/// Shaped text positioned relative to its node's content box (the node rect
+/// inset by `padding`).
 #[derive(Debug, Clone)]
-pub struct TextBox {
-    pub content: String,
-    pub font_size: f32,
-    pub font_family: Option<String>,
-    pub font_weight: Option<u16>,
+pub struct PaintText {
+    pub shaped: ShapedText,
     pub color: Color,
     pub align: TextAlign,
-    pub line_height: f32,
+    /// Padding of the owning node, used to find the content origin within rect.
+    pub padding: Edges,
 }

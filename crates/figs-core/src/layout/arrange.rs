@@ -3,9 +3,9 @@
 //! Produces [`ComputedNode`]s in paint order (parent before children).
 
 use crate::geom::{Axis, CrossAxisAlign, Edges, MainAxisAlign, Rect, Size};
-use crate::schema::{NodeType, RectProps, TextProps};
+use crate::schema::{Node, NodeType, RectProps};
 
-use super::computed::{ComputedNode, PaintContent, TextBox};
+use super::computed::{ComputedNode, PaintContent, PaintText};
 use super::measure::measure;
 use super::{cross_of, main_of, Constraints, Ctx, LeafMeasure};
 
@@ -20,7 +20,7 @@ pub(crate) fn arrange<M: LeafMeasure>(
     out.push(ComputedNode {
         id: node.id.clone(),
         rect,
-        content: paint_content(&node.kind),
+        content: build_paint(ctx, node, rect),
     });
 
     if let NodeType::Container {
@@ -214,8 +214,10 @@ fn cross_axis_offset(align: CrossAxisAlign, content_cross: f32, child_cross: f32
     }
 }
 
-fn paint_content(kind: &NodeType) -> PaintContent {
-    match kind {
+/// Build the paint content for a node now that its final `rect` is known. Text
+/// is shaped at the node's content width so the IR carries exact glyph geometry.
+fn build_paint<M: LeafMeasure>(ctx: &Ctx<M>, node: &Node, rect: Rect) -> PaintContent {
+    match &node.kind {
         NodeType::Container { .. } => PaintContent::Container,
         NodeType::Rect(RectProps {
             fill,
@@ -232,22 +234,15 @@ fn paint_content(kind: &NodeType) -> PaintContent {
             src: props.src.clone().into(),
             fit: props.fit,
         },
-        NodeType::Text(TextProps {
-            content,
-            font_size,
-            font_family,
-            font_weight,
-            color,
-            align,
-            line_height,
-        }) => PaintContent::Text(TextBox {
-            content: content.clone(),
-            font_size: *font_size,
-            font_family: font_family.clone(),
-            font_weight: *font_weight,
-            color: *color,
-            align: *align,
-            line_height: *line_height,
-        }),
+        NodeType::Text(props) => {
+            let content_w = (rect.w - node.common.padding.horizontal()).max(0.0);
+            let shaped = ctx.measurer.shape_text(props, content_w);
+            PaintContent::Text(PaintText {
+                shaped,
+                color: props.color,
+                align: props.align,
+                padding: node.common.padding,
+            })
+        }
     }
 }

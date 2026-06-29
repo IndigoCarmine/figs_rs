@@ -12,7 +12,8 @@ pub mod png;
 pub use png::{render_png, PngError, TinySkiaRenderer};
 
 use crate::geom::{Color, Rect};
-use crate::layout::{ComputedLayout, PageGeom, PaintContent};
+use crate::layout::{ComputedLayout, PageGeom, PaintContent, PaintText};
+use crate::text::FontStore;
 
 /// A drawing backend. Coordinates are points with a top-left origin; each
 /// renderer maps them to its own space.
@@ -29,11 +30,17 @@ pub trait Renderer {
         stroke_width: f32,
         corner_radius: f32,
     );
+
+    /// Draw shaped text within a node's border box `rect`. The default is a
+    /// no-op so backends can opt in as they gain text support.
+    fn draw_text(&mut self, rect: Rect, text: &PaintText, fonts: &FontStore) {
+        let _ = (rect, text, fonts);
+    }
 }
 
 /// Walk a computed layout in paint order, dispatching each node to the renderer.
-/// Unsupported content (text/image, until later milestones) is skipped.
-pub fn paint<R: Renderer>(layout: &ComputedLayout, r: &mut R) {
+/// Image content is skipped until the image backend lands.
+pub fn paint<R: Renderer>(layout: &ComputedLayout, fonts: &FontStore, r: &mut R) {
     r.begin_page(&layout.page);
     for node in &layout.nodes {
         match &node.content {
@@ -44,8 +51,9 @@ pub fn paint<R: Renderer>(layout: &ComputedLayout, r: &mut R) {
                 stroke_width,
                 corner_radius,
             } => r.fill_rect(node.rect, *fill, *stroke, *stroke_width, *corner_radius),
-            PaintContent::Image { .. } | PaintContent::Text(_) => {
-                tracing::debug!(id = %node.id, "skipping unsupported content (not yet implemented)");
+            PaintContent::Text(text) => r.draw_text(node.rect, text, fonts),
+            PaintContent::Image { .. } => {
+                tracing::debug!(id = %node.id, "skipping image content (not yet implemented)");
             }
         }
     }

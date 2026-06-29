@@ -6,8 +6,9 @@ use tiny_skia::{
     FillRule, Paint, PathBuilder, Pixmap, Rect as SkRect, Stroke, Transform,
 };
 
-use crate::geom::{Color, Rect};
-use crate::layout::{ComputedLayout, PageGeom};
+use crate::geom::{Color, Rect, TextAlign};
+use crate::layout::{ComputedLayout, PageGeom, PaintText};
+use crate::text::{FontStore, GlyphBitmap};
 
 use super::{paint, Renderer};
 
@@ -116,6 +117,67 @@ impl Renderer for TinySkiaRenderer {
             }
         }
     }
+
+    fn draw_text(&mut self, rect: Rect, text: &PaintText, fonts: &FontStore) {
+        let scale = self.scale;
+        let content_x = rect.x + text.padding.left;
+        let content_y = rect.y + text.padding.top;
+        let content_w = (rect.w - text.padding.horizontal()).max(0.0);
+
+        for line in &text.shaped.lines {
+            let align_off = match text.align {
+                TextAlign::Left | TextAlign::Justify => 0.0,
+                TextAlign::Center => ((content_w - line.width) * 0.5).max(0.0),
+                TextAlign::Right => (content_w - line.width).max(0.0),
+            };
+            let baseline_px = (content_y + line.baseline) * scale;
+            for g in &line.glyphs {
+                let pen_x_px = (content_x + align_off + g.x) * scale;
+                let px_size = g.font_size * scale;
+                if let Some(bm) = fonts.glyph_alpha(g.font_id, g.glyph_id, px_size) {
+                    let x0 = pen_x_px.round() as i32 + bm.left;
+                    let y0 = baseline_px.round() as i32 - bm.top;
+                    blit_alpha(&mut self.pixmap, &bm, x0, y0, text.color);
+                }
+            }
+        }
+    }
+}
+
+/// Composite a glyph coverage mask onto the pixmap (premultiplied RGBA, src-over).
+fn blit_alpha(pixmap: &mut Pixmap, bm: &GlyphBitmap, x0: i32, y0: i32, color: Color) {
+    let pw = pixmap.width() as i32;
+    let ph = pixmap.height() as i32;
+    let (cr, cg, cb, ca) = (
+        color.r.clamp(0.0, 1.0),
+        color.g.clamp(0.0, 1.0),
+        color.b.clamp(0.0, 1.0),
+        color.a.clamp(0.0, 1.0),
+    );
+    let data = pixmap.data_mut();
+    for gy in 0..bm.height as i32 {
+        let py = y0 + gy;
+        if py < 0 || py >= ph {
+            continue;
+        }
+        for gx in 0..bm.width as i32 {
+            let px = x0 + gx;
+            if px < 0 || px >= pw {
+                continue;
+            }
+            let cov = bm.alpha[(gy * bm.width as i32 + gx) as usize] as f32 / 255.0 * ca;
+            if cov <= 0.0 {
+                continue;
+            }
+            let idx = ((py * pw + px) * 4) as usize;
+            let inv = 1.0 - cov;
+            // Source is premultiplied by coverage; blend over destination.
+            data[idx] = (cr * cov * 255.0 + data[idx] as f32 * inv).round() as u8;
+            data[idx + 1] = (cg * cov * 255.0 + data[idx + 1] as f32 * inv).round() as u8;
+            data[idx + 2] = (cb * cov * 255.0 + data[idx + 2] as f32 * inv).round() as u8;
+            data[idx + 3] = (cov * 255.0 + data[idx + 3] as f32 * inv).round() as u8;
+        }
+    }
 }
 
 /// Build a rounded-rectangle path. The radius is clamped to half the shorter
@@ -140,9 +202,10 @@ fn rounded_rect_path(r: SkRect, radius: f32) -> Option<tiny_skia::Path> {
     pb.finish()
 }
 
-/// Render a computed layout to PNG bytes.
-pub fn render_png(layout: &ComputedLayout) -> Result<Vec<u8>, PngError> {
+/// Render a computed layout to PNG bytes. `fonts` rasterizes any shaped text;
+/// layouts without text ignore it.
+pub fn render_png(layout: &ComputedLayout, fonts: &FontStore) -> Result<Vec<u8>, PngError> {
     let mut r = TinySkiaRenderer::new(&layout.page)?;
-    paint(layout, &mut r);
+    paint(layout, fonts, &mut r);
     r.into_png()
 }
