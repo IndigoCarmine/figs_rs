@@ -9,13 +9,16 @@
 //! headless CI never builds it.
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::time::{Duration, SystemTime};
 
 use eframe::egui;
 use egui::{Color32, Pos2, Rect, Sense, Stroke, Vec2};
 use figs_core::geom::Rect as FigRect;
 use figs_core::layout::ComputedLayout;
 use figs_core::{layout, render_rgba, Assets, EditableDocument};
+use notify_debouncer_mini::{new_debouncer, notify::RecursiveMode, DebounceEventResult};
 
 fn main() -> eframe::Result<()> {
     let path = match std::env::args().nth(1) {
@@ -46,6 +49,10 @@ struct EditorApp {
     img_size: [usize; 2],
     selected: Option<String>,
     status: String,
+    /// Receives a signal when the file changes on disk.
+    reload_rx: Receiver<()>,
+    /// Last input mtime we are in sync with; gates self-saves vs external edits.
+    last_mtime: Option<SystemTime>,
 }
 
 impl EditorApp {
@@ -61,6 +68,10 @@ impl EditorApp {
                 None
             }
         };
+        let (tx, reload_rx) = channel::<()>();
+        spawn_watcher(path.clone(), ctx.clone(), tx);
+        let last_mtime = mtime(&path);
+
         let mut app = EditorApp {
             path,
             assets,
@@ -70,9 +81,32 @@ impl EditorApp {
             img_size: [0, 0],
             selected: None,
             status: String::new(),
+            reload_rx,
+            last_mtime,
         };
         app.rerender(ctx);
         app
+    }
+
+    /// Reload the document from disk (external edit), preserving the selection
+    /// if its node still exists.
+    fn reload(&mut self, ctx: &egui::Context) {
+        match std::fs::read_to_string(&self.path)
+            .map_err(|e| e.to_string())
+            .and_then(|s| EditableDocument::parse(&s).map_err(|e| e.to_string()))
+        {
+            Ok(doc) => {
+                if let Some(sel) = &self.selected {
+                    if !doc.node_ids().iter().any(|n| n == sel) {
+                        self.selected = None;
+                    }
+                }
+                self.editable = Some(doc);
+                self.rerender(ctx);
+                self.status = "reloaded (external change)".into();
+            }
+            Err(e) => self.status = format!("reload failed: {e}"),
+        }
     }
 
     /// Re-resolve the edited document, lay it out and refresh the texture.
@@ -105,7 +139,11 @@ impl EditorApp {
     fn save(&mut self) {
         if let Some(editable) = &self.editable {
             match std::fs::write(&self.path, editable.to_toml_string()) {
-                Ok(()) => self.status = format!("saved {}", self.path.display()),
+                Ok(()) => {
+                    // Record our own write so the watcher doesn't reload it.
+                    self.last_mtime = mtime(&self.path);
+                    self.status = format!("saved {}", self.path.display());
+                }
                 Err(e) => self.status = format!("save failed: {e}"),
             }
         }
@@ -115,6 +153,20 @@ impl EditorApp {
 impl eframe::App for EditorApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let mut dirty = false;
+
+        // Reflect external edits: reload only when the file's mtime differs from
+        // what we last wrote/loaded (so our own Save doesn't trigger a reload).
+        let mut signalled = false;
+        while self.reload_rx.try_recv().is_ok() {
+            signalled = true;
+        }
+        if signalled {
+            let now = mtime(&self.path);
+            if now != self.last_mtime {
+                self.last_mtime = now;
+                self.reload(ctx);
+            }
+        }
 
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -357,6 +409,44 @@ impl EditorApp {
             }
         }
     }
+}
+
+/// Watch the input's directory and signal the UI (and force a repaint) on any
+/// filesystem event; the app gates actual reloads on the input's mtime.
+fn spawn_watcher(input: PathBuf, ctx: egui::Context, tx: Sender<()>) {
+    std::thread::spawn(move || {
+        let dir = input
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+
+        let (etx, erx) = channel::<DebounceEventResult>();
+        let mut debouncer = match new_debouncer(Duration::from_millis(150), etx) {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("watcher init failed: {e}");
+                return;
+            }
+        };
+        if debouncer
+            .watcher()
+            .watch(&dir, RecursiveMode::NonRecursive)
+            .is_err()
+        {
+            return;
+        }
+        for res in erx {
+            if res.is_ok() {
+                let _ = tx.send(());
+                ctx.request_repaint();
+            }
+        }
+    });
+}
+
+fn mtime(path: &Path) -> Option<SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
 /// A structural edit requested from the tree panel.
