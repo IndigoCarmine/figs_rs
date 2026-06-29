@@ -11,7 +11,9 @@ pub mod png;
 
 pub use png::{render_png, PngError, TinySkiaRenderer};
 
-use crate::geom::{Color, Rect};
+use crate::assets::Assets;
+use crate::geom::{Color, ImageFit, Rect};
+use crate::image::DecodedImage;
 use crate::layout::{ComputedLayout, PageGeom, PaintContent, PaintText};
 use crate::text::FontStore;
 
@@ -36,11 +38,15 @@ pub trait Renderer {
     fn draw_text(&mut self, rect: Rect, text: &PaintText, fonts: &FontStore) {
         let _ = (rect, text, fonts);
     }
+
+    /// Draw an image fitted into a node's border box `rect`. Default no-op.
+    fn draw_image(&mut self, rect: Rect, image: &DecodedImage, fit: ImageFit) {
+        let _ = (rect, image, fit);
+    }
 }
 
 /// Walk a computed layout in paint order, dispatching each node to the renderer.
-/// Image content is skipped until the image backend lands.
-pub fn paint<R: Renderer>(layout: &ComputedLayout, fonts: &FontStore, r: &mut R) {
+pub fn paint<R: Renderer>(layout: &ComputedLayout, assets: &Assets, r: &mut R) {
     r.begin_page(&layout.page);
     for node in &layout.nodes {
         match &node.content {
@@ -51,9 +57,11 @@ pub fn paint<R: Renderer>(layout: &ComputedLayout, fonts: &FontStore, r: &mut R)
                 stroke_width,
                 corner_radius,
             } => r.fill_rect(node.rect, *fill, *stroke, *stroke_width, *corner_radius),
-            PaintContent::Text(text) => r.draw_text(node.rect, text, fonts),
-            PaintContent::Image { .. } => {
-                tracing::debug!(id = %node.id, "skipping image content (not yet implemented)");
+            PaintContent::Text(text) => r.draw_text(node.rect, text, &assets.fonts),
+            PaintContent::Image { src, fit } => {
+                if let Some(img) = assets.images.get(src) {
+                    r.draw_image(node.rect, &img, *fit);
+                }
             }
         }
     }

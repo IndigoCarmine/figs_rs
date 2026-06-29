@@ -1,14 +1,14 @@
 //! PNG backend tests: render small layouts at 72 dpi (so points == pixels) and
 //! sample pixels to confirm geometry and colors.
 
-use figs_core::{layout, render_png, Document, FontStore, NullMeasurer};
+use figs_core::{layout, render_png, Assets, Document, NullMeasurer};
 use tiny_skia::Pixmap;
 
 fn render(src: &str) -> Pixmap {
     let doc = Document::from_toml(src).expect("resolve");
     let computed = layout(&doc, &NullMeasurer);
-    let fonts = FontStore::new();
-    let bytes = render_png(&computed, &fonts).expect("render png");
+    let assets = Assets::new(".");
+    let bytes = render_png(&computed, &assets).expect("render png");
     Pixmap::decode_png(&bytes).expect("decode png")
 }
 
@@ -133,9 +133,9 @@ fn text_is_rasterized() {
         color = "#000000"
     "##;
     let doc = Document::from_toml(src).unwrap();
-    let fonts = FontStore::new().with_default_family("Liberation Sans");
-    let computed = layout(&doc, &fonts);
-    let bytes = render_png(&computed, &fonts).unwrap();
+    let assets = Assets::new(".").with_default_family("Liberation Sans");
+    let computed = layout(&doc, &assets);
+    let bytes = render_png(&computed, &assets).unwrap();
     let p = Pixmap::decode_png(&bytes).unwrap();
 
     let mut dark = 0usize;
@@ -153,7 +153,7 @@ fn four_panel_example_renders() {
     let src = include_str!("../../../examples/four_panel.toml");
     let doc = Document::from_toml(src).unwrap();
     let computed = layout(&doc, &NullMeasurer);
-    let fonts = FontStore::new();
-    let bytes = render_png(&computed, &fonts).unwrap();
+    let assets = Assets::new(".");
+    let bytes = render_png(&computed, &assets).unwrap();
     assert!(bytes.len() > 1000, "expected a real PNG, got {} bytes", bytes.len());
 }

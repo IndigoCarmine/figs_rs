@@ -8,13 +8,17 @@
 //! fonts and images during measurement/rendering, so it can be reused verbatim
 //! by the Phase 2 Tauri backend.
 
+pub mod assets;
 pub mod geom;
+pub mod image;
 pub mod layout;
 pub mod render;
 pub mod schema;
 pub mod text;
 pub mod units;
 
+pub use assets::Assets;
+pub use image::{DecodedImage, ImageStore};
 pub use layout::{layout, ComputedLayout, LeafMeasure, NullMeasurer};
 pub use render::{render_png, PngError};
 pub use schema::Document;

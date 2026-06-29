@@ -3,10 +3,13 @@
 //! anti-aliasing and the pixmap is encoded to PNG.
 
 use tiny_skia::{
-    FillRule, Paint, PathBuilder, Pixmap, Rect as SkRect, Stroke, Transform,
+    FillRule, FilterQuality, IntRect, Paint, PathBuilder, Pixmap, PixmapPaint, Rect as SkRect,
+    Stroke, Transform,
 };
 
-use crate::geom::{Color, Rect, TextAlign};
+use crate::assets::Assets;
+use crate::geom::{Color, ImageFit, Rect, TextAlign};
+use crate::image::DecodedImage;
 use crate::layout::{ComputedLayout, PageGeom, PaintText};
 use crate::text::{FontStore, GlyphBitmap};
 
@@ -118,6 +121,56 @@ impl Renderer for TinySkiaRenderer {
         }
     }
 
+    fn draw_image(&mut self, rect: Rect, image: &DecodedImage, fit: ImageFit) {
+        let (dx, dy) = (self.px(rect.x), self.px(rect.y));
+        let (dw, dh) = (self.px(rect.w), self.px(rect.h));
+        if dw <= 0.0 || dh <= 0.0 || image.width == 0 || image.height == 0 {
+            return;
+        }
+        let src = decoded_to_pixmap(image);
+        let (iw, ih) = (image.width as f32, image.height as f32);
+        let paint = PixmapPaint {
+            quality: FilterQuality::Bilinear,
+            ..PixmapPaint::default()
+        };
+
+        match fit {
+            ImageFit::Fill => {
+                let t = Transform::from_scale(dw / iw, dh / ih).post_translate(dx, dy);
+                self.pixmap
+                    .draw_pixmap(0, 0, src.as_ref(), &paint, t, None);
+            }
+            ImageFit::Contain => {
+                let s = (dw / iw).min(dh / ih);
+                let (dw2, dh2) = (iw * s, ih * s);
+                let t = Transform::from_scale(s, s)
+                    .post_translate(dx + (dw - dw2) / 2.0, dy + (dh - dh2) / 2.0);
+                self.pixmap
+                    .draw_pixmap(0, 0, src.as_ref(), &paint, t, None);
+            }
+            ImageFit::Cover => {
+                // Crop the source to the centered sub-rect that matches the dest
+                // aspect, then scale it to fill the dest exactly (no overflow).
+                let s = (dw / iw).max(dh / ih);
+                let cw = (dw / s).min(iw).max(1.0);
+                let ch = (dh / s).min(ih).max(1.0);
+                let cx = ((iw - cw) / 2.0).max(0.0);
+                let cy = ((ih - ch) / 2.0).max(0.0);
+                let cropped = IntRect::from_xywh(cx as i32, cy as i32, cw as u32, ch as u32)
+                    .and_then(|r| src.clone_rect(r));
+                if let Some(cropped) = cropped {
+                    let t = Transform::from_scale(
+                        dw / cropped.width() as f32,
+                        dh / cropped.height() as f32,
+                    )
+                    .post_translate(dx, dy);
+                    self.pixmap
+                        .draw_pixmap(0, 0, cropped.as_ref(), &paint, t, None);
+                }
+            }
+        }
+    }
+
     fn draw_text(&mut self, rect: Rect, text: &PaintText, fonts: &FontStore) {
         let scale = self.scale;
         let content_x = rect.x + text.padding.left;
@@ -142,6 +195,22 @@ impl Renderer for TinySkiaRenderer {
             }
         }
     }
+}
+
+/// Build a premultiplied tiny-skia pixmap from a straight-RGBA decoded image.
+fn decoded_to_pixmap(image: &DecodedImage) -> Pixmap {
+    let mut pixmap = Pixmap::new(image.width, image.height)
+        .expect("non-zero image size checked by caller");
+    let dst = pixmap.data_mut();
+    for (i, px) in image.rgba.chunks_exact(4).enumerate() {
+        let a = px[3] as u16;
+        // straight -> premultiplied
+        dst[i * 4] = (px[0] as u16 * a / 255) as u8;
+        dst[i * 4 + 1] = (px[1] as u16 * a / 255) as u8;
+        dst[i * 4 + 2] = (px[2] as u16 * a / 255) as u8;
+        dst[i * 4 + 3] = px[3];
+    }
+    pixmap
 }
 
 /// Composite a glyph coverage mask onto the pixmap (premultiplied RGBA, src-over).
@@ -202,10 +271,10 @@ fn rounded_rect_path(r: SkRect, radius: f32) -> Option<tiny_skia::Path> {
     pb.finish()
 }
 
-/// Render a computed layout to PNG bytes. `fonts` rasterizes any shaped text;
-/// layouts without text ignore it.
-pub fn render_png(layout: &ComputedLayout, fonts: &FontStore) -> Result<Vec<u8>, PngError> {
+/// Render a computed layout to PNG bytes. `assets` supplies fonts for text and
+/// decoded images; layouts without those ignore them.
+pub fn render_png(layout: &ComputedLayout, assets: &Assets) -> Result<Vec<u8>, PngError> {
     let mut r = TinySkiaRenderer::new(&layout.page)?;
-    paint(layout, fonts, &mut r);
+    paint(layout, assets, &mut r);
     r.into_png()
 }
