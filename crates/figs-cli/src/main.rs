@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use figs_core::{layout, render_png, Document, FontStore};
+use figs_core::{layout, render_png, Assets, Document};
 
 #[derive(Parser)]
 #[command(name = "figs", version, about = "Compose figures/posters from TOML")]
@@ -48,11 +48,13 @@ fn build(input: &Path, output: &Path) -> Result<()> {
         .with_context(|| format!("reading input `{}`", input.display()))?;
     let doc = Document::from_toml(&src)
         .with_context(|| format!("parsing `{}`", input.display()))?;
-    let fonts = FontStore::new();
-    let computed = layout(&doc, &fonts);
+    // Image `src` paths resolve relative to the document's directory.
+    let base = input.parent().filter(|p| !p.as_os_str().is_empty());
+    let assets = Assets::new(base.unwrap_or_else(|| Path::new(".")));
+    let computed = layout(&doc, &assets);
 
     let bytes = match output.extension().and_then(|e| e.to_str()) {
-        Some("png") => render_png(&computed, &fonts).context("rendering PNG")?,
+        Some("png") => render_png(&computed, &assets).context("rendering PNG")?,
         Some("pdf") => bail!("PDF output is not implemented yet"),
         other => bail!(
             "unsupported output extension {:?}; use .png",

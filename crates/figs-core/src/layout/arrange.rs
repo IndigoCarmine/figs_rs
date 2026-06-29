@@ -131,7 +131,7 @@ fn layout_children<M: LeafMeasure>(
             CrossAxisAlign::Stretch => (content_cross - margin_cross(i)).max(0.0),
             _ => cross_of(axis, measured[i]),
         };
-        if let Some(ar) = ctx.doc.nodes[child].common.aspect_ratio {
+        if let Some(ar) = effective_aspect(ctx, child) {
             if ar > 0.0 {
                 bcross = match axis {
                     // column: main = height, cross = width = height * ar
@@ -157,6 +157,23 @@ fn layout_children<M: LeafMeasure>(
 
         cursor += margin_main(i) + bmain + spacing + extra_gap;
     }
+}
+
+/// The aspect ratio (width/height) governing a node's cross size: an explicit
+/// `aspect_ratio` if set, else an image's intrinsic pixel aspect so images keep
+/// their proportions by default.
+fn effective_aspect<M: LeafMeasure>(ctx: &Ctx<M>, idx: usize) -> Option<f32> {
+    let node = &ctx.doc.nodes[idx];
+    if let Some(ar) = node.common.aspect_ratio {
+        return Some(ar);
+    }
+    if let NodeType::Image(props) = &node.kind {
+        let s = ctx.measurer.measure_image(props);
+        if s.w > 0.0 && s.h > 0.0 {
+            return Some(s.w / s.h);
+        }
+    }
+    None
 }
 
 fn margin_leading_main(axis: Axis, m: Edges) -> f32 {
