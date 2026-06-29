@@ -20,7 +20,7 @@ pub mod units;
 pub use assets::Assets;
 pub use image::{DecodedImage, ImageStore};
 pub use layout::{layout, ComputedLayout, LeafMeasure, NullMeasurer};
-pub use render::{render_pdf, render_png, PdfError, PngError};
+pub use render::{render_pdf, render_png, render_rgba, PdfError, PngError};
 pub use schema::Document;
 pub use text::{FontStore, ShapedText};
 

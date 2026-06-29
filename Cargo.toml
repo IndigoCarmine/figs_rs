@@ -1,6 +1,10 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
+# figs-preview pulls a GUI stack (eframe) and needs a desktop to run, so it is
+# excluded from the default build/test set. Build it explicitly with
+# `cargo run -p figs-preview` on a desktop.
+default-members = ["crates/figs-core", "crates/figs-cli"]
 
 [workspace.package]
 version = "0.1.0"

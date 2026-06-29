@@ -278,3 +278,23 @@ pub fn render_png(layout: &ComputedLayout, assets: &Assets) -> Result<Vec<u8>, P
     paint(layout, assets, &mut r);
     r.into_png()
 }
+
+/// Render a computed layout to straight (non-premultiplied) RGBA8 pixels plus
+/// dimensions — convenient for feeding a GUI texture (e.g. the egui preview).
+pub fn render_rgba(layout: &ComputedLayout, assets: &Assets) -> Result<(u32, u32, Vec<u8>), PngError> {
+    let mut r = TinySkiaRenderer::new(&layout.page)?;
+    paint(layout, assets, &mut r);
+    let (w, h) = (r.pixmap.width(), r.pixmap.height());
+    let mut rgba = r.pixmap.data().to_vec();
+    // tiny-skia stores premultiplied RGBA; un-premultiply for display.
+    for px in rgba.chunks_exact_mut(4) {
+        let a = px[3];
+        if a != 0 && a != 255 {
+            let unmul = |c: u8| ((c as u16 * 255 + a as u16 / 2) / a as u16).min(255) as u8;
+            px[0] = unmul(px[0]);
+            px[1] = unmul(px[1]);
+            px[2] = unmul(px[2]);
+        }
+    }
+    Ok((w, h, rgba))
+}

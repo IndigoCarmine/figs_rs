@@ -116,6 +116,30 @@ fn four_color_quadrants() {
 }
 
 #[test]
+fn render_rgba_dimensions_and_color() {
+    use figs_core::render_rgba;
+    let src = r##"
+        [page]
+        width = 20
+        height = 10
+        unit = "pt"
+        dpi = 72
+        background = "#00ff00"
+        root = "root"
+        [nodes.root]
+        type = "column"
+    "##;
+    let doc = Document::from_toml(src).unwrap();
+    let computed = layout(&doc, &NullMeasurer);
+    let assets = Assets::new(".");
+    let (w, h, rgba) = render_rgba(&computed, &assets).unwrap();
+    assert_eq!((w, h), (20, 10));
+    assert_eq!(rgba.len(), (20 * 10 * 4) as usize);
+    // top-left pixel is the green background, straight RGBA.
+    assert_eq!(&rgba[0..4], &[0, 255, 0, 255]);
+}
+
+#[test]
 fn text_is_rasterized() {
     // Black "Hello" on white; at least some dark pixels must appear.
     let src = r##"
