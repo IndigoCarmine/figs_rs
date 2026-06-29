@@ -12,11 +12,13 @@ pub mod geom;
 pub mod layout;
 pub mod render;
 pub mod schema;
+pub mod text;
 pub mod units;
 
 pub use layout::{layout, ComputedLayout, LeafMeasure, NullMeasurer};
 pub use render::{render_png, PngError};
 pub use schema::Document;
+pub use text::{FontStore, ShapedText};
 
 /// Top-level error for the parse → resolve pipeline.
 #[derive(Debug, thiserror::Error)]
