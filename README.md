@@ -101,6 +101,10 @@ cargo run -p figs-cli -- watch examples/poster.toml -o out.png
 
 # Live preview window (needs a desktop; not built in headless CI)
 cargo run -p figs-preview -- examples/poster.toml
+
+# WYSIWYG editor: click to select, edit properties, Save writes back the TOML
+# (comments/formatting preserved). Needs a desktop.
+cargo run -p figs-editor -- examples/poster.toml
 ```
 
 PDF output embeds subset fonts (selectable text, including CJK) and images as
