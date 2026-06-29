@@ -1,0 +1,56 @@
+# A 2x2 grid of FIXED-size panels, evenly spaced and bleeding to the page edge.
+#
+# Two things to notice vs. four_panel.toml (which uses flex to fill):
+#   * the root has no `padding`/`margin`, so content reaches the page border
+#     (edge-to-edge);
+#   * panels are fixed-size (`width`/`height`), so each container has leftover
+#     space for `main_axis_alignment = "space_evenly"` to distribute as equal
+#     gaps. With flex children there would be no slack and space_* would be inert.
+[page]
+width = 20
+height = 20
+unit = "cm"
+root = "root"
+background = "#ffffff"
+
+[nodes.root]
+type = "column"
+main_axis_alignment = "space_evenly"   # equal vertical gaps between the two rows
+cross_axis_alignment = "stretch"       # rows span the full page width
+children = ["top", "bottom"]
+
+[nodes.top]
+type = "row"
+height = 8
+main_axis_alignment = "space_evenly"   # equal horizontal gaps between panels
+children = ["a", "b"]
+
+[nodes.bottom]
+type = "row"
+height = 8
+main_axis_alignment = "space_evenly"
+children = ["c", "d"]
+
+[nodes.a]
+type = "rect"
+width = 8
+height = 8
+fill = "#e0635a"
+
+[nodes.b]
+type = "rect"
+width = 8
+height = 8
+fill = "#6aa9e0"
+
+[nodes.c]
+type = "rect"
+width = 8
+height = 8
+fill = "#7bbf6a"
+
+[nodes.d]
+type = "rect"
+width = 8
+height = 8
+fill = "#e0c25a"

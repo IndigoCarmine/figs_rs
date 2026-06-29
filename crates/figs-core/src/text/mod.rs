@@ -41,11 +41,46 @@ impl FontStore {
         self
     }
 
+    /// Set (or clear) the default family after construction. `None` falls back
+    /// to a generic sans-serif during shaping.
+    pub fn set_default_family(&mut self, family: Option<String>) {
+        self.default_family = family;
+    }
+
+    /// All installed font families, deduplicated and sorted case-insensitively.
+    /// Used by the editor to populate font pickers.
+    pub fn families(&self) -> Vec<String> {
+        let system = self.system.borrow();
+        let mut names: Vec<String> = system
+            .db()
+            .faces()
+            .filter_map(|f| f.families.first().map(|(name, _)| name.clone()))
+            .collect();
+        names.sort_by_key(|s| s.to_lowercase());
+        names.dedup();
+        names
+    }
+
     /// Shape a text block under a width constraint (points; non-positive or
     /// non-finite means unconstrained).
     pub fn shape(&self, text: &TextProps, max_width: f32) -> ShapedText {
         let mut system = self.system.borrow_mut();
         shape::shape(&mut system, text, max_width, self.default_family.as_deref())
+    }
+
+    /// Run a closure with mutable access to the underlying `FontSystem`.
+    ///
+    /// The renderer needs this to rasterize glyphs through a
+    /// [`cosmic_text::SwashCache`], which requires `&mut FontSystem`.
+    pub fn with_system<R>(&self, f: impl FnOnce(&mut FontSystem) -> R) -> R {
+        let mut system = self.system.borrow_mut();
+        f(&mut system)
+    }
+
+    /// The default family used for text nodes without an explicit `font_family`,
+    /// if one was configured.
+    pub fn default_family(&self) -> Option<&str> {
+        self.default_family.as_deref()
     }
 }
 

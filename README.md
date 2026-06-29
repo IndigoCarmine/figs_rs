@@ -65,6 +65,38 @@ You provide: hierarchy, style, content, and constraints (`flex`, `aspect_ratio`,
 Lengths are in the page `unit`; `font_size` is always points. Internally
 everything is converted to points (1 pt = 1/72 in).
 
+### Equal spacing & edge-to-edge
+
+To place panels at **equal intervals** in a `row`/`column`, set
+`main_axis_alignment` to a distribution mode and give the children **fixed
+sizes** so the container has leftover space to spread:
+
+- `space_between` — equal gaps between panels, none at the ends.
+- `space_around` — equal gaps around each panel (half-gap at the ends).
+- `space_evenly` — equal gaps everywhere, including the ends.
+
+```toml
+[nodes.row]
+type = "row"
+main_axis_alignment = "space_evenly"
+children = ["a", "b"]
+
+[nodes.a]
+type = "image"
+src = "a.png"
+width = 8          # fixed size leaves slack for the gaps
+```
+
+Caveat: distribution only acts on *leftover* space. If a child uses `flex` it
+eats the slack and `space_*` has no visible effect — in that case use `flex = 1`
+on each child plus a `spacing` value, which already yields equal-size panels with
+equal gaps.
+
+For **edge-to-edge** figures, simply omit `padding`/`margin` on the root (and any
+outer container): both default to zero, so content reaches the page border. The
+GUI's starter document no longer adds an outer inset. See
+[`examples/grid_4panel.toml`](examples/grid_4panel.toml) for both at once.
+
 ## Architecture
 
 ```

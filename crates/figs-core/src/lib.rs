@@ -16,7 +16,7 @@ pub mod text;
 pub mod units;
 
 pub use layout::{layout, ComputedLayout, LeafMeasure, NullMeasurer};
-pub use render::{render_png, PngError};
+pub use render::{image_size, render_png, render_rgba, PngError, RenderedImage, RenderOptions};
 pub use schema::Document;
 pub use text::{FontStore, ShapedText};
 

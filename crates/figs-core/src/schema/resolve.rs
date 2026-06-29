@@ -52,6 +52,8 @@ pub struct PageInfo {
     pub height_pt: f32,
     pub dpi: f32,
     pub background: Option<Color>,
+    /// Default font family for text nodes that don't name one.
+    pub font_family: Option<String>,
 }
 
 /// A fully resolved document. Nodes are stored flat and addressed by index;
@@ -187,6 +189,7 @@ pub fn resolve(raw: RawDocument) -> Result<Document, ResolveError> {
         height_pt: factor * raw.page.height,
         dpi: raw.page.dpi.unwrap_or(DEFAULT_DPI),
         background: raw.page.background,
+        font_family: raw.page.font_family.clone(),
     };
 
     Ok(Document { page, nodes, root })

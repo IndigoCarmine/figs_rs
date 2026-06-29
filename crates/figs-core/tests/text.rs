@@ -9,6 +9,19 @@ fn store() -> FontStore {
     FontStore::new().with_default_family("Liberation Sans")
 }
 
+#[test]
+fn families_are_listed_and_sorted() {
+    let families = FontStore::new().families();
+    assert!(!families.is_empty(), "expected installed font families");
+    // Sorted case-insensitively and deduplicated.
+    let mut sorted = families.clone();
+    sorted.sort_by_key(|s| s.to_lowercase());
+    assert_eq!(families, sorted, "families must be sorted");
+    let mut deduped = families.clone();
+    deduped.dedup();
+    assert_eq!(families.len(), deduped.len(), "families must be deduplicated");
+}
+
 fn text(content: &str, font_size: f32) -> TextProps {
     TextProps {
         content: content.to_string(),

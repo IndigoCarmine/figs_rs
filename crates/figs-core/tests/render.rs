@@ -1,13 +1,13 @@
 //! PNG backend tests: render small layouts at 72 dpi (so points == pixels) and
 //! sample pixels to confirm geometry and colors.
 
-use figs_core::{layout, render_png, Document, NullMeasurer};
+use figs_core::{layout, render_png, Document, FontStore, NullMeasurer, RenderOptions};
 use tiny_skia::Pixmap;
 
 fn render(src: &str) -> Pixmap {
     let doc = Document::from_toml(src).expect("resolve");
     let computed = layout(&doc, &NullMeasurer);
-    let bytes = render_png(&computed).expect("render png");
+    let bytes = render_png(&computed, &RenderOptions::default()).expect("render png");
     Pixmap::decode_png(&bytes).expect("decode png")
 }
 
@@ -120,6 +120,58 @@ fn four_panel_example_renders() {
     let src = include_str!("../../../examples/four_panel.toml");
     let doc = Document::from_toml(src).unwrap();
     let computed = layout(&doc, &NullMeasurer);
-    let bytes = render_png(&computed).unwrap();
+    let bytes = render_png(&computed, &RenderOptions::default()).unwrap();
     assert!(bytes.len() > 1000, "expected a real PNG, got {} bytes", bytes.len());
+}
+
+#[test]
+fn centered_text_rasterizes() {
+    // A single centered text node on a white page. With fonts supplied, real
+    // glyphs must appear — and roughly centered horizontally.
+    let src = r##"
+        [page]
+        width = 200
+        height = 80
+        unit = "pt"
+        dpi = 72
+        background = "#ffffff"
+        root = "t"
+        [nodes.t]
+        type = "text"
+        content = "Hello"
+        font_size = 40
+        color = "#000000"
+        align = "center"
+    "##;
+    let doc = Document::from_toml(src).expect("resolve");
+    let fonts = FontStore::new();
+    let computed = layout(&doc, &fonts);
+    let opts = RenderOptions {
+        fonts: Some(&fonts),
+        base_dir: std::path::Path::new("."),
+    };
+    let bytes = render_png(&computed, &opts).expect("render png");
+    let p = Pixmap::decode_png(&bytes).expect("decode png");
+
+    // Count dark (text) pixels and track their horizontal extent.
+    let (mut dark, mut sum_x, mut min_x, mut max_x) = (0u32, 0u64, u32::MAX, 0u32);
+    for y in 0..p.height() {
+        for x in 0..p.width() {
+            let px = p.pixel(x, y).unwrap();
+            if px.red() < 128 && px.green() < 128 && px.blue() < 128 {
+                dark += 1;
+                sum_x += x as u64;
+                min_x = min_x.min(x);
+                max_x = max_x.max(x);
+            }
+        }
+    }
+    assert!(dark > 30, "expected rasterized glyphs, got {dark} dark pixels");
+    let centroid = (sum_x / dark as u64) as u32;
+    // Glyph ink should sit around the horizontal centre (width 200), not flush
+    // against an edge.
+    assert!(
+        (40..=160).contains(&centroid),
+        "text not centered: centroid x = {centroid} (extent {min_x}..{max_x})"
+    );
 }

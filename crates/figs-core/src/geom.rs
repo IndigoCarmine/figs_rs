@@ -1,6 +1,6 @@
 //! Shared geometry and style primitives used across schema, layout and render.
 
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// A width/height pair, in points.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -76,6 +76,12 @@ impl Edges {
         }
     }
 
+    /// True when every side is zero (the default). Used to skip empty
+    /// margin/padding when serializing back to TOML.
+    pub fn is_zero(&self) -> bool {
+        self.top == 0.0 && self.right == 0.0 && self.bottom == 0.0 && self.left == 0.0
+    }
+
     pub fn horizontal(&self) -> f32 {
         self.left + self.right
     }
@@ -120,6 +126,34 @@ impl<'de> Deserialize<'de> for Edges {
                 left,
             },
         })
+    }
+}
+
+impl Serialize for Edges {
+    /// Emit a scalar when all four sides are equal, otherwise a table holding
+    /// only the non-zero sides. Round-trips with the `Deserialize` impl above.
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        use serde::ser::SerializeMap;
+        if self.top == self.right && self.right == self.bottom && self.bottom == self.left {
+            return serializer.serialize_f32(self.top);
+        }
+        let sides = [
+            ("top", self.top),
+            ("right", self.right),
+            ("bottom", self.bottom),
+            ("left", self.left),
+        ];
+        let len = sides.iter().filter(|(_, v)| *v != 0.0).count();
+        let mut map = serializer.serialize_map(Some(len))?;
+        for (k, v) in sides {
+            if v != 0.0 {
+                map.serialize_entry(k, &v)?;
+            }
+        }
+        map.end()
     }
 }
 
@@ -214,8 +248,31 @@ impl<'de> Deserialize<'de> for Color {
     }
 }
 
+impl Color {
+    /// Format as `#rrggbb`, or `#rrggbbaa` when not fully opaque. Round-trips
+    /// with [`Color::parse_hex`].
+    pub fn to_hex(&self) -> String {
+        let to_u8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        let (r, g, b, a) = (to_u8(self.r), to_u8(self.g), to_u8(self.b), to_u8(self.a));
+        if a == 255 {
+            format!("#{r:02x}{g:02x}{b:02x}")
+        } else {
+            format!("#{r:02x}{g:02x}{b:02x}{a:02x}")
+        }
+    }
+}
+
+impl Serialize for Color {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_hex())
+    }
+}
+
 /// Distribution of children along a container's main axis.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MainAxisAlign {
     #[default]
@@ -228,7 +285,7 @@ pub enum MainAxisAlign {
 }
 
 /// Alignment of children along a container's cross axis.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CrossAxisAlign {
     #[default]
@@ -248,7 +305,7 @@ pub enum Axis {
 }
 
 /// Horizontal alignment of text within its box.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TextAlign {
     #[default]
@@ -259,7 +316,7 @@ pub enum TextAlign {
 }
 
 /// How an image is fitted into its computed box.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ImageFit {
     #[default]

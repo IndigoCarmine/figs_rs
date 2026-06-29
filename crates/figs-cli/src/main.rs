@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use figs_core::{layout, render_png, Document, NullMeasurer};
+use figs_core::{layout, render_png, Document, FontStore, RenderOptions};
 
 #[derive(Parser)]
 #[command(name = "figs", version, about = "Compose figures/posters from TOML")]
@@ -48,10 +48,22 @@ fn build(input: &Path, output: &Path) -> Result<()> {
         .with_context(|| format!("reading input `{}`", input.display()))?;
     let doc = Document::from_toml(&src)
         .with_context(|| format!("parsing `{}`", input.display()))?;
-    let computed = layout(&doc, &NullMeasurer);
+
+    // Build the font store once: it both measures text during layout and
+    // rasterizes glyphs during rendering, so geometry is identical in both.
+    let mut fonts = FontStore::new();
+    fonts.set_default_family(doc.page.font_family.clone());
+    let computed = layout(&doc, &fonts);
+
+    // Relative image `src` paths resolve against the document's directory.
+    let base_dir = input.parent().unwrap_or_else(|| Path::new("."));
+    let opts = RenderOptions {
+        fonts: Some(&fonts),
+        base_dir,
+    };
 
     let bytes = match output.extension().and_then(|e| e.to_str()) {
-        Some("png") => render_png(&computed).context("rendering PNG")?,
+        Some("png") => render_png(&computed, &opts).context("rendering PNG")?,
         Some("pdf") => bail!("PDF output is not implemented yet"),
         other => bail!(
             "unsupported output extension {:?}; use .png",

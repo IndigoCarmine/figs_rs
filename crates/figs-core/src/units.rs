@@ -1,11 +1,11 @@
 //! Unit handling. Everything in the engine works in **points** (1 pt = 1/72 inch)
 //! after parsing. Page dimensions are declared in a user unit and converted once.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// User-facing length unit, used only in the `[page]` table.
 /// `font_size` is always points and is never affected by this.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Unit {
     #[default]

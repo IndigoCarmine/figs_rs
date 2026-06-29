@@ -269,6 +269,65 @@ fn space_between_distributes_gaps() {
 }
 
 #[test]
+fn space_evenly_distributes_gaps() {
+    // column height 100, two fixed rects height 20 each -> leftover 60 split into
+    // 3 equal gaps of 20 (before, between, after). y = 20 and y = 20 + 20 + 20 = 60.
+    let src = r#"
+        [page]
+        width = 50
+        height = 100
+        unit = "pt"
+        root = "root"
+
+        [nodes.root]
+        type = "column"
+        main_axis_alignment = "space_evenly"
+        cross_axis_alignment = "stretch"
+        children = ["p", "q"]
+
+        [nodes.p]
+        type = "rect"
+        height = 20
+        [nodes.q]
+        type = "rect"
+        height = 20
+    "#;
+    let l = lay(src);
+    assert_rect(rect_of(&l, "p"), 0.0, 20.0, 50.0, 20.0);
+    assert_rect(rect_of(&l, "q"), 0.0, 60.0, 50.0, 20.0);
+}
+
+#[test]
+fn space_around_distributes_gaps() {
+    // column height 100, two fixed rects height 20 each -> leftover 60, gap = 60/2
+    // = 30 around each child (half-gap 15 at the ends). y = 15 and y = 15 + 20 + 30
+    // = 65.
+    let src = r#"
+        [page]
+        width = 50
+        height = 100
+        unit = "pt"
+        root = "root"
+
+        [nodes.root]
+        type = "column"
+        main_axis_alignment = "space_around"
+        cross_axis_alignment = "stretch"
+        children = ["p", "q"]
+
+        [nodes.p]
+        type = "rect"
+        height = 20
+        [nodes.q]
+        type = "rect"
+        height = 20
+    "#;
+    let l = lay(src);
+    assert_rect(rect_of(&l, "p"), 0.0, 15.0, 50.0, 20.0);
+    assert_rect(rect_of(&l, "q"), 0.0, 65.0, 50.0, 20.0);
+}
+
+#[test]
 fn aspect_ratio_derives_cross_from_flex_main() {
     // column width 100; child flex 1 with aspect 2.0 (w/h). Main is height.
     // cross (width) = height * 2, but clamped to content cross (100).

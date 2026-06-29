@@ -33,3 +33,11 @@ fn poster_example() {
         include_str!("../../../examples/poster.toml"),
     );
 }
+
+#[test]
+fn grid_4panel_example() {
+    check(
+        "examples/grid_4panel.toml",
+        include_str!("../../../examples/grid_4panel.toml"),
+    );
+}

@@ -1,0 +1,37 @@
+# Demonstrates real image rendering end-to-end: sample.png is decoded and drawn
+# with `fit = "contain"`, framed by a heading and caption.
+#   figs build examples/image_demo.toml -o demo.png
+[page]
+width = 400
+height = 320
+unit = "pt"
+dpi = 96
+background = "#ffffff"
+root = "root"
+
+[nodes.root]
+type = "column"
+padding = 18
+spacing = 12
+cross_axis_alignment = "stretch"
+children = ["heading", "logo", "caption"]
+
+[nodes.heading]
+type = "text"
+content = "figs_rs image demo"
+font_size = 24
+font_weight = 700
+align = "center"
+
+[nodes.logo]
+type = "image"
+src = "sample.png"
+fit = "contain"
+flex = 1
+
+[nodes.caption]
+type = "text"
+content = "sample.png rendered with fit = contain"
+font_size = 12
+color = "#666666"
+align = "center"
