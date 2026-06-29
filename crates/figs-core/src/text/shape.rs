@@ -34,6 +34,9 @@ pub struct ShapedGlyph {
     pub font_size: f32,
     /// Glyph origin x, relative to the block left (points).
     pub x: f32,
+    /// First source character of this glyph's cluster, for PDF ToUnicode
+    /// mapping (so the text stays copyable). Space if unknown.
+    pub ch: char,
 }
 
 /// Shape `text` under `max_width` (points). A non-finite or non-positive width
@@ -79,6 +82,7 @@ pub fn shape(
                 glyph_id: g.glyph_id,
                 font_size: g.font_size,
                 x: g.x,
+                ch: run.text[g.start..g.end].chars().next().unwrap_or(' '),
             })
             .collect();
         lines.push(ShapedLine {
