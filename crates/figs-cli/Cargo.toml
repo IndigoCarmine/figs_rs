@@ -6,6 +6,10 @@ license.workspace = true
 repository.workspace = true
 description = "Command-line front-end for figs: render a TOML layout to PNG/PDF."
 
+[lib]
+name = "figs_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "figs"
 path = "src/main.rs"
@@ -16,3 +20,4 @@ clap = { version = "4", features = ["derive"] }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+notify-debouncer-mini = "0.7.0"
