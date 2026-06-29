@@ -1,13 +1,14 @@
 //! PNG backend tests: render small layouts at 72 dpi (so points == pixels) and
 //! sample pixels to confirm geometry and colors.
 
-use figs_core::{layout, render_png, Document, NullMeasurer};
+use figs_core::{layout, render_png, Document, FontStore, NullMeasurer};
 use tiny_skia::Pixmap;
 
 fn render(src: &str) -> Pixmap {
     let doc = Document::from_toml(src).expect("resolve");
     let computed = layout(&doc, &NullMeasurer);
-    let bytes = render_png(&computed).expect("render png");
+    let fonts = FontStore::new();
+    let bytes = render_png(&computed, &fonts).expect("render png");
     Pixmap::decode_png(&bytes).expect("decode png")
 }
 
@@ -115,11 +116,44 @@ fn four_color_quadrants() {
 }
 
 #[test]
+fn text_is_rasterized() {
+    // Black "Hello" on white; at least some dark pixels must appear.
+    let src = r##"
+        [page]
+        width = 200
+        height = 60
+        unit = "pt"
+        dpi = 72
+        background = "#ffffff"
+        root = "root"
+        [nodes.root]
+        type = "text"
+        content = "Hello"
+        font_size = 40
+        color = "#000000"
+    "##;
+    let doc = Document::from_toml(src).unwrap();
+    let fonts = FontStore::new().with_default_family("Liberation Sans");
+    let computed = layout(&doc, &fonts);
+    let bytes = render_png(&computed, &fonts).unwrap();
+    let p = Pixmap::decode_png(&bytes).unwrap();
+
+    let mut dark = 0usize;
+    for px in p.pixels() {
+        if px.red() < 80 && px.green() < 80 && px.blue() < 80 {
+            dark += 1;
+        }
+    }
+    assert!(dark > 50, "expected rasterized glyph pixels, found {dark} dark px");
+}
+
+#[test]
 fn four_panel_example_renders() {
     // The bundled example renders to a non-trivial PNG without panicking.
     let src = include_str!("../../../examples/four_panel.toml");
     let doc = Document::from_toml(src).unwrap();
     let computed = layout(&doc, &NullMeasurer);
-    let bytes = render_png(&computed).unwrap();
+    let fonts = FontStore::new();
+    let bytes = render_png(&computed, &fonts).unwrap();
     assert!(bytes.len() > 1000, "expected a real PNG, got {} bytes", bytes.len());
 }

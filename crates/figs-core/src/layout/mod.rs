@@ -14,10 +14,11 @@ pub mod arrange;
 pub mod computed;
 pub mod measure;
 
-pub use computed::{ComputedLayout, ComputedNode, PageGeom, PaintContent, TextBox};
+pub use computed::{ComputedLayout, ComputedNode, PageGeom, PaintContent, PaintText};
 
 use crate::geom::{Axis, Size};
 use crate::schema::{Document, ImageProps, TextProps};
+use crate::text::ShapedText;
 
 /// Box constraints handed down during measurement: a min/max range per axis.
 #[derive(Debug, Clone, Copy)]
@@ -52,15 +53,23 @@ impl Constraints {
     }
 }
 
-/// Provides intrinsic sizes for leaf content the schema can't size on its own.
+/// Provides shaping/sizing for leaf content the schema can't size on its own.
 ///
 /// Implemented by the text backend (cosmic-text) and the image module. The
-/// engine never reads fonts or image files directly.
+/// engine never reads fonts or image files directly. Shaping returns the full
+/// [`ShapedText`] so the arrange pass can embed glyph geometry into the IR for
+/// the renderers; `measure_text` defaults to the shaped block size.
 pub trait LeafMeasure {
-    /// Wrap-content size of a text block given the available width (points).
-    fn measure_text(&self, text: &TextProps, max_width: f32) -> Size;
+    /// Shape a text block under an available width (points).
+    fn shape_text(&self, text: &TextProps, max_width: f32) -> ShapedText;
+
     /// Intrinsic size of an image (points), before aspect/flex constraints.
     fn measure_image(&self, image: &ImageProps) -> Size;
+
+    /// Wrap-content size of a text block. Defaults to the shaped block size.
+    fn measure_text(&self, text: &TextProps, max_width: f32) -> Size {
+        self.shape_text(text, max_width).size
+    }
 }
 
 /// A measurer that reports zero size for all leaf content. Useful for
@@ -68,8 +77,8 @@ pub trait LeafMeasure {
 pub struct NullMeasurer;
 
 impl LeafMeasure for NullMeasurer {
-    fn measure_text(&self, _text: &TextProps, _max_width: f32) -> Size {
-        Size::default()
+    fn shape_text(&self, _text: &TextProps, _max_width: f32) -> ShapedText {
+        ShapedText::default()
     }
     fn measure_image(&self, _image: &ImageProps) -> Size {
         Size::default()
