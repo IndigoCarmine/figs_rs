@@ -11,7 +11,7 @@ use figs_core::schema::{NodeKind, RawDocument};
 use figs_core::units::Unit;
 use figs_core::ComputedLayout;
 
-use crate::app::{kind_label, FigsApp, RailTab, Selection};
+use crate::app::{kind_label, FigsApp, RailTab, Selection, SourceTab};
 use crate::model;
 use crate::theme::{kind_badge, page_badge, Palette};
 
@@ -915,10 +915,10 @@ pub fn toml_pane(app: &mut FigsApp, ctx: &egui::Context) {
         app.regen_toml = false;
     }
 
-    egui::SidePanel::left("toml")
+    egui::SidePanel::left("source")
         .resizable(true)
-        .default_width(380.0)
-        .width_range(260.0..=680.0)
+        .default_width(400.0)
+        .width_range(280.0..=720.0)
         .frame(egui::Frame::none().fill(p.panel))
         .show(ctx, |ui| {
             egui::Frame::none()
@@ -934,8 +934,7 @@ pub fn toml_pane(app: &mut FigsApp, ctx: &egui::Context) {
                             .unwrap_or_else(|| "untitled.toml".to_string());
                         ui.label(RichText::new(name).monospace().strong());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(RichText::new("TOML").monospace().small().color(crate::theme::hex("#b98cff")));
-                            ui.label(RichText::new("editable").small().color(p.dim));
+                            source_tabs(app, ui);
                         });
                     });
                 });
@@ -1077,6 +1076,97 @@ pub fn toml_pane(app: &mut FigsApp, ctx: &egui::Context) {
                     }
                 }
             }
+        });
+}
+
+fn source_tabs(app: &mut FigsApp, ui: &mut egui::Ui) {
+    // right_to_left layout: the first label added sits furthest right.
+    if ui
+        .selectable_label(app.source_tab == SourceTab::Toml, "TOML")
+        .clicked()
+    {
+        app.source_tab = SourceTab::Toml;
+    }
+    if ui
+        .selectable_label(app.source_tab == SourceTab::Script, "Script")
+        .clicked()
+    {
+        app.source_tab = SourceTab::Script;
+    }
+}
+
+/// The Rhai script pane (the `.figs` source of truth). "Evaluate" lowers the
+/// script to the model, refreshing the TOML pane, inspector and preview.
+pub fn script_pane(app: &mut FigsApp, ctx: &egui::Context) {
+    let p = app.theme.palette();
+    egui::SidePanel::left("source")
+        .resizable(true)
+        .default_width(400.0)
+        .width_range(280.0..=720.0)
+        .frame(egui::Frame::none().fill(p.panel))
+        .show(ctx, |ui| {
+            egui::Frame::none()
+                .fill(p.panel2)
+                .inner_margin(egui::Margin::symmetric(11.0, 6.0))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let name = app
+                            .path
+                            .as_ref()
+                            .and_then(|p| p.file_name())
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| "untitled.figs".to_string());
+                        ui.label(RichText::new(name).monospace().strong());
+                        ui.with_layout(
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| source_tabs(app, ui),
+                        );
+                    });
+                });
+            ui.separator();
+
+            ui.horizontal(|ui| {
+                let run = ui
+                    .button(RichText::new("\u{25b6} Evaluate").strong())
+                    .on_hover_text(
+                        "Run the script (Ctrl+Enter): refresh preview, TOML and inspector",
+                    )
+                    .clicked();
+                ui.label(
+                    RichText::new("Rhai \u{2192} TOML \u{00b7} GUI")
+                        .small()
+                        .color(p.dim),
+                );
+                let ctrl_enter =
+                    ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter));
+                if run || ctrl_enter {
+                    app.evaluate_script();
+                }
+            });
+
+            if let Some(err) = app.script_error.clone() {
+                egui::Frame::none()
+                    .fill(Color32::from_rgb(0x3a, 0x1d, 0x1d))
+                    .inner_margin(egui::Margin::symmetric(10.0, 5.0))
+                    .show(ui, |ui| {
+                        ui.colored_label(
+                            Color32::from_rgb(0xff, 0x8a, 0x8a),
+                            format!("\u{26a0} {err}"),
+                        );
+                    });
+            }
+
+            egui::ScrollArea::both()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::TextEdit::multiline(&mut app.script_buffer)
+                            .id(egui::Id::new("figs_script_editor"))
+                            .code_editor()
+                            .desired_width(f32::INFINITY)
+                            .desired_rows(30),
+                    );
+                });
         });
 }
 

@@ -72,6 +72,13 @@ impl Document {
         Ok(resolve(raw)?)
     }
 
+    /// Evaluate a Rhai script and resolve it in one step.
+    #[cfg(feature = "script")]
+    pub fn from_script(src: &str) -> Result<Document, crate::Error> {
+        let raw = crate::script::eval_script(src)?;
+        Ok(resolve(raw)?)
+    }
+
     pub fn node(&self, idx: usize) -> &Node {
         &self.nodes[idx]
     }

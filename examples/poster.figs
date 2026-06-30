@@ -1,0 +1,25 @@
+// Research poster (FES + PMF) — the same layout as poster.toml, but with a
+// reusable component (`captioned`) and arithmetic-driven sizes.
+fn captioned(src, ratio, caption) {
+    col([
+        image(src).aspect(ratio),
+        text(caption).size(14).center(),
+    ]).flex(1).spacing(0.5)
+}
+
+let base = 24;             // base font size (pt); the title is base * 2
+let muted = "#666666";
+
+page(100, 150,
+    col([
+        col([
+            text("Free Energy Surface Analysis").size(base * 2).bold().center(),
+            text("MD Simulation Results").size(base).color(muted).center(),
+        ]).spacing(0.5).cross("center"),
+        row([
+            captioned("fes.png", 1.0, "(a) FES 2D Landscape"),
+            captioned("pmf.png", 2.0, "(b) PMF Profile"),
+        ]).flex(1).spacing(1.5).main("space_around").cross("stretch"),
+        text("Simulation: GROMACS 2024, FF: AMBER99SB").size(10).color("#999999").center(),
+    ]).spacing(2).pad(1.5).cross("center"),
+).unit("cm").background("#ffffff")

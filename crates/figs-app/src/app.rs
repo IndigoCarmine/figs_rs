@@ -59,6 +59,12 @@ pub struct FigsApp {
     pub completion_index: usize,
     /// A token the user dismissed (Esc); completion stays hidden until it changes.
     pub completion_suppress: Option<String>,
+    /// Editable buffer backing the Rhai script pane (the `.figs` source).
+    pub script_buffer: String,
+    /// Last error from evaluating the script.
+    pub script_error: Option<String>,
+    /// Which tab the source pane shows (Script or TOML).
+    pub source_tab: SourceTab,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -67,10 +73,20 @@ pub enum RailTab {
     Inspector,
 }
 
+/// Which source representation the source pane edits. Rhai is the source of
+/// truth; "Evaluate" lowers it to the (concrete) TOML/GUI document.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SourceTab {
+    Script,
+    Toml,
+}
+
 impl FigsApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         install_fonts(&cc.egui_ctx);
-        let model = model::default_document();
+        let script_buffer = model::default_script();
+        let model = figs_core::eval_script(&script_buffer)
+            .unwrap_or_else(|_| model::default_document());
         let toml_buffer = model::to_toml(&model).unwrap_or_default();
         let fonts = FontStore::new();
         let font_families = fonts.families();
@@ -93,6 +109,9 @@ impl FigsApp {
             font_families,
             completion_index: 0,
             completion_suppress: None,
+            script_buffer,
+            script_error: None,
+            source_tab: SourceTab::Script,
         }
     }
 
@@ -101,6 +120,22 @@ impl FigsApp {
         self.dirty = true;
         self.needs_rebuild = true;
         self.regen_toml = true;
+    }
+
+    /// Evaluate the Rhai script buffer into the model, refreshing the preview,
+    /// the TOML pane and the inspector. On error the current model is kept.
+    pub fn evaluate_script(&mut self) {
+        match figs_core::eval_script(&self.script_buffer) {
+            Ok(raw) => {
+                self.model = raw;
+                self.script_error = None;
+                self.error = None;
+                self.dirty = true;
+                self.needs_rebuild = true;
+                self.regen_toml = true;
+            }
+            Err(e) => self.script_error = Some(e.to_string()),
+        }
     }
 
     /// Re-resolve, lay out and rasterize the current model into a texture. On
@@ -143,33 +178,55 @@ impl FigsApp {
     // ---- file actions ----------------------------------------------------
 
     pub fn new_document(&mut self) {
-        self.model = model::default_document();
+        self.script_buffer = model::default_script();
+        self.source_tab = SourceTab::Script;
         self.path = None;
         self.selected = Selection::Page;
-        self.dirty = false;
         self.error = None;
         self.toml_error = None;
-        self.needs_rebuild = true;
-        self.regen_toml = true;
+        self.script_error = None;
+        self.evaluate_script();
+        self.dirty = false;
     }
 
     pub fn open_dialog(&mut self) {
-        if let Some(path) = rfd::FileDialog::new()
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("figs script", &["figs", "rhai"])
             .add_filter("TOML", &["toml"])
             .pick_file()
-        {
-            match std::fs::read_to_string(&path)
-                .map_err(|e| e.to_string())
-                .and_then(|s| figs_core::schema::parse::parse_str(&s).map_err(|e| e.to_string()))
-            {
+        else {
+            return;
+        };
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) => {
+                self.error = Some(format!("open failed: {e}"));
+                return;
+            }
+        };
+        self.base_dir = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+        self.selected = Selection::Page;
+        self.toml_error = None;
+        self.script_error = None;
+
+        let is_script = matches!(
+            path.extension().and_then(|e| e.to_str()),
+            Some("figs") | Some("rhai")
+        );
+        if is_script {
+            self.script_buffer = text;
+            self.source_tab = SourceTab::Script;
+            self.path = Some(path);
+            self.evaluate_script();
+            self.dirty = false; // freshly opened
+        } else {
+            match figs_core::schema::parse::parse_str(&text) {
                 Ok(doc) => {
-                    self.base_dir = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
                     self.model = doc;
+                    self.source_tab = SourceTab::Toml;
                     self.path = Some(path);
-                    self.selected = Selection::Page;
                     self.dirty = false;
                     self.error = None;
-                    self.toml_error = None;
                     self.needs_rebuild = true;
                     self.regen_toml = true;
                 }
@@ -186,9 +243,14 @@ impl FigsApp {
     }
 
     pub fn save_as(&mut self) {
+        let default_name = match self.source_tab {
+            SourceTab::Script => "figure.figs",
+            SourceTab::Toml => "figure.toml",
+        };
         if let Some(path) = rfd::FileDialog::new()
+            .add_filter("figs script", &["figs", "rhai"])
             .add_filter("TOML", &["toml"])
-            .set_file_name("figure.toml")
+            .set_file_name(default_name)
             .save_file()
         {
             self.write_to(&path);
@@ -197,13 +259,23 @@ impl FigsApp {
         }
     }
 
+    /// Write the document. `.figs`/`.rhai` saves the script source; anything else
+    /// saves the lowered TOML document.
     fn write_to(&mut self, path: &std::path::Path) {
-        match model::to_toml(&self.model) {
-            Ok(text) => match std::fs::write(path, text) {
-                Ok(()) => self.dirty = false,
-                Err(e) => self.error = Some(format!("save failed: {e}")),
-            },
-            Err(e) => self.error = Some(format!("serialize failed: {e}")),
+        let is_script = matches!(
+            path.extension().and_then(|e| e.to_str()),
+            Some("figs") | Some("rhai")
+        );
+        let result = if is_script {
+            std::fs::write(path, &self.script_buffer).map_err(|e| e.to_string())
+        } else {
+            model::to_toml(&self.model)
+                .map_err(|e| e.to_string())
+                .and_then(|text| std::fs::write(path, text).map_err(|e| e.to_string()))
+        };
+        match result {
+            Ok(()) => self.dirty = false,
+            Err(e) => self.error = Some(format!("save failed: {e}")),
         }
     }
 
@@ -231,6 +303,26 @@ impl FigsApp {
             .and_then(|bytes| std::fs::write(&path, bytes).map_err(|e| e.to_string()));
         if let Err(e) = result {
             self.error = Some(format!("export failed: {e}"));
+        }
+    }
+
+    /// Write the lowered document to a `.toml` file (the concrete form of the
+    /// current script/model), leaving the in-memory document untouched.
+    pub fn export_toml(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("TOML", &["toml"])
+            .set_file_name("figure.toml")
+            .save_file()
+        else {
+            return;
+        };
+        match model::to_toml(&self.model) {
+            Ok(text) => {
+                if let Err(e) = std::fs::write(&path, text) {
+                    self.error = Some(format!("export failed: {e}"));
+                }
+            }
+            Err(e) => self.error = Some(format!("serialize failed: {e}")),
         }
     }
 
@@ -282,6 +374,9 @@ impl FigsApp {
                     }
                     if ui.button("Export PNG").clicked() {
                         self.export_png();
+                    }
+                    if ui.button("Export TOML").clicked() {
+                        self.export_toml();
                     }
                     ui.separator();
                     if ui.button("Insert Image").clicked() {
@@ -352,7 +447,10 @@ impl eframe::App for FigsApp {
         self.menu_bar(ctx);
         self.status_bar(ctx);
         crate::panels::left_rail(self, ctx);
-        crate::panels::toml_pane(self, ctx);
+        match self.source_tab {
+            SourceTab::Script => crate::panels::script_pane(self, ctx),
+            SourceTab::Toml => crate::panels::toml_pane(self, ctx),
+        }
         crate::panels::canvas(self, ctx);
     }
 }

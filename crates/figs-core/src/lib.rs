@@ -12,12 +12,16 @@ pub mod geom;
 pub mod layout;
 pub mod render;
 pub mod schema;
+#[cfg(feature = "script")]
+pub mod script;
 pub mod text;
 pub mod units;
 
 pub use layout::{layout, ComputedLayout, LeafMeasure, NullMeasurer};
 pub use render::{image_size, render_png, render_rgba, PngError, RenderedImage, RenderOptions};
 pub use schema::Document;
+#[cfg(feature = "script")]
+pub use script::{eval_script, ScriptError};
 pub use text::{FontStore, ShapedText};
 
 /// Top-level error for the parse → resolve pipeline.
@@ -27,4 +31,7 @@ pub enum Error {
     Parse(#[from] schema::parse::ParseError),
     #[error(transparent)]
     Resolve(#[from] schema::ResolveError),
+    #[cfg(feature = "script")]
+    #[error(transparent)]
+    Script(#[from] script::ScriptError),
 }

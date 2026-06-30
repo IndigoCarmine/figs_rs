@@ -1,0 +1,7 @@
+// Minimal figs script. The last expression must be page(width, height, root).
+page(720, 480,
+    col([
+        text("New figure").size(40).bold().center(),
+        text("Authored in Rhai").size(18).color("#6b7280").center(),
+    ]).pad(32).spacing(16).cross("stretch"),
+).unit("pt").background("#faf7f0")

@@ -103,6 +103,23 @@ pub fn default_document() -> RawDocument {
     }
 }
 
+/// The starter Rhai script used by `New` and on first launch. Mirrors
+/// [`default_document`], but expressed as an editable `.figs` script.
+pub fn default_script() -> String {
+    r##"// figs script — edit, then press Evaluate (Ctrl+Enter).
+// `let` defines variables, `fn` defines reusable components, arithmetic just works.
+let muted = "#6b7280";
+
+page(720, 960,
+    col([
+        text("New figure").size(40).bold().center(),
+        text("Edit me, then Evaluate").size(18).color(muted).center(),
+    ]).spacing(16).cross("stretch"),
+).unit("pt").dpi(96).background("#faf7f0")
+"##
+    .to_string()
+}
+
 /// True when a node distributes children (column or row).
 pub fn is_container(doc: &RawDocument, id: &str) -> bool {
     matches!(

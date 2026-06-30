@@ -20,7 +20,7 @@ struct Cli {
 enum Command {
     /// Render a document once to an output file (format inferred from extension).
     Build {
-        /// Input TOML document.
+        /// Input document: `.toml`, or a Rhai script `.figs` / `.rhai`.
         input: PathBuf,
         /// Output path. Extension selects the format (.png).
         #[arg(short, long)]
@@ -46,8 +46,15 @@ fn main() -> Result<()> {
 fn build(input: &Path, output: &Path) -> Result<()> {
     let src = std::fs::read_to_string(input)
         .with_context(|| format!("reading input `{}`", input.display()))?;
-    let doc = Document::from_toml(&src)
-        .with_context(|| format!("parsing `{}`", input.display()))?;
+    let doc = match input.extension().and_then(|e| e.to_str()) {
+        Some("toml") => Document::from_toml(&src),
+        Some("figs") | Some("rhai") => Document::from_script(&src),
+        other => bail!(
+            "unsupported input extension {:?}; use .toml, .figs, or .rhai",
+            other.unwrap_or("(none)")
+        ),
+    }
+    .with_context(|| format!("parsing `{}`", input.display()))?;
 
     // Build the font store once: it both measures text during layout and
     // rasterizes glyphs during rendering, so geometry is identical in both.

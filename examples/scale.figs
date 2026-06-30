@@ -1,0 +1,11 @@
+// Variables + arithmetic: a palette color and a base size, defined once and reused.
+let accent = "#e0635a";
+let base = 16;            // base font size in points
+
+page(20, 12,
+    col([
+        text("Results").size(base * 2).bold().color(accent),
+        text("Subhead").size(base).color("#333333"),
+        rect().width(8).height(0.2).fill(accent).radius(0.1),
+    ]).pad(1.0).spacing(0.5).cross("center"),
+).unit("cm").background("#ffffff")

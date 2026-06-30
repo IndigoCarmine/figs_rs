@@ -97,11 +97,65 @@ outer container): both default to zero, so content reaches the page border. The
 GUI's starter document no longer adds an outer inset. See
 [`examples/grid_4panel.toml`](examples/grid_4panel.toml) for both at once.
 
+## Scripting with Rhai (`.figs`)
+
+For variables, arithmetic and reusable components, author a
+**[Rhai](https://rhai.rs) script** instead of TOML. A script *evaluates to the same
+document* — it builds the node tree with `page` / `col` / `row` / `text` / `rect` /
+`image`, then flows through the identical resolve → layout → render pipeline. `let`
+defines variables, `fn` defines components, and arithmetic is native:
+
+```rhai
+let accent = "#e0635a";
+let base   = 16;                       // base font size (pt)
+
+fn captioned(src, caption) {           // a reusable component
+    col([
+        image(src).aspect(1.0),
+        text(caption).size(14).center(),
+    ]).flex(1).spacing(0.5)
+}
+
+page(20, 12,
+    col([
+        text("Results").size(base * 2).bold().color(accent),
+        captioned("fig.png", "(a) Result"),
+    ]).pad(1.0).spacing(0.5).cross("center"),
+).unit("cm").background("#ffffff")
+```
+
+Build nodes with `text` / `rect` / `image` / `col` / `row`, set properties by
+**chaining methods**, and finish with a single `page(width, height, root)` call.
+(Rhai has no keyword arguments, so method chaining is how properties read like named
+ones — no map literals.) Numbers may be integer or float; colors are hex strings. The
+setters:
+
+- **layout** (any node): `.flex(n)`, `.width(n)`, `.height(n)`, `.aspect(n)`,
+  `.margin(n)`, `.pad(n)`.
+- **text**: `.size(n)`, `.weight(n)` / `.bold()`, `.color(hex)`, `.font(name)`,
+  `.align("left"|"center"|"right"|"justify")` / `.center()`, `.line_height(n)`.
+- **container** (`col`/`row`): `.spacing(n)`, `.main("space_between"|…)`,
+  `.cross("start"|"center"|"end"|"stretch")` / `.stretch()`.
+- **rect**: `.fill(hex)`, `.stroke(hex)`, `.stroke_width(n)`, `.radius(n)`.
+- **image**: `.fit("contain"|"cover"|"fill")`.
+- **page**: `.unit("cm"|…)`, `.background(hex)`, `.dpi(n)`, `.font(name)`.
+
+Build it like any document (extension selects the front-end):
+
+```sh
+figs build poster.figs -o poster.png   # .figs / .rhai → script; .toml → TOML
+```
+
+In the editor (`figs-editor`), the **Script** tab is the source of truth: press
+**Evaluate** (Ctrl+Enter) to lower the script into the editable **TOML** tab, the
+inspector and the live preview. Authoring flows Rhai → (TOML ↔ GUI) one way; use
+*Export TOML* to write out the lowered document.
+
 ## Architecture
 
 ```
-poster.toml
-  → schema::parse   (TOML → RawDocument)
+poster.toml                        figure.figs (Rhai)
+  → schema::parse   (TOML → RawDocument)   → script::eval_script (→ RawDocument)
   → schema::resolve (validate ids/cycles, convert units → typed Document)
   → layout          (two-pass measure/arrange → ComputedLayout IR)
   → renderers       (PNG via tiny-skia, PDF via printpdf)   [upcoming]
