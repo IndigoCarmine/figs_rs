@@ -300,6 +300,48 @@ fn paint_node<R: Renderer>(r: &mut R, node: &ComputedNode) {
     }
 }
 
+/// `layout` with every shape stroke (rect, ellipse, line/arrow/path,
+/// container border) at least [`PageGeom::min_stroke_px`] device pixels
+/// wide at the page `dpi`; borrowed unchanged when that is off (`0`). PDF
+/// viewers draw any stroke at least one device pixel wide; this does the
+/// same for the raster backend, which otherwise anti-aliases a 0.25 pt line
+/// at 100 dpi into a faint 0.35 px smear. It edits the IR before painting,
+/// so a widened inside/outside-aligned border keeps its outer/inner edge on
+/// the outline (the shared geometry offsets it by half the new width), and
+/// shadows see the widened strokes too. Glyph outlines (text `stroke`,
+/// synthetic bold) and filled shapes are left alone. Only the PNG / RGBA
+/// backend calls it: PDF and SVG keep the exact widths (a PDF viewer applies
+/// its own minimum; SVG has no portable one).
+pub fn widen_hairlines(layout: &ComputedLayout) -> std::borrow::Cow<'_, ComputedLayout> {
+    let px = layout.page.min_stroke_px;
+    if !(px > 0.0 && px.is_finite() && layout.page.dpi > 0.0) {
+        return std::borrow::Cow::Borrowed(layout);
+    }
+    let min = px * crate::units::PT_PER_INCH / layout.page.dpi;
+    let widen = |w: &mut f32| {
+        if *w > 0.0 && *w < min {
+            *w = min;
+        }
+    };
+    let mut out = layout.clone();
+    for n in &mut out.nodes {
+        match &mut n.content {
+            PaintContent::Frame(f) => f.stroke.iter_mut().for_each(|s| widen(&mut s.width)),
+            PaintContent::Rect {
+                stroke: Some(_),
+                stroke_width,
+                ..
+            } => widen(stroke_width),
+            PaintContent::Path(p) => p.stroke.iter_mut().for_each(|s| widen(&mut s.width)),
+            PaintContent::Ellipse { stroke, .. } => {
+                stroke.iter_mut().for_each(|s| widen(&mut s.width))
+            }
+            _ => {}
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
 /// The stroke of an open (chevron) arrowhead: the shaft's colour and width,
 /// solid, mitered.
 pub(crate) fn open_head_stroke(shaft: &StrokeStyle) -> StrokeStyle {

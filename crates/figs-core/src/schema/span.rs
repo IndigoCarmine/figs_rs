@@ -131,6 +131,32 @@ pub enum FontSynthesis {
     Bold,
 }
 
+/// How a `fit_width` text is made exactly as wide as its box: each line
+/// (paragraph; such a text never wraps) is set at its natural width, then
+/// stretched or squeezed to the box width.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FitWidth {
+    /// The same extra letter spacing (positive or negative) after every
+    /// character but the last, so the line's first glyph starts at the box
+    /// edge and its last glyph ends at the other; glyphs keep their size.
+    Tracking,
+    /// The whole line scaled uniformly (font size, tracking, baseline
+    /// shifts and line height together), so glyph shapes stay undistorted.
+    Scale,
+}
+
+impl FitWidth {
+    /// `"tracking"` / `"scale"`.
+    pub fn parse(s: &str) -> Option<FitWidth> {
+        match s {
+            "tracking" => Some(FitWidth::Tracking),
+            "scale" => Some(FitWidth::Scale),
+            _ => None,
+        }
+    }
+}
+
 /// Default synthetic-bold stroke width, em of the glyph size. PowerPoint's
 /// faux bold is a same-colour outline `size / 35` wide: its PDF export writes
 /// such text in fill + stroke mode with a line width of 0.0286 × size, at

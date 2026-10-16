@@ -110,9 +110,20 @@ fn measure_own<M: LeafMeasure>(ctx: &Ctx<M>, idx: usize, c: Constraints) -> Size
             }
         }
         NodeType::Text(props) => {
-            // Unwrapped text takes its natural width (then clamped to `c`).
-            let avail = if props.wrap {
-                (c.max_w - node.common.padding.horizontal()).max(0.0)
+            // Text wraps at its box width: an explicit `width` (clamped to
+            // `c`, as the box will be), else the most `c` allows. Unwrapped
+            // text takes its natural width (then clamped to `c`). A
+            // `fit_width` text is shaped to its box width when it has one
+            // (explicit, or tight from the parent); otherwise it is natural.
+            let pad = node.common.padding.horizontal();
+            let explicit_w = node.common.width.map(|w| c.clamp_w(w));
+            let inner = |w: f32| (w - pad).max(0.0);
+            let avail = if props.fit_width.is_some() {
+                explicit_w
+                    .or(c.is_tight_w().then_some(c.max_w))
+                    .map_or(f32::INFINITY, inner)
+            } else if props.wrap {
+                inner(explicit_w.unwrap_or(c.max_w))
             } else {
                 f32::INFINITY
             };
@@ -152,13 +163,14 @@ fn measure_container<M: LeafMeasure>(
         Axis::Horizontal => (c.is_tight_w(), c.is_tight_h()),
     };
     let stretch = cross_tight && cross_align == CrossAxisAlign::Stretch;
-    let child_c = |margin: Edges, main: Option<f32>| {
+    let child_c = |child: usize, main: Option<f32>| {
+        let common = &ctx.doc.nodes[child].common;
         let mut cc = base;
-        if stretch {
+        if stretch && !has_cross_size(common, axis) {
             cc = tighten(
                 cc,
                 cross_axis(axis),
-                cross_of(axis, inner) - cross_margin(axis, margin),
+                cross_of(axis, inner) - cross_margin(axis, common.margin),
             );
         }
         if let Some(m) = main {
@@ -184,11 +196,7 @@ fn measure_container<M: LeafMeasure>(
         .iter()
         .map(|&child| match flex_of(child) {
             Some(_) => None,
-            None => Some(measure(
-                ctx,
-                child,
-                child_c(ctx.doc.nodes[child].common.margin, None),
-            )),
+            None => Some(measure(ctx, child, child_c(child, None))),
         })
         .collect();
 
@@ -207,7 +215,7 @@ fn measure_container<M: LeafMeasure>(
             if let Some(w) = flex_of(child) {
                 let margin = ctx.doc.nodes[child].common.margin;
                 let share = (free * w / total_flex - main_margin(axis, margin)).max(0.0);
-                sizes[i] = Some(measure(ctx, child, child_c(margin, Some(share))));
+                sizes[i] = Some(measure(ctx, child, child_c(child, Some(share))));
             }
         }
     }
@@ -458,8 +466,22 @@ fn contain(ar: f32, max_w: f32, max_h: f32) -> Size {
     }
 }
 
+/// Whether a child of a container laid out along `axis` has an explicit size
+/// across that axis (`width` in a column, `height` in a row; in the parent's
+/// frame, so swapped for a quarter-turned child). `stretch` only stretches a
+/// child whose cross size is unconstrained (CSS `align-items: stretch`,
+/// Flutter `CrossAxisAlignment.stretch` over a loose child): an explicit size
+/// wins and the child is aligned at the start.
+pub(super) fn has_cross_size(common: &Common, axis: Axis) -> bool {
+    let outer = common.outer();
+    match axis {
+        Axis::Vertical => outer.width.is_some(),
+        Axis::Horizontal => outer.height.is_some(),
+    }
+}
+
 /// The cross axis of a container laid out along `axis`.
-fn cross_axis(axis: Axis) -> Axis {
+pub(super) fn cross_axis(axis: Axis) -> Axis {
     match axis {
         Axis::Vertical => Axis::Horizontal,
         Axis::Horizontal => Axis::Vertical,

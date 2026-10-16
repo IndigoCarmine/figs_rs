@@ -280,6 +280,7 @@ pub fn layout<M: LeafMeasure>(doc: &Document, measurer: &M) -> ComputedLayout {
         dpi: doc.page.dpi,
         background: None,
         auto_height: auto,
+        min_stroke_px: doc.page.min_stroke_px,
     };
 
     // The root fills the whole page, inset by its own margin.

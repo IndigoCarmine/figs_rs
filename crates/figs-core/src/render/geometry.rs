@@ -311,6 +311,7 @@ pub fn text_props(text: &TextBox) -> TextProps {
         letter_spacing: text.letter_spacing,
         spans: text.spans.clone(),
         wrap: text.wrap,
+        fit_width: text.fit_width,
         typography: text.typography,
     }
 }

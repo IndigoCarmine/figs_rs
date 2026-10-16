@@ -46,6 +46,7 @@ fn blank(kind: NodeKind) -> RawNode {
         align: None,
         line_height: None,
         wrap: None,
+        fit_width: None,
         script_metrics: None,
         font_synthesis: None,
         synthetic_bold_width: None,
@@ -149,6 +150,7 @@ pub fn default_document() -> RawDocument {
             font_synthesis: None,
             synthetic_bold_width: None,
             synthetic_slant: None,
+            min_stroke_px: None,
         },
         nodes,
     }

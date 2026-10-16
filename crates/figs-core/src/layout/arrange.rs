@@ -12,7 +12,8 @@ use crate::schema::{Common, NodeType, RectProps, TextProps};
 use super::baseline::{anchor_shift, row_baseline};
 use super::computed::{ClipRegion, ComputedNode, FramePaint, PaintContent, PathPaint, TextBox};
 use super::measure::{
-    measure, stack_child_avail, stack_child_constraints, stack_child_size, tighten,
+    cross_axis, cross_margin, has_cross_size, measure, stack_child_avail, stack_child_constraints,
+    stack_child_size, tighten,
 };
 use super::{cross_of, main_of, Constraints, Ctx, LeafMeasure};
 
@@ -53,30 +54,13 @@ pub(crate) fn arrange<M: LeafMeasure>(
     let self_index = subtree_start - 1;
 
     match &node.kind {
-        NodeType::Container {
-            axis,
-            children,
-            spacing,
-            main_axis,
-            cross_axis,
-            ..
-        } => {
+        NodeType::Container { .. } => {
             let content = rect.inset(node.common.padding);
             // A column whose height is content-derived (auto-height page) gives
             // every child its measured height; flex is ignored on that axis.
-            let content_h = *axis == Axis::Vertical && ctx.is_content_h(idx);
-            layout_children(
-                ctx,
-                *axis,
-                children,
-                *spacing,
-                *main_axis,
-                *cross_axis,
-                content,
-                content_h,
-                xf,
-                out,
-            );
+            if let Some(flex) = Flex::of(ctx, idx) {
+                layout_children(ctx, &flex, content, xf, out);
+            }
         }
         NodeType::Stack {
             children,
@@ -139,7 +123,7 @@ fn warn_unwrapped_overflow<M: LeafMeasure>(ctx: &Ctx<M>, idx: usize, rect: Rect)
     let NodeType::Text(props) = &node.kind else {
         return;
     };
-    if props.wrap {
+    if props.wrap || props.fit_width.is_some() {
         return;
     }
     let natural =
@@ -194,6 +178,24 @@ fn layout_stack<M: LeafMeasure>(
     xf: Option<Affine>,
     out: &mut Vec<ComputedNode>,
 ) {
+    for (&child, slot) in children
+        .iter()
+        .zip(stack_slots(ctx, children, viewbox, content))
+    {
+        arrange(ctx, child, slot, xf, out);
+    }
+}
+
+/// The slot (border box in the stack's frame) of each child of a plain
+/// (non-`contain`) stack whose content box is `content` (see
+/// [`layout_stack`]).
+pub(super) fn stack_slots<M: LeafMeasure>(
+    ctx: &Ctx<M>,
+    children: &[usize],
+    viewbox: Option<ViewBox>,
+    content: Rect,
+) -> Vec<Rect> {
+    let mut slots = Vec::with_capacity(children.len());
     for &child in children {
         // Size/aspect in the stack's frame (swapped for a quarter-turned child).
         let common = ctx.doc.nodes[child].common.outer();
@@ -217,8 +219,9 @@ fn layout_stack<M: LeafMeasure>(
         let (dx, dy) = anchor_shift(ctx, child, common.anchor, size);
         let x = content.x + ox - dx + common.margin.left;
         let y = content.y + oy - dy + common.margin.top;
-        arrange(ctx, child, Rect::new(x, y, size.w, size.h), xf, out);
+        slots.push(Rect::new(x, y, size.w, size.h));
     }
+    slots
 }
 
 /// Passes of [`layout_stack_contained`]: overhangs that don't depend on the
@@ -235,22 +238,25 @@ const CONTAIN_EPS: f32 = 0.01;
 /// nothing overhangs. Children placed relative to the content box (offsets,
 /// viewbox mapping, filling children) move inwards; the stack itself keeps its
 /// size. Insets only grow, and never past the box (a collapsed content box
-/// stops shrinking).
-fn layout_stack_contained<M: LeafMeasure>(
+/// stops shrinking). Returns the content box the children were finally laid
+/// out in.
+pub(super) fn layout_stack_contained<M: LeafMeasure>(
     ctx: &Ctx<M>,
     children: &[usize],
     viewbox: Option<ViewBox>,
     bounds: Rect,
     xf: Option<Affine>,
     out: &mut Vec<ComputedNode>,
-) {
+) -> Rect {
     // Descendants report page-space boxes; measure them in the stack's frame.
     let to_local = xf.and_then(|t| t.invert());
     let mut inset = Edges::default();
     let mut placed = Vec::new();
+    let mut used = bounds;
     for _ in 0..CONTAIN_PASSES {
         placed.clear();
-        layout_stack(ctx, children, viewbox, bounds.inset(inset), xf, &mut placed);
+        used = bounds.inset(inset);
+        layout_stack(ctx, children, viewbox, used, xf, &mut placed);
         let Some(ink) = union_of(&placed, to_local) else {
             break;
         };
@@ -277,6 +283,7 @@ fn layout_stack_contained<M: LeafMeasure>(
         }
     }
     out.append(&mut placed);
+    used
 }
 
 /// The smallest rect holding every node's (possibly rotated) box in `nodes`,
@@ -301,45 +308,98 @@ fn union_of(nodes: &[ComputedNode], to_local: Option<Affine>) -> Option<Rect> {
     Some(Rect::new(x0, y0, x1 - x0, y1 - y0))
 }
 
-/// `content_h`: the container is a column in an unbounded (content-sized)
-/// vertical axis — children are measured with unbounded height and keep their
-/// measured height, flex or not (auto-height pages).
-#[allow(clippy::too_many_arguments)]
+/// A column's or row's own layout parameters.
+#[derive(Clone, Copy)]
+pub(super) struct Flex<'a> {
+    pub axis: Axis,
+    pub children: &'a [usize],
+    pub spacing: f32,
+    pub main_align: MainAxisAlign,
+    pub cross_align: CrossAxisAlign,
+    /// The container is a column in an unbounded (content-sized) vertical
+    /// axis — children are measured with unbounded height and keep their
+    /// measured height, flex or not (auto-height pages).
+    pub content_h: bool,
+}
+
+impl<'a> Flex<'a> {
+    /// The parameters of node `idx`, if it is a column or row.
+    pub(super) fn of<M: LeafMeasure>(ctx: &Ctx<'a, M>, idx: usize) -> Option<Flex<'a>> {
+        let NodeType::Container {
+            axis,
+            children,
+            spacing,
+            main_axis,
+            cross_axis,
+            ..
+        } = &ctx.doc.nodes[idx].kind
+        else {
+            return None;
+        };
+        Some(Flex {
+            axis: *axis,
+            children,
+            spacing: *spacing,
+            main_align: *main_axis,
+            cross_align: *cross_axis,
+            content_h: *axis == Axis::Vertical && ctx.is_content_h(idx),
+        })
+    }
+}
+
+/// Lay a column's/row's children out in `content` and arrange each in its
+/// slot.
 fn layout_children<M: LeafMeasure>(
     ctx: &Ctx<M>,
-    axis: Axis,
-    children: &[usize],
-    spacing: f32,
-    main_align: MainAxisAlign,
-    cross_align: CrossAxisAlign,
+    flex: &Flex,
     content: Rect,
-    content_h: bool,
     xf: Option<Affine>,
     out: &mut Vec<ComputedNode>,
 ) {
+    let slots = flex_slots(ctx, flex, content, true);
+    for (&child, slot) in flex.children.iter().zip(slots) {
+        arrange(ctx, child, slot, xf, out);
+    }
+}
+
+/// The slot (border box in the container's frame) of each child of a
+/// column/row whose content box is `content`; `warn`: report a main-axis
+/// overflow (off for baseline queries, which lay out again).
+pub(super) fn flex_slots<M: LeafMeasure>(
+    ctx: &Ctx<M>,
+    flex: &Flex,
+    content: Rect,
+    warn: bool,
+) -> Vec<Rect> {
+    let Flex {
+        axis,
+        children,
+        spacing,
+        main_align,
+        cross_align,
+        content_h,
+    } = *flex;
     let n = children.len();
     if n == 0 {
-        return;
+        return Vec::new();
     }
 
     let content_main = main_of(axis, content.size());
     let content_cross = cross_of(axis, content.size());
     let base_c = Constraints::loose(content.w, if content_h { f32::INFINITY } else { content.h });
-    let cross_axis = match axis {
-        Axis::Vertical => Axis::Horizontal,
-        Axis::Horizontal => Axis::Vertical,
-    };
     // Stretched children get a tight cross size, so whatever depends on it (an
     // aspect-ratio leaf's main size, a nested row's flex shares) is measured as
-    // it will be arranged — matching the measure pass.
-    let child_c = |m: Edges, main: Option<f32>| {
+    // it will be arranged — matching the measure pass. A child with its own
+    // cross size is not stretched.
+    let stretched = |child: usize| {
+        cross_align == CrossAxisAlign::Stretch
+            && !has_cross_size(&ctx.doc.nodes[child].common, axis)
+    };
+    let child_c = |child: usize, main: Option<f32>| {
         let mut cc = base_c;
-        if cross_align == CrossAxisAlign::Stretch {
-            let cm = match axis {
-                Axis::Vertical => m.horizontal(),
-                Axis::Horizontal => m.vertical(),
-            };
-            cc = tighten(cc, cross_axis, content_cross - cm);
+        if stretched(child) {
+            let m = ctx.doc.nodes[child].common.margin;
+            cc = tighten(cc, cross_axis(axis), content_cross - cross_margin(axis, m));
         }
         if let Some(v) = main {
             cc = tighten(cc, axis, v);
@@ -353,7 +413,7 @@ fn layout_children<M: LeafMeasure>(
     let mut flex: Vec<Option<f32>> = Vec::with_capacity(n);
     for &child in children {
         let common = &ctx.doc.nodes[child].common;
-        measured.push(measure(ctx, child, child_c(common.margin, None)));
+        measured.push(measure(ctx, child, child_c(child, None)));
         margins.push(common.margin);
         // No free space to share along an unbounded axis: flex is ignored.
         flex.push(common.flex.filter(|w| *w > 0.0 && !content_h));
@@ -378,7 +438,7 @@ fn layout_children<M: LeafMeasure>(
     let total_flex: f32 = flex.iter().filter_map(|f| *f).sum();
     let free = (content_main - fixed_main - gaps).max(0.0);
 
-    if content_main - fixed_main - gaps < -0.01 {
+    if warn && content_main - fixed_main - gaps < -0.01 {
         tracing::warn!(
             overflow = fixed_main + gaps - content_main,
             "children overflow container main axis; clamping"
@@ -399,7 +459,7 @@ fn layout_children<M: LeafMeasure>(
     // depends on it (aspect ratio, wrapped content) is right when not stretched.
     for i in 0..n {
         if flex[i].is_some() && total_flex > 0.0 {
-            measured[i] = measure(ctx, children[i], child_c(margins[i], Some(main_size[i])));
+            measured[i] = measure(ctx, children[i], child_c(children[i], Some(main_size[i])));
         }
     }
 
@@ -423,9 +483,10 @@ fn layout_children<M: LeafMeasure>(
     let cross_size: Vec<f32> = (0..n)
         .map(|i| {
             let bmain = main_size[i];
-            let mut bcross = match cross_align {
-                CrossAxisAlign::Stretch => (content_cross - margin_cross(i)).max(0.0),
-                _ => cross_of(axis, measured[i]),
+            let mut bcross = if stretched(children[i]) {
+                (content_cross - margin_cross(i)).max(0.0)
+            } else {
+                cross_of(axis, measured[i])
             };
             if let Some(ar) = ctx.doc.nodes[children[i]].common.outer().aspect_ratio {
                 if ar > 0.0 {
@@ -457,8 +518,8 @@ fn layout_children<M: LeafMeasure>(
         .map_or(0.0, |b| b.iter().copied().fold(0.0, f32::max));
 
     let mut cursor = main_start + start_offset;
+    let mut slots = Vec::with_capacity(n);
     for i in 0..n {
-        let child = children[i];
         let bmain = main_size[i];
         let bcross = cross_size[i];
 
@@ -470,15 +531,14 @@ fn layout_children<M: LeafMeasure>(
         let main_pos = cursor + margin_leading_main(axis, margins[i]);
         let cross_pos = cross_start + cross_off + margin_leading_cross(axis, margins[i]);
 
-        let child_rect = match axis {
+        slots.push(match axis {
             Axis::Vertical => Rect::new(cross_pos, main_pos, bcross, bmain),
             Axis::Horizontal => Rect::new(main_pos, cross_pos, bmain, bcross),
-        };
-
-        arrange(ctx, child, child_rect, xf, out);
+        });
 
         cursor += margin_main(i) + bmain + spacing + extra_gap;
     }
+    slots
 }
 
 fn margin_leading_main(axis: Axis, m: Edges) -> f32 {
@@ -581,9 +641,11 @@ fn paint_content(kind: &NodeType, common: &Common, rect: Rect) -> PaintContent {
             letter_spacing,
             spans,
             wrap,
+            fit_width,
             typography,
         }) => PaintContent::Text(TextBox {
             wrap: *wrap,
+            fit_width: *fit_width,
             typography: *typography,
             content: content.clone(),
             spans: spans.clone(),

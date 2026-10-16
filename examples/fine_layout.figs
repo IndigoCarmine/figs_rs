@@ -1,0 +1,61 @@
+// Fine layout details for reproducing a drawn layout exactly.
+//
+// - `.fit_width()` / `.fit_width("scale")`: a title set exactly as wide as
+//   its box, by adjusting the letter spacing or the size (useful when a
+//   substituted font runs slightly longer or shorter than the original).
+// - In a stretched column, a child with its own `.width()` keeps it (and sits
+//   at the start, after its margin); children without one are stretched.
+// - Containers have baselines: a list (a column of baseline rows) placed by
+//   the first baseline of its first line with `.at_baseline(x, y)`.
+// - `.min_stroke_px(1)` on the page: 0.25 pt hairlines stay crisp 1 px lines
+//   in a low-resolution PNG, as in a PDF viewer (PDF/SVG keep exact widths).
+let ink = "#1d2b44";
+let accent = "#e0635a";
+let guide = "#9fb3d1";
+let hair = 0.25 / 72 * 2.54;   // 0.25 pt in cm
+
+// A guide showing the box a fitted title must fill.
+fn span_guide(x, y, w, guide) {
+    rect().fill(guide).at(x, y).width(w).height(0.04)
+}
+
+// A bullet list item: mark and text on one baseline.
+fn item(s, ink, accent) {
+    row([text("■").size(12).color(accent), text(s).size(14).color(ink)])
+        .cross("baseline").spacing(0.25)
+}
+
+page(16, 10,
+    stack([
+        // Fitted titles: both end exactly at the guide's right end.
+        text("Fictional Society Annual Meeting").size(26).bold().color(ink)
+            .fit_width().width(14).at_baseline(1, 1.4),
+        span_guide(1, 1.6, 14, guide),
+        text("Session B — Soft Matter").size(20).color(accent)
+            .fit_width("scale").width(9).at_baseline(1, 2.6),
+        span_guide(1, 2.8, 9, guide),
+
+        // A stretched column: the header bar fills it, the 5 cm bar keeps
+        // its width (indented by its margin).
+        col([
+            rect().fill(ink).height(0.5),
+            rect().fill(accent).height(0.5).width(5).margin(#{ left: 0.4 }),
+            text("stretch, unless sized").size(11).color(ink),
+        ]).stretch().spacing(0.25).pad(0.3).width(7).stroke(guide).stroke_width(hair)
+            .at(1, 3.6),
+
+        // A list placed by its first baseline on the dashed guide.
+        line(8.6, 4.4, 15.4, 4.4).stroke(guide).stroke_width(0.02).dash([0.1, 0.08]),
+        col([
+            item("first finding", ink, accent),
+            item("second finding", ink, accent),
+            item("third finding", ink, accent),
+        ]).spacing(0.15).at_baseline(9, 4.4),
+
+        // Hairline frames: 0.25 pt borders, 1 px in the 100 dpi PNG.
+        rect().stroke(ink).stroke_width(hair).at(1, 7).width(4).height(2),
+        rect().stroke(accent).stroke_width(hair).radius(0.3).at(6, 7).width(4).height(2),
+        col([text("0.25 pt").size(11).color(ink)]).pad(0.3).stroke(guide)
+            .stroke_width(hair).at(11, 7).width(4).height(2),
+    ])
+).unit("cm").background("#ffffff").dpi(100).min_stroke_px(1)
