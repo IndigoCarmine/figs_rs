@@ -239,6 +239,11 @@ fn blank_node(kind: NodeKind) -> RawNode {
         font_size: None,
         font_family: None,
         font_weight: None,
+        font_style: None,
+        underline: false,
+        strike: false,
+        letter_spacing: None,
+        spans: Vec::new(),
         color: None,
         align: None,
         line_height: None,
@@ -994,6 +999,9 @@ fn build_engine(base_dir: Option<&Path>) -> Engine {
         set_doc(d, |pg| pg.font_family = Some(s.to_string()))
     });
 
+    // Rich text: `span(..)`, `text([..])`, span setters, `markup(..)`.
+    rich::register(&mut engine);
+
     // Data loading (the only file access scripts get).
     csv::register(&mut engine, base_dir.map(Path::to_path_buf));
 
@@ -1001,7 +1009,9 @@ fn build_engine(base_dir: Option<&Path>) -> Engine {
 }
 
 pub mod csv;
+pub mod markup;
 mod prelude;
+mod rich;
 pub mod sites;
 
 pub use sites::{OffsetSite, OffsetSites, SiteOrigin, SourceMap};

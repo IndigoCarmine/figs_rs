@@ -393,6 +393,14 @@ fn caption(s) { fg_text(s).size(base_size()).center() }
 // Panel label ("(a)"): `label_size()` (1.25x base), bold.
 fn label(s) { fg_text(s).size(label_size()).bold() }
 
+// Rich text from inline markup: `*italic*`, `**bold**`, `__underline__`,
+// `~~strike~~`, `H_2O` / `ΔG_{300K}` (subscript), `Debye^†` / `x^{2}`
+// (superscript), `{#f0a030 bold|10 μM}` (style group), `\*` (literal). The
+// result is an ordinary core text node of spans (`text(markup(s))`), so every
+// text setter chains: `rich("ΔG_{300K}").size(base_size())`. The semantic
+// helpers take markup through it too: `body(markup("H_2O"))`.
+fn rich(s) { text(markup(s)) }
+
 // `t` (a text node) with a halo: the core text outline (`stroke`) in `color`,
 // reaching `r` (cm) past the glyph edges with round joins. The outline is
 // painted behind the glyphs, so they keep their exact shape, and it is purely

@@ -2,10 +2,19 @@
 //! fontdb discovery + swash rasterization). The same shaped output drives both
 //! measurement (now) and the raster/vector backends (later milestones), so text
 //! geometry is computed exactly once and shared.
+//!
+//! Rich text (inline spans with their own size/weight/style/colour/script/
+//! tracking/decorations) and ordered font-family lists resolved per character
+//! are handled in [`shape`] and `fonts`; see the README's "Rich text" section.
 
+mod fonts;
 pub mod shape;
 
-pub use shape::{ShapedGlyph, ShapedLine, ShapedText};
+pub use fonts::FaceMetrics;
+pub use shape::{
+    styled_runs, Decoration, DecorationKind, RunStyle, ShapedGlyph, ShapedLine, ShapedText,
+    StyledRun,
+};
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -22,7 +31,9 @@ use crate::schema::{ImageProps, TextProps};
 /// shaping while the layout engine measures through a shared reference.
 pub struct FontStore {
     system: RefCell<FontSystem>,
-    /// Family used when a text node doesn't name one.
+    /// Face choices, coverage and metrics (see [`fonts`]).
+    cache: RefCell<fonts::FontCache>,
+    /// Family list used when a text node doesn't name one.
     default_family: Option<String>,
     /// Directory relative image `src` paths resolve against when reading an
     /// image's natural aspect ratio. `None` disables image lookups.
@@ -36,6 +47,7 @@ impl FontStore {
     pub fn new() -> Self {
         FontStore {
             system: RefCell::new(FontSystem::new()),
+            cache: RefCell::new(fonts::FontCache::default()),
             default_family: None,
             image_base_dir: None,
             image_aspects: RefCell::new(HashMap::new()),
@@ -51,9 +63,9 @@ impl FontStore {
         self.image_aspects.borrow_mut().clear();
     }
 
-    /// Set the family used for text nodes without an explicit `font_family`.
-    /// Pass a concrete family name (e.g. "Liberation Sans") for deterministic
-    /// output across machines.
+    /// Set the family (or comma-separated family list, e.g. `"Arial, Yu
+    /// Gothic"`) used for text nodes without an explicit `font_family`. Pass
+    /// concrete family names for deterministic output across machines.
     pub fn with_default_family(mut self, family: impl Into<String>) -> Self {
         self.default_family = Some(family.into());
         self
@@ -83,7 +95,21 @@ impl FontStore {
     /// non-finite means unconstrained).
     pub fn shape(&self, text: &TextProps, max_width: f32) -> ShapedText {
         let mut system = self.system.borrow_mut();
-        shape::shape(&mut system, text, max_width, self.default_family.as_deref())
+        let mut cache = self.cache.borrow_mut();
+        shape::shape(
+            &mut system,
+            &mut cache,
+            text,
+            max_width,
+            self.default_family.as_deref(),
+        )
+    }
+
+    /// Vertical metrics (ascent, descent, underline/strike placement) of a
+    /// face, in em.
+    pub fn face_metrics(&self, id: cosmic_text::fontdb::ID) -> FaceMetrics {
+        let mut system = self.system.borrow_mut();
+        self.cache.borrow_mut().metrics(&mut system, id)
     }
 
     /// Run a closure with mutable access to the underlying `FontSystem`.
@@ -95,8 +121,8 @@ impl FontStore {
         f(&mut system)
     }
 
-    /// The default family used for text nodes without an explicit `font_family`,
-    /// if one was configured.
+    /// The default family list used for text nodes without an explicit
+    /// `font_family`, if one was configured.
     pub fn default_family(&self) -> Option<&str> {
         self.default_family.as_deref()
     }

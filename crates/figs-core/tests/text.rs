@@ -27,16 +27,7 @@ fn families_are_listed_and_sorted() {
 }
 
 fn text(content: &str, font_size: f32) -> TextProps {
-    TextProps {
-        content: content.to_string(),
-        font_size,
-        font_family: None,
-        font_weight: None,
-        color: figs_core::geom::Color::BLACK,
-        align: figs_core::geom::TextAlign::Left,
-        line_height: 1.2,
-        stroke: None,
-    }
+    TextProps::plain(content, font_size)
 }
 
 /// A block is `lines` line boxes of `lh`, grown by at most the font's

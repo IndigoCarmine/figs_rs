@@ -1,0 +1,71 @@
+// Rich text: inline spans (super/subscripts, italic, bold, colour, underline),
+// per-character font fallback lists for mixed Japanese/Latin text, letter
+// spacing, and Japanese line breaking — a poster body block.
+//
+//   figs build examples/rich_text.figs -o rich_text.png   (or .pdf / .svg)
+//
+// Fonts: Arial / Times New Roman for Latin, Yu Gothic / BIZ UDPGothic / MS
+// Mincho for Japanese (Windows). Elsewhere the first installed family of each
+// list is used; missing glyphs fall back to the system's fonts.
+
+let gothic = "Arial, Yu Gothic";            // Latin in Arial, Japanese in Yu Gothic
+let mincho = "Times New Roman, MS Mincho";  // Latin in Times, Japanese in MS Mincho
+let accent = "#e0635a";
+let body_size = 11;
+
+// A coloured title band with wide tracking (letter spacing, em).
+let band = stack([
+    rect().fill("#1f3a5f"),
+    col([
+        text("無機結晶の精密成長制御")
+            .font("Arial, BIZ UDPGothic").size(22).bold().color("#ffffff")
+            .tracking(0.15).center(),
+        // Spans written out with the core API.
+        text([
+            span("Precision living supramolecular polymerization of "),
+            span("barbiturate").italic(),
+            span(" dyes"),
+        ]).size(12).color("#d8e2f0").center().tracking(0.02),
+    ]).spacing(0.15).pad(0.4).stretch(),
+]);
+
+// Authors: the presenter is marked ○ and underlined; affiliations are
+// superscripts (framework markup -> spans).
+let authors = rich("○__佐藤 太郎__^1・鈴木 花子^2・A. Tanaka^{1,*}")
+    .size(13).center();
+let affil = rich("^1東都大院工, ^2京大院理  *tanaka@example.ac.jp")
+    .size(9).color("#555555").center();
+
+// Body: mixed Japanese/English with colour spans, wrapped in a narrow column
+// (no line starts with 。、）」, none ends with （「).
+let para = rich(
+    "メロシアニン色素（{#f0a030 bold|10 μM}）をメチルシクロヘキサン中で冷却すると、" +
+    "{#1f6fb2 bold|Sodium chloride}の結晶成長により立方体（六面体）が形成され、" +
+    "さらに集積して多結晶体となる。屈折率は 1.54^† である。"
+).size(body_size).line_height(1.45);
+
+// Thermodynamics with subscripts and coloured values.
+let thermo = col([
+    rich("Δ*H* = {" + accent + "|−86.4} kJ mol^{−1}").size(body_size),
+    rich("Δ*S* = {" + accent + "|−0.17} kJ mol^{−1} K^{−1}").size(body_size),
+    rich("Δ*G*_{300K} = {" + accent + " bold|−27.5} kJ mol^{−1},  *K*_n/*K*_e = 2.1 × 10^3").size(body_size),
+    rich("H_2O 0.5 vol%, OD_{600} = 0.42, ~~0.38~~ (corrected)").size(body_size),
+]).spacing(0.12);
+
+// Reference line in a serif list (Times for Latin, MS Mincho for Japanese).
+let refs = col([
+    rich("[1] A. Tanaka *et al.*, *Nature* **2021**, *12*, 345–352.").font(mincho).size(10),
+    rich("[2] 高橋 一郎, 化学と工業 **2019**, *45*, 88–93.").font(mincho).size(10),
+]).spacing(0.08);
+
+page(16, "auto",
+    col([
+        band,
+        authors,
+        affil,
+        row([
+            col([para]).width(7.2),
+            col([thermo, refs]).spacing(0.4).flex(1),
+        ]).spacing(0.6),
+    ]).pad(0.6).spacing(0.35).stretch(),
+).unit("cm").background("#ffffff").font(gothic)
