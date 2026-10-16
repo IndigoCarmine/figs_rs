@@ -362,6 +362,22 @@ fn contain_counts_descendants_and_respects_padding() {
 }
 
 #[test]
+fn contain_measures_rotated_children_by_their_turned_box() {
+    // A 20 x 4 rect turned 90° covers 4 x 20 on the page: hung off the right
+    // edge, it costs the content box 4 pt, not 20.
+    let l = lay_script(
+        "page(100, 50, stack([ rect().width(20).height(4).rotate(90).at(10, 0) ]) \
+         .viewbox(0, 0, 10, 1).contain()).unit(\"pt\")",
+    );
+    let n = l
+        .nodes
+        .iter()
+        .find(|n| matches!(n.content, PaintContent::Rect { .. }))
+        .unwrap();
+    assert_rect(n.bounds(), 96.0, 0.0, 4.0, 20.0);
+}
+
+#[test]
 fn contain_on_a_plain_stack_makes_room_for_negative_offsets() {
     // A plain stack measures the part hanging off its top-left too, and
     // shifts its content so it stays inside.
@@ -692,7 +708,9 @@ fn hook_pt(name: &str) -> f32 {
 #[test]
 fn plot_margins_are_the_measured_label_sizes() {
     let p = Plotted::new(
-        r#"page(12, 9, plot(#{ x: [0, 10], y: [0, 1], xlabel: "Time", ylabel: "Signal" },
+        // The horizontal y label (above the axis) of `ylabel_rotated()` false.
+        r#"fn ylabel_rotated() { false }
+        page(12, 9, plot(#{ x: [0, 10], y: [0, 1], xlabel: "Time", ylabel: "Signal" },
             [line_plot([0, 10], [0, 1])]).flex(1)).unit("cm")"#,
     );
     let panel = rect_of(&p.l, "root");
@@ -774,23 +792,35 @@ fn category_labels_fill_their_slots() {
 
 #[test]
 fn rotated_y_label_sits_left_of_the_tick_labels() {
-    // Core rotation lands separately; a stand-in `rotate` (identity) is
-    // enough to check where `ylabel_rotated()` puts the label.
+    // The default: the y label turned -90°, its footprint one line wide and
+    // as long as the axis, left of the tick labels.
     let p = Plotted::new(
-        r#"fn ylabel_rotated() { true }
-        fn rotate(deg) { this }
-        page(12, 9, plot(#{ x: [0, 10], y: [0, 1], ylabel: "Signal" },
+        r#"page(12, 9, plot(#{ x: [0, 10], y: [0, 1], ylabel: "Signal" },
             [line_plot([0, 10], [0, 1])]).flex(1)).unit("cm")"#,
     );
     let panel = rect_of(&p.l, "root");
     let area = p.area();
-    let yl = p.text("Signal");
+    let (pp, tl, room) = (
+        hook_pt("plot_pad"),
+        hook_pt("tick_length"),
+        hook_pt("plot_label_room"),
+    );
+    let gap = 8.0 * 0.012 * 72.0 / 2.54;
+    let node =
+        p.l.nodes
+            .iter()
+            .find(|n| p.raw.nodes[&n.id].content.as_deref() == Some("Signal"))
+            .unwrap();
+    assert!(node.transform.is_some(), "y label is not rotated");
+    let yl = node.bounds();
+    assert_rect(yl, panel.x + pp, area.y, LINE_H, area.h);
+    // Then a gap, the widest tick label ("0.0"), the tick room.
+    approx(area.x - (yl.x + yl.w), 2.0 * gap + 3.0 * CHAR_W + tl + gap);
     let tick = p.text("0.4");
-    approx(yl.x, panel.x + hook_pt("plot_pad"));
     assert!(yl.x + yl.w < tick.x, "{yl:?} vs {tick:?}");
-    // Centred on the axis, not above it.
-    approx(yl.y + yl.h / 2.0, area.y + area.h / 2.0);
-    assert!(yl.y > area.y);
+    // Nothing above the axis but the label room and the top tick label's
+    // half-line overhang.
+    approx(area.y, panel.y + room + pp + LINE_H / 2.0);
 }
 
 // ---- csv() -------------------------------------------------------------------

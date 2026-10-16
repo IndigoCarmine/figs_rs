@@ -14,6 +14,8 @@
 //! - **Images**: JPEGs are embedded as-is (DCT passthrough, no recompression);
 //!   other formats are decoded and embedded losslessly. `cover` is clipped to
 //!   the node rect. Unreadable images get the same placeholder box as PNG.
+//! - **Rotation**: a rotated node is drawn inside a `q … cm … Q` block
+//!   (krilla `push_transform` / `pop`), so rotated text stays real text.
 
 use std::collections::HashMap;
 use std::ops::Range;
@@ -29,7 +31,7 @@ use krilla::surface::Surface;
 use krilla::text::{Font, Glyph, GlyphId};
 use krilla::Document;
 
-use crate::geom::{Color, ImageFit, LineCap, PathSegment, Rect, StrokeStyle};
+use crate::geom::{Affine, Color, ImageFit, LineCap, PathSegment, Rect, StrokeStyle};
 use crate::layout::{ComputedLayout, PageGeom, PathPaint, TextBox};
 use crate::text::FontStore;
 
@@ -255,6 +257,17 @@ fn checked_range(text: &str, range: &Range<usize>) -> Range<usize> {
 }
 
 impl Renderer for PdfRenderer<'_, '_> {
+    fn push_transform(&mut self, t: &Affine) {
+        // krilla's space is the IR's (top-left, y down), so the matrix goes in
+        // as is; it composes with krilla's own page flip.
+        self.surface
+            .push_transform(&Transform::from_row(t.a, t.b, t.c, t.d, t.e, t.f));
+    }
+
+    fn pop_transform(&mut self) {
+        self.surface.pop();
+    }
+
     fn begin_page(&mut self, page: &PageGeom) {
         // Same default as PNG: white when no background is given.
         let bg = page.background.unwrap_or(Color::WHITE);

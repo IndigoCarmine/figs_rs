@@ -204,6 +204,7 @@ fn blank_node(kind: NodeKind) -> RawNode {
         x: None,
         y: None,
         anchor: None,
+        rotate: None,
         viewbox: None,
         contain: false,
         children: Vec::new(),
@@ -571,6 +572,9 @@ fn build_engine(base_dir: Option<&Path>) -> Engine {
     // Absolute offset inside a `stack` parent (ignored under col/row).
     reg_num(&mut engine, "x", |r, x| r.x = Some(x));
     reg_num(&mut engine, "y", |r, y| r.y = Some(y));
+    // Clockwise degrees about the box centre; odd quarter turns swap the
+    // layout footprint (`text("y").rotate(-90)` in a row is a vertical label).
+    reg_num(&mut engine, "rotate", |r, d| r.rotate = Some(d));
     engine.register_fn(
         "at",
         |n: ScriptNode, x: Dynamic, y: Dynamic| -> Result<ScriptNode, Box<EvalAltResult>> {

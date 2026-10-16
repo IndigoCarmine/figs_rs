@@ -20,8 +20,32 @@ use crate::schema::{Common, NodeType};
 use super::{cross_of, main_of, Constraints, Ctx, LeafMeasure, FALLBACK_IMAGE_ASPECT};
 
 /// Measure node `idx` under `c`, returning its border-box size (content +
-/// padding, excluding margin).
+/// padding, excluding margin) **in the parent's frame**.
+///
+/// A node turned by an odd quarter turn (`rotate = ±90`, `270`, …) is
+/// measured in its own frame with the constraints' axes swapped, and its size
+/// is swapped back: the parent sees the rotated footprint (Flutter's
+/// `RotatedBox`). Any other rotation is paint-only and doesn't affect size.
 pub(crate) fn measure<M: LeafMeasure>(ctx: &Ctx<M>, idx: usize, c: Constraints) -> Size {
+    if ctx.doc.nodes[idx].common.swaps_axes() {
+        let s = measure_own(ctx, idx, swap_constraints(c));
+        return Size::new(s.h, s.w);
+    }
+    measure_own(ctx, idx, c)
+}
+
+/// `c` with its width and height ranges exchanged.
+fn swap_constraints(c: Constraints) -> Constraints {
+    Constraints {
+        min_w: c.min_h,
+        max_w: c.max_h,
+        min_h: c.min_w,
+        max_h: c.max_w,
+    }
+}
+
+/// [`measure`] in the node's own (unrotated) frame.
+fn measure_own<M: LeafMeasure>(ctx: &Ctx<M>, idx: usize, c: Constraints) -> Size {
     let node = &ctx.doc.nodes[idx];
     let intrinsic = match &node.kind {
         NodeType::Container {
@@ -227,7 +251,9 @@ fn measure_stack<M: LeafMeasure>(
     let mut h = 0.0f32;
     let (mut left, mut top) = (0.0f32, 0.0f32);
     for &child in children {
-        let cc = &ctx.doc.nodes[child].common;
+        // Size/aspect in the stack's frame (swapped for a quarter-turned child).
+        let cc = ctx.doc.nodes[child].common.outer();
+        let cc = &*cc;
         let avail = stack_child_avail(cc, inner, user);
         // A filling axis is tight when the stack's own size on it is.
         let sz = measure(

@@ -251,9 +251,9 @@ fn plot_label_room() { label_inset() + base_size() * 1.25 * 1.3 * 2.54 / 72.0 }
 // and its box (cm), so labels never touch the panel edge.
 fn plot_pad() { base_size() * 0.01 }
 
-// Turn the y axis label 90° and set it beside the y tick labels (true), or
-// keep it horizontal above the axis (false, the default for now).
-fn ylabel_rotated() { false }
+// The y axis label turned 90° (reading upwards) left of the y tick labels and
+// centred on the axis (true), or horizontal above the axis (false).
+fn ylabel_rotated() { true }
 
 // ---------------------------------------------------------------------------
 // Semantic text
@@ -1168,8 +1168,9 @@ fn plot_norm(x0, x1, y0, y1, p) { [(p[0] - x0) / (x1 - x0), (p[1] - y0) / (y1 - 
 // `plot(series)` / `plot(opts, series)`: axes holding the series (an array, or
 // one series). Options (all optional):
 //   x, y           [lo, hi] ranges (default: the data, widened to whole ticks)
-//   xlabel, ylabel axis labels (the y label sits above the axis, unrotated,
-//                  unless `ylabel_rotated()`)
+//   xlabel, ylabel axis labels (the y label turned 90° left of the tick
+//                  labels; horizontal above the axis if `ylabel_rotated()`
+//                  is false)
 //   xscale, yscale "linear" (default) or "log"
 //   xticks, yticks explicit tick values
 //   legend         a corner, "auto", or "" / false for none (default legend_corner())
@@ -1396,12 +1397,13 @@ fn plot(opts, series) {
     // Left band, as tall as the area and right-aligned to the axis: the y tick
     // labels in a viewbox stack spanning the axis (as wide as the widest
     // label), then room for the ticks — after the y label, when it is rotated
-    // (`ylabel_rotated()`).
+    // (`ylabel_rotated()`): a quarter turn swaps its footprint, so in the
+    // stretched row it is one line wide and as long as the axis, centred on it.
     let ylabel = plot_opt(opts, "ylabel", "");
     let rotated = ylabel != "" && ylabel_rotated();
     let yband = [];
     if rotated {
-        yband.push(col([plot_text(ylabel).rotate(-90)]).main("center"));
+        yband.push(plot_text(ylabel).center().rotate(-90));
         yband.push(rect().width(pad * 2));
     }
     yband.push(stack(yl).viewbox(0, y1, 1, y0));
