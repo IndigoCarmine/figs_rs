@@ -71,6 +71,43 @@ You provide: hierarchy, style, content, and constraints (`flex`, `aspect_ratio`,
 Lengths are in the page `unit`; `font_size` is always points. Internally
 everything is converted to points (1 pt = 1/72 in).
 
+### Auto page height
+
+`height = "auto"` makes the page as tall as its content (the width stays fixed).
+It is an explicit opt-in — `height` is still required, and a number keeps the
+old fixed behaviour. In Rhai: `page(17.5, "auto", root)`.
+
+```toml
+[page]
+width = 17.5
+height = "auto"      # fit the content
+unit = "cm"
+root = "root"
+```
+
+The root is measured with the page width fixed and the height unbounded, the
+measured height becomes the page height, then layout proceeds as usual. Along
+that unbounded vertical axis:
+
+- **flex is ignored in content-sized columns.** There is no free space to share,
+  so each child — flex or not — takes its measured (intrinsic) height, like
+  Flutter flex children in an unbounded axis. A grid of equal-flex rows thus gets
+  rows sized by their content; a sizeless `flex` rect is 0 tall. Rows and stacks
+  inside still use flex for widths.
+- **widths are decided as usual** (stretch / flex shares), and `aspect_ratio`
+  derives each height from its width: 2×2 square images on a 17.5 cm page with a
+  0.2 cm gap give a page `2 × 8.65 + 0.2` cm tall.
+- **images without `aspect_ratio`** use the file's natural aspect (read from the
+  image header by the CLI and the editor), or **4:3** when that is unknown (e.g. a
+  missing file drawn as a placeholder) — so an image never adds zero height once
+  its width is known.
+- if the content still has no height, the page falls back to 4:3 (width × 3/4)
+  with a warning. Layout never panics.
+
+Renderers and the editor read the final height from the layout IR
+(`ComputedLayout.page.height_pt`, with `page.auto_height` set). In the editor,
+the page inspector's **auto** checkbox toggles it.
+
 ### Overlays & absolute offsets (`stack`)
 
 A `stack` lays its children on top of each other inside its content box (its
@@ -257,7 +294,8 @@ framework component returns an ordinary core node or page, so you can always
 chain core setters on it (`grid(2, xs).pad(0.5)`, `title("T").size(30)`) or drop
 down to `col`/`row`/`page` wherever the defaults don't fit.
 
-A labeled 2×2 figure for a two-column journal
+A labeled 2×2 figure for a two-column journal — the page is 17.5 cm wide and
+exactly as tall as the four panels need
 ([`examples/framework_demo.figs`](examples/framework_demo.figs)):
 
 ```rhai
@@ -271,8 +309,8 @@ Components (lengths in cm, font sizes in pt):
 
 | Function | Result |
 |---|---|
-| `page(preset, root)` | Page of a named size, unit `cm`: `"single"` (8.5 cm column), `"double"` (17.5 cm), `"a5"`, `"a4"`, `"a3"`, `"a0"` (poster), `"letter"`; append `-landscape` to swap sides. Journal widths get a 4:3 height. The core `page(w, h, root)` is unchanged. |
-| `paper_size(preset)` | `[w, h]` of a preset, to drop down to core: `let s = paper_size("double"); page(s[0], 5, root).unit("cm")`. |
+| `page(preset, root)` | Page of a named size, unit `cm`. Journal presets `"single"` (8.5 cm column) and `"double"` (17.5 cm) fix only the width and get an [auto height](#auto-page-height) that fits the content. Paper presets `"a5"`, `"a4"`, `"a3"`, `"a0"` (poster), `"letter"` are fixed; append `-landscape` to swap their sides (journal presets have no landscape form). The core `page(w, h, root)` is unchanged. |
+| `paper_size(preset)` | `[w, h]` of a preset, to drop down to core: `let s = paper_size("double"); page(s[0], 5, root).unit("cm")`. For journal presets `h` is the string `"auto"`, so `page(s[0], s[1], root)` stays auto. |
 | `title(s)` / `caption(s)` / `label(s)` / `body(s)` | Semantic text: 1.5× base bold centered / base centered / 1.25× base bold / base. |
 | `vbox(items)` / `hbox(items)` | `col`/`row` with the default gap, stretched cross axis, and bare strings allowed. |
 | `grid(ncols, items)` / `grid(ncols, gap, items)` | Rows of `ncols` equal-flex cells (rows share height equally); the last row is padded with empty cells so widths stay equal. |
@@ -370,6 +408,10 @@ Modeled on Flutter's `BoxConstraints`/`RenderFlex`:
   `aspect_ratio` derives the cross axis from the (possibly flex-imposed) main
   axis. Overflow clamps and warns — it never panics. A `stack` instead places
   each child at its `x`/`y` offset, filling un-offset, unsized axes.
+- **tight constraints**: when a container's size on an axis is already known, a
+  stretched cross axis or a flex share is handed to the child during measure
+  too, so `aspect_ratio` children report their real height (this is what sizes
+  an auto-height page).
 
 ## Build & test
 

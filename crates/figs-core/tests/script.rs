@@ -334,3 +334,19 @@ fn poster_figs_example() {
         include_str!("../../../examples/poster.figs"),
     );
 }
+
+#[test]
+fn core_page_accepts_auto_height() {
+    use figs_core::schema::PageHeight;
+    let d = figs_core::eval_script(r#"page(10, "auto", col([rect().height(3)])).unit("cm")"#)
+        .expect("eval");
+    assert_eq!(d.page.height, PageHeight::Auto);
+    let doc = figs_core::Document::from_script(r#"page(10, "auto", col([rect().height(3)])).unit("pt")"#)
+        .expect("resolve");
+    let l = figs_core::layout(&doc, &figs_core::NullMeasurer);
+    assert!(l.page.auto_height);
+    assert!((l.page.height_pt - 3.0).abs() < 1e-3, "{}", l.page.height_pt);
+
+    let e = figs_core::eval_script(r#"page(10, "tall", rect())"#).unwrap_err();
+    assert!(e.to_string().contains(r#"number or "auto""#), "{e}");
+}

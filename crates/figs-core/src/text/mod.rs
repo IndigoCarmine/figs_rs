@@ -8,6 +8,8 @@ pub mod shape;
 pub use shape::{ShapedGlyph, ShapedLine, ShapedText};
 
 use std::cell::RefCell;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use cosmic_text::FontSystem;
 
@@ -22,6 +24,11 @@ pub struct FontStore {
     system: RefCell<FontSystem>,
     /// Family used when a text node doesn't name one.
     default_family: Option<String>,
+    /// Directory relative image `src` paths resolve against when reading an
+    /// image's natural aspect ratio. `None` disables image lookups.
+    image_base_dir: Option<PathBuf>,
+    /// Natural aspect (w / h) per resolved image path; `None` = unreadable.
+    image_aspects: RefCell<HashMap<PathBuf, Option<f32>>>,
 }
 
 impl FontStore {
@@ -30,7 +37,18 @@ impl FontStore {
         FontStore {
             system: RefCell::new(FontSystem::new()),
             default_family: None,
+            image_base_dir: None,
+            image_aspects: RefCell::new(HashMap::new()),
         }
+    }
+
+    /// Enable reading images' natural aspect ratios during layout, resolving
+    /// relative `src` paths against `dir` (the document's directory — the same
+    /// base the renderer uses). Without it, images with no `aspect_ratio` use
+    /// [`crate::layout::FALLBACK_IMAGE_ASPECT`] wherever an aspect is needed.
+    pub fn set_image_base_dir(&mut self, dir: Option<PathBuf>) {
+        self.image_base_dir = dir;
+        self.image_aspects.borrow_mut().clear();
     }
 
     /// Set the family used for text nodes without an explicit `font_family`.
@@ -95,9 +113,29 @@ impl LeafMeasure for FontStore {
         self.shape(text, max_width).size
     }
 
-    /// Image intrinsic sizing arrives with the image backend; until then images
-    /// contribute no intrinsic size (they rely on explicit size / aspect_ratio).
+    /// Images contribute no intrinsic size; their shape comes from explicit
+    /// size / `aspect_ratio`, else their natural aspect ([`Self::image_aspect`]).
     fn measure_image(&self, _image: &ImageProps) -> Size {
         Size::default()
+    }
+
+    /// Natural aspect from the image file header (cached per path), when an
+    /// image base dir is set. Missing/unreadable files yield `None`.
+    fn image_aspect(&self, image: &ImageProps) -> Option<f32> {
+        let base = self.image_base_dir.as_deref()?;
+        let src = Path::new(&image.src);
+        let path = if src.is_absolute() {
+            src.to_path_buf()
+        } else {
+            base.join(src)
+        };
+        if let Some(cached) = self.image_aspects.borrow().get(&path) {
+            return *cached;
+        }
+        let aspect = crate::render::image_size(&path)
+            .filter(|(w, h)| *w > 0 && *h > 0)
+            .map(|(w, h)| w as f32 / h as f32);
+        self.image_aspects.borrow_mut().insert(path, aspect);
+        aspect
     }
 }

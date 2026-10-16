@@ -1,4 +1,5 @@
-// A 2x2 labeled figure for a two-column journal page, using the framework
+// A 2x2 labeled figure for a two-column journal page (17.5 cm wide, auto
+// height: the page fits the panels), using the framework
 // prelude: page presets, grid, auto "(a)"-"(d)" labels and default spacing.
 page("double", grid(2, panels([
     image("a.png"), image("b.png"),

@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use figs_core::geom::{Color, Edges};
-use figs_core::schema::{NodeKind, RawDocument, RawNode, RawPage};
+use figs_core::schema::{NodeKind, PageHeight, RawDocument, RawNode, RawPage};
 use figs_core::units::Unit;
 use serde::Serialize;
 
@@ -115,7 +115,7 @@ pub fn default_document() -> RawDocument {
     RawDocument {
         page: RawPage {
             width: 720.0,
-            height: 960.0,
+            height: PageHeight::Fixed(960.0),
             unit: Unit::Pt,
             root: "root".to_string(),
             dpi: Some(96.0),

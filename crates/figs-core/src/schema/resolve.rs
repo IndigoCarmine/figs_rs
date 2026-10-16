@@ -60,7 +60,10 @@ pub enum ResolveError {
 #[derive(Debug, Clone)]
 pub struct PageInfo {
     pub width_pt: f32,
-    pub height_pt: f32,
+    /// Fixed page height in points, or `None` for `height = "auto"`: layout
+    /// then derives it from the content ([`crate::layout::ComputedLayout`]'s
+    /// `page.height_pt` carries the final value).
+    pub height_pt: Option<f32>,
     pub dpi: f32,
     pub background: Option<Color>,
     /// Default font family for text nodes that don't name one.
@@ -245,7 +248,7 @@ pub fn resolve(raw: RawDocument) -> Result<Document, ResolveError> {
 
     let page = PageInfo {
         width_pt: factor * raw.page.width,
-        height_pt: factor * raw.page.height,
+        height_pt: raw.page.height.fixed().map(|h| factor * h),
         dpi: raw.page.dpi.unwrap_or(DEFAULT_DPI),
         background: raw.page.background,
         font_family: raw.page.font_family.clone(),
@@ -541,7 +544,34 @@ mod tests {
         }
         // cm -> pt page conversion
         assert!((d.page.width_pt - Unit::Cm.convert(10.0)).abs() < 1e-3);
+        assert!((d.page.height_pt.unwrap() - Unit::Cm.convert(10.0)).abs() < 1e-3);
         assert_eq!(d.page.dpi, DEFAULT_DPI);
+    }
+
+    #[test]
+    fn auto_height_resolves_to_none() {
+        let src = r#"
+            [page]
+            width = 10
+            height = "auto"
+            root = "r"
+            [nodes.r]
+            type = "rect"
+        "#;
+        assert_eq!(doc(src).unwrap().page.height_pt, None);
+    }
+
+    #[test]
+    fn bad_height_string_rejected() {
+        let src = r#"
+            [page]
+            width = 10
+            height = "tall"
+            root = "r"
+            [nodes.r]
+            type = "rect"
+        "#;
+        assert!(doc(src).is_err());
     }
 
     #[test]

@@ -58,7 +58,7 @@ fn poster_round_trips() {
 
     // Page geometry survives.
     assert!((d1.page.width_pt - d2.page.width_pt).abs() < 1e-3);
-    assert!((d1.page.height_pt - d2.page.height_pt).abs() < 1e-3);
+    assert!((d1.page.height_pt.unwrap() - d2.page.height_pt.unwrap()).abs() < 1e-3);
     assert_eq!(d1.page.dpi, d2.page.dpi);
     assert_eq!(d1.page.background, d2.page.background);
 
@@ -233,4 +233,31 @@ fn four_panel_round_trips() {
     let d2 = resolve(raw2).expect("resolve 2");
     assert_eq!(d1.nodes.len(), d2.nodes.len());
     assert_eq!(kinds(&d1), kinds(&d2));
+}
+
+#[test]
+fn auto_page_height_round_trips() {
+    let src = r#"
+        [page]
+        width = 17.5
+        height = "auto"
+        unit = "cm"
+        root = "r"
+        [nodes.r]
+        type = "rect"
+    "#;
+    let raw1 = parse_str(src).expect("parse 1");
+    assert_eq!(raw1.page.height, figs_core::schema::PageHeight::Auto);
+    let out = to_toml(&raw1);
+    assert!(out.contains(r#"height = "auto""#), "{out}");
+    let raw2 = parse_str(&out).expect("parse 2");
+    assert_eq!(raw2.page.height, figs_core::schema::PageHeight::Auto);
+    assert_eq!(resolve(raw2).expect("resolve").page.height_pt, None);
+
+    // A fixed height still serializes as a plain number (integers parse too).
+    let raw = parse_str("[page]\nwidth = 10\nheight = 20\nroot = \"r\"\n[nodes.r]\ntype = \"rect\"\n")
+        .expect("parse fixed");
+    assert_eq!(raw.page.height, figs_core::schema::PageHeight::Fixed(20.0));
+    let out = to_toml(&raw);
+    assert!(out.contains("height = 20"), "{out}");
 }

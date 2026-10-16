@@ -58,12 +58,15 @@ fn build(input: &Path, output: &Path) -> Result<()> {
 
     // Build the font store once: it both measures text during layout and
     // rasterizes glyphs during rendering, so geometry is identical in both.
-    let mut fonts = FontStore::new();
-    fonts.set_default_family(doc.page.font_family.clone());
-    let computed = layout(&doc, &fonts);
-
     // Relative image `src` paths resolve against the document's directory.
     let base_dir = input.parent().unwrap_or_else(|| Path::new("."));
+
+    let mut fonts = FontStore::new();
+    fonts.set_default_family(doc.page.font_family.clone());
+    // Images without an aspect ratio take their file's natural aspect (this
+    // also drives `height = "auto"` pages).
+    fonts.set_image_base_dir(Some(base_dir.to_path_buf()));
+    let computed = layout(&doc, &fonts);
     let opts = RenderOptions {
         fonts: Some(&fonts),
         base_dir,
@@ -81,10 +84,15 @@ fn build(input: &Path, output: &Path) -> Result<()> {
     std::fs::write(output, &bytes)
         .with_context(|| format!("writing output `{}`", output.display()))?;
     eprintln!(
-        "wrote {} ({} bytes) at {:.0} dpi",
+        "wrote {} ({} bytes) at {:.0} dpi{}",
         output.display(),
         bytes.len(),
-        computed.page.dpi
+        computed.page.dpi,
+        if computed.page.auto_height {
+            format!(", auto height {:.2} pt", computed.page.height_pt)
+        } else {
+            String::new()
+        }
     );
     Ok(())
 }

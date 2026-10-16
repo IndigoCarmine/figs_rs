@@ -175,3 +175,35 @@ fn centered_text_rasterizes() {
         "text not centered: centroid x = {centroid} (extent {min_x}..{max_x})"
     );
 }
+
+#[test]
+fn auto_height_page_renders_at_content_height() {
+    // 100 pt wide at 72 dpi; a 30 pt band + 10 pt gap + 20 pt band -> 100x60 px.
+    let src = r##"
+        [page]
+        width = 100
+        height = "auto"
+        unit = "pt"
+        dpi = 72
+        background = "#ffffff"
+        root = "root"
+        [nodes.root]
+        type = "column"
+        spacing = 10
+        cross_axis_alignment = "stretch"
+        children = ["a", "b"]
+        [nodes.a]
+        type = "rect"
+        height = 30
+        fill = "#ff0000"
+        [nodes.b]
+        type = "rect"
+        height = 20
+        fill = "#0000ff"
+    "##;
+    let p = render(src);
+    assert_eq!((p.width(), p.height()), (100, 60));
+    assert_pixel(&p, 50, 15, (255, 0, 0));
+    assert_pixel(&p, 50, 35, (255, 255, 255));
+    assert_pixel(&p, 50, 50, (0, 0, 255));
+}

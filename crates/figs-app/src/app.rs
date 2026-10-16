@@ -143,6 +143,8 @@ impl FigsApp {
     fn rebuild(&mut self, ctx: &egui::Context) {
         self.fonts
             .set_default_family(self.model.page.font_family.clone());
+        // Images without an aspect ratio take their file's natural aspect.
+        self.fonts.set_image_base_dir(Some(self.base_dir.clone()));
         let raw = self.model.clone();
         let doc = match figs_core::schema::resolve::resolve(raw) {
             Ok(d) => d,
@@ -289,6 +291,8 @@ impl FigsApp {
         };
         self.fonts
             .set_default_family(self.model.page.font_family.clone());
+        // Images without an aspect ratio take their file's natural aspect.
+        self.fonts.set_image_base_dir(Some(self.base_dir.clone()));
         let raw = self.model.clone();
         let result = figs_core::schema::resolve::resolve(raw)
             .map_err(|e| e.to_string())
@@ -407,12 +411,22 @@ impl FigsApp {
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     let n = self.model.nodes.len();
+                    let height = match self.model.page.height.fixed() {
+                        Some(h) => format!("{h:.0}"),
+                        None => match &self.preview {
+                            Some(prev) => format!(
+                                "auto ({:.1})",
+                                prev.computed.page.height_pt / self.model.page.unit.to_pt()
+                            ),
+                            None => "auto".to_string(),
+                        },
+                    };
                     ui.colored_label(
                         p.dim,
                         format!(
-                            "{:.0} \u{00d7} {:.0} {} \u{00b7} {} nodes",
+                            "{:.0} \u{00d7} {} {} \u{00b7} {} nodes",
                             self.model.page.width,
-                            self.model.page.height,
+                            height,
                             unit_label(self.model.page.unit),
                             n
                         ),

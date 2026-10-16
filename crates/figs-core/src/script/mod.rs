@@ -11,7 +11,7 @@
 //! vector shapes `line` / `arrow` / `ellipse` / `path`), set properties by
 //! **chaining methods** (Rhai has no keyword arguments, so chaining is how you get
 //! concise, named-ish properties — no map literals), and finish with a single
-//! `page(width, height, root)` call:
+//! `page(width, height, root)` call (`height` may be `"auto"` to fit the content):
 //!
 //! ```text
 //! page(20, 12,
@@ -31,7 +31,7 @@ use rhai::{Array, Dynamic, Engine, EvalAltResult, Position};
 use crate::geom::{
     ArrowHead, Color, CrossAxisAlign, Edges, ImageFit, LineCap, MainAxisAlign, TextAlign,
 };
-use crate::schema::{NodeKind, RawDocument, RawNode, RawPage};
+use crate::schema::{NodeKind, PageHeight, RawDocument, RawNode, RawPage};
 use crate::units::Unit;
 
 // ---------------------------------------------------------------------------
@@ -296,9 +296,15 @@ fn cast_points(points: Array) -> Result<Vec<[f32; 2]>, Box<EvalAltResult>> {
         .collect()
 }
 
+/// `page(width, height, root)`; `height` may be a number or `"auto"` (fit the
+/// content — see [`PageHeight::Auto`]).
 fn page_fn(width: Dynamic, height: Dynamic, root: Dynamic) -> Result<ScriptDoc, Box<EvalAltResult>> {
     let width = dyn_to_f32(&width).ok_or_else(|| err("page(): width must be a number"))?;
-    let height = dyn_to_f32(&height).ok_or_else(|| err("page(): height must be a number"))?;
+    let height = match dyn_to_f32(&height) {
+        Some(h) => PageHeight::Fixed(h),
+        None if height.clone().into_string().is_ok_and(|s| s == "auto") => PageHeight::Auto,
+        None => return Err(err(r#"page(): height must be a number or "auto""#)),
+    };
     let root = root
         .try_cast::<ScriptNode>()
         .ok_or_else(|| err("page(): the third argument (root) must be a node"))?;

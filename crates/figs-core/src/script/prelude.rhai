@@ -228,27 +228,37 @@ fn panels(style, items, captions) {
 // Page presets
 // ---------------------------------------------------------------------------
 
-// `[width, height]` in cm for a named preset. Journal widths get a 4:3
-// height; append "-landscape" to swap the sides of any preset.
+// `[width, height]` in cm for a named preset. Journal presets fix only the
+// width — their height is "auto" (the page fits the content); paper presets are
+// fixed on both sides, and "-landscape" swaps them. A journal preset has no
+// landscape form (there is no fixed height to swap).
 fn paper_size(name) {
     if type_of(name) != "string" {
         throw "page(): use page(width, height, root) or page(preset, root)";
     }
-    let landscape = name.ends_with("-landscape");
-    let key = if landscape { name.sub_string(0, name.len() - 10) } else { name };
-    let sizes = #{
-        single: [8.5, 6.375],    // single journal column
-        double: [17.5, 13.125],  // full page width (two columns)
+    let journal = #{
+        single: 8.5,    // single journal column
+        double: 17.5,   // full page width (two columns)
+    };
+    let paper = #{
         a5: [14.8, 21.0],
         a4: [21.0, 29.7],
         a3: [29.7, 42.0],
         a0: [84.1, 118.9],       // poster
         letter: [21.59, 27.94],
     };
-    if !sizes.contains(key) {
-        throw `page(): unknown preset "${name}" (single, double, a5, a4, a3, a0, letter[-landscape])`;
+    let landscape = name.ends_with("-landscape");
+    let key = if landscape { name.sub_string(0, name.len() - 10) } else { name };
+    if journal.contains(key) {
+        if landscape {
+            throw `page(): "${name}": journal presets have an auto height and no landscape form; use page(w, h, root) for a fixed size`;
+        }
+        return [journal[key], "auto"];
     }
-    let s = sizes[key];
+    if !paper.contains(key) {
+        throw `page(): unknown preset "${name}" (single, double, a5, a4, a3, a0, letter; paper sizes take -landscape)`;
+    }
+    let s = paper[key];
     if landscape { [s[1], s[0]] } else { s }
 }
 

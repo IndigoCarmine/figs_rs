@@ -9,7 +9,7 @@
 
 use figs_core::geom::{CrossAxisAlign, MainAxisAlign, Rect, Size, TextAlign};
 use figs_core::layout::ComputedLayout;
-use figs_core::schema::{ImageProps, NodeKind, RawDocument, RawNode, TextProps};
+use figs_core::schema::{ImageProps, NodeKind, PageHeight, RawDocument, RawNode, TextProps};
 use figs_core::units::Unit;
 use figs_core::{eval_script, layout, Document, LeafMeasure, NullMeasurer};
 
@@ -534,30 +534,89 @@ fn page_presets_default_to_cm() {
     let d = raw(r#"page("single", rect())"#);
     assert_eq!(d.page.unit, Unit::Cm);
     approx(d.page.width, 8.5);
-    approx(d.page.height, 6.375);
+    assert_eq!(d.page.height, PageHeight::Auto); // journal presets fit content
 
     let d = raw(r#"page("double", rect())"#);
     approx(d.page.width, 17.5);
+    assert_eq!(d.page.height, PageHeight::Auto);
 
     let d = raw(r#"page("a0", rect())"#);
     approx(d.page.width, 84.1);
-    approx(d.page.height, 118.9);
+    approx(d.page.height.fixed().expect("fixed height"), 118.9);
 }
 
 #[test]
 fn page_preset_landscape_and_override() {
     let d = raw(r##"page("a4-landscape", rect()).background("#000000").unit("mm")"##);
     approx(d.page.width, 29.7);
-    approx(d.page.height, 21.0);
+    approx(d.page.height.fixed().expect("fixed height"), 21.0);
     assert_eq!(d.page.unit, Unit::Mm); // core page setters still chain
     assert!(d.page.background.is_some());
+}
+
+#[test]
+fn double_preset_fits_a_2x2_grid() {
+    // 17.5 cm page, default 0.2 cm gap, images with no aspect -> the 4:3
+    // fallback (NullMeasurer knows no image sizes): cell width
+    // w = (17.5 - 0.2) / 2, row height w * 3/4, page = 2 rows + 1 gap.
+    let l = lay(r#"page("double", grid(2, [
+        image("a.png"), image("b.png"),
+        image("c.png"), image("d.png"),
+    ]))"#);
+    let cm = Unit::Cm.to_pt();
+    let w = (17.5 - 0.2) / 2.0 * cm;
+    let h = w * 0.75;
+    assert!(l.page.auto_height);
+    approx(l.page.width_pt, 17.5 * cm);
+    approx(l.page.height_pt, 2.0 * h + 0.2 * cm);
+    let images: Vec<Rect> = l
+        .nodes
+        .iter()
+        .filter(|n| matches!(n.content, figs_core::layout::PaintContent::Image { .. }))
+        .map(|n| n.rect)
+        .collect();
+    assert_eq!(images.len(), 4);
+    for r in images {
+        approx(r.w, w);
+        approx(r.h, h);
+    }
+}
+
+#[test]
+fn double_preset_with_aspect_and_panels() {
+    // Square images under labeled panels: rows are exactly one cell tall.
+    let l = lay(r#"page("double", grid(2, panels([
+        image("a.png").aspect(1.0), image("b.png").aspect(1.0),
+        image("c.png").aspect(1.0), image("d.png").aspect(1.0),
+    ])))"#);
+    let cm = Unit::Cm.to_pt();
+    let w = (17.5 - 0.2) / 2.0 * cm;
+    approx(l.page.height_pt, 2.0 * w + 0.2 * cm);
+}
+
+#[test]
+fn paper_presets_stay_fixed() {
+    let d = raw(r#"page("a4", rect())"#);
+    assert_eq!(d.page.height, PageHeight::Fixed(29.7));
+    let l = lay(r#"page("a4", grid(2, [image("a.png"), image("b.png")]))"#);
+    assert!(!l.page.auto_height);
+    approx(l.page.height_pt, 29.7 * Unit::Cm.to_pt());
+}
+
+#[test]
+fn paper_size_of_journal_preset_is_auto() {
+    let d = raw(r#"let s = paper_size("single"); page(s[0], s[1], rect()).unit("cm")"#);
+    approx(d.page.width, 8.5);
+    assert_eq!(d.page.height, PageHeight::Auto);
+    let e = eval_script(r#"page("double-landscape", rect())"#).unwrap_err();
+    assert!(e.to_string().contains("no landscape form"), "{e}");
 }
 
 #[test]
 fn paper_size_drops_down_to_core_page() {
     let d = raw(r#"let s = paper_size("double"); page(s[0], 5, rect()).unit("cm")"#);
     approx(d.page.width, 17.5);
-    approx(d.page.height, 5.0);
+    approx(d.page.height.fixed().expect("fixed height"), 5.0);
 }
 
 #[test]
@@ -654,5 +713,5 @@ fn core_page_unchanged() {
     let d = raw(r#"page(10, 20, rect())"#);
     assert_eq!(d.page.unit, Unit::default());
     approx(d.page.width, 10.0);
-    approx(d.page.height, 20.0);
+    approx(d.page.height.fixed().expect("fixed height"), 20.0);
 }
