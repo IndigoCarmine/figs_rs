@@ -192,10 +192,7 @@ pub fn ink_bounds(group: &[ComputedNode]) -> Option<Rect> {
                     .as_ref()
                     .map_or(0.0, |s| stroke_align.outer_extent(s.width)),
             ),
-            PaintContent::Text(t) => grow(
-                n.rect,
-                t.font_size + t.stroke.as_ref().map_or(0.0, |s| s.width),
-            ),
+            PaintContent::Text(t) => grow(n.rect, t.font_size + t.max_stroke_width()),
             PaintContent::Path(p) => {
                 let Some((lo, hi)) = crate::path::bounds(&p.segments) else {
                     continue;

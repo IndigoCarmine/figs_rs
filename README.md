@@ -73,12 +73,16 @@ You provide: hierarchy, style, content, and constraints (`flex`, `aspect_ratio`,
   `dash`, `clip` — a background and border painted behind the children (see
   [Gradients & frames](#gradients--frames)).
 - **text**: `content`, `font_size` (pt), `font_family` (an ordered fallback
-  list: `"Arial, Yu Gothic"` or `["Arial", "Yu Gothic"]`), `font_weight`,
+  list: `"Arial, Yu Gothic"` or `["Arial", "Yu Gothic"]`, or per script:
+  `{ latin = "Yu Gothic", cjk = "MS Mincho" }`), `font_weight`,
   `font_style` (`normal`/`italic`), `color`, `align`, `line_height` (multiple
   of font size), `letter_spacing` (em), `underline`, `strike`, inline `spans`
   (see [Rich text](#rich-text-spans)), `wrap` (`false`: never wrap — see
   [Unwrapped text](#unwrapped-text-wrap--false)), and an outline: `stroke`,
-  `stroke_width`, `join` (see [Text outline](#text-outline)).
+  `stroke_width`, `join` (see [Text outline](#text-outline)); typography
+  switches `script_metrics`, `font_synthesis`, `synthetic_bold_width`,
+  `synthetic_slant` (also on `[page]`, see
+  [Fonts](#fonts-fallback-lists-per-script-families-weights-italic)).
 - **image**: `src`, `fit` (`contain`/`cover`/`fill`), `smooth` (`false`:
   nearest-neighbour scaling, see [Pixelated images](#pixelated-images)).
 - **rect**: `fill`, `stroke`, `stroke_width`, `stroke_align`, `corner_radius`.
@@ -134,8 +138,16 @@ stroke_width = 0.07    # cm here: the rim reaches 0.035 cm past the glyphs
   so the text layer still contains the string exactly once; SVG writes one
   stroked `<path>` before the glyph group.
 
+**Per span.** A span may set its own `stroke` (colour) and `stroke_width`
+(page units; `0` switches the node's outline off for the span). It keeps the
+node outline's `join`/`dash`/`cap`; an unset colour is the node outline's,
+else the span's text colour, an unset width the node's, else 1 pt. All
+outlines of a text box — one path per distinct style — are stroked before
+any glyph is filled.
+
 In Rhai: `text("(a)").bold().stroke("#ffffff").stroke_width(0.07)` (`.join(..)`
-to change the join). The framework's `halo(t, color, r)` is exactly this with
+to change the join); on a span `span("x").stroke("#fff").stroke_width(0.05)`,
+in markup `{stroke=#ffffff stroke_width=0.05|x}`. The framework's `halo(t, color, r)` is exactly this with
 `stroke_width = 2r`.
 
 ### Gradients & frames
@@ -237,15 +249,16 @@ spans = [
 | Span field | Meaning |
 |---|---|
 | `text` | the run's text (required) |
-| `font_family` | family list for this run; **replaces** the node's list |
+| `font_family` | font spec for this run: a plain list **replaces** the node's; a per-script table (`{ cjk = "MS Mincho" }`) overrides only the slots it names |
 | `font_size` | pt; with `script`, the *base* size the script is derived from |
 | `font_weight` | 100–900 (nearest installed face, CSS matching order) |
 | `font_style` (alias `style`) | `"italic"` / `"normal"` |
 | `color` | hex |
 | `underline`, `strike` | `true` / `false` (can switch off a node-level one) |
-| `script` | `"super"` (`"sup"`) / `"sub"`: size × **0.65**, baseline **+0.35 em** / **−0.15 em** (em of the base size) |
+| `script` | `"super"` (`"sup"`) / `"sub"`: size × **0.65**, baseline **+0.35 em** / **−0.15 em** (em of the base size); with `script_metrics = "office"` × **2/3**, **+30 %** / **−25 %** (PowerPoint) |
 | `baseline_shift` | exact shift in em of the base size, positive = up (overrides `script`'s) |
 | `letter_spacing` | tracking in em of the run's font size |
+| `stroke`, `stroke_width` | the run's glyph outline (see [Text outline](#text-outline)) |
 
 - **Line height.** A line box is `size × line_height` of the largest run on
   the line, with the largest ascent + descent box centred in it (CSS
@@ -270,7 +283,7 @@ spans = [
   line's last character is not counted in its width, so centred and
   right-aligned tracked titles stay centred on their ink.
 
-#### Fonts: fallback lists, weights, italic
+#### Fonts: fallback lists, per-script families, weights, italic
 
 - **The author's list is authoritative, per character.** `font_family =
   "Arial, Yu Gothic"` sets each character in the *first* listed family that
@@ -282,6 +295,42 @@ spans = [
   Families that aren't installed are skipped; with none installed the
   generic `sans-serif` face is used. `[page] font_family` (Rhai
   `page(..).font("…")`) is the default list for nodes that name none.
+- **Per-script families** (PowerPoint's Latin / East Asian font slots). When
+  the Japanese face also covers Latin, a list can't say "Latin in A, Japanese
+  in B"; a table can:
+
+  ```toml
+  font_family = { latin = "Yu Gothic", cjk = "MS Mincho" }   # node, span or [page]
+  font_family = { latin = "Arial", cjk = ["Yu Gothic", "MS Mincho"], symbol = "Segoe UI Symbol", fallback = "Segoe UI" }
+  ```
+
+  Rhai `.font(#{ latin: "Arial", cjk: "Yu Gothic" })` (node, span, page),
+  markup `{latin=Arial cjk='Yu Gothic'|…}` or `{font='latin: Arial; cjk: Yu
+  Gothic'|…}`; the canonical string form `"latin: Arial; cjk: Yu Gothic"` is
+  accepted anywhere a family list is. Each character's **script class**
+  picks its slot's list, then `fallback`, then the other slots (so every
+  family you named is tried before the system's fallback; an empty slot and
+  fallback mean `sans-serif`). Inheritance page → node → span: a plain list
+  replaces, a table overrides only the slots it names (`{ cjk = "MS Mincho" }`
+  on a node under a page list `"Arial, Yu Gothic"` keeps Latin in Arial). An
+  unknown slot is an error.
+
+  | Class | Characters | Slot |
+  |---|---|---|
+  | Latin | ASCII letters, digits, **space**, punctuation `( ) . , - : /`; Latin-1 letters, Latin Extended, IPA; **Greek** (`Δ μ`), Cyrillic; U+00A0 and the other Unicode spaces | `latin` |
+  | CJK | kana (incl. `・` U+30FB, `ー`), kanji (all planes), Hangul, Bopomofo, CJK punctuation `、。「」〜`, U+3000 ideographic space, full-/half-width forms `（）！０Ａ･` | `cjk` |
+  | Ambiguous | Latin-1 symbols `× ÷ ° ± § ·`, General Punctuation `— – ‘ ’ “ ” † ‡ • … ‰ ※`, arrows `→`, math `− ≤ ∞`, enclosed `①`, letterlike `℃`, box drawing, geometric shapes `○ ■ △`, misc symbols `★ ♪`, dingbats | `symbol` if given, else **follows its neighbours** |
+  | Other | Arabic, Hebrew, Indic, Thai, emoji, private use … | `fallback` |
+
+  Office sends the ambiguous symbols to the East Asian font when the text
+  was typed as Japanese (run language / IME) and to the Latin font in an
+  English run. figs has no language tags, so an ambiguous character takes the
+  class of the **nearest preceding letter, digit or CJK character** (the
+  following one at a paragraph start, CJK if there is none): `5 × 10` → Latin
+  `×`, `結果 × 2` and `○佐藤` → CJK; spaces and ASCII punctuation never decide.
+  Greek follows Office's default (the Latin font); put Greek in a span with
+  the Japanese face when you want its full-width forms. Combining marks stay
+  with their base character.
 - **What's left to the system.** Only characters no listed family covers fall
   through to cosmic-text's fallback: the requested face, then a per-script
   platform list, then a few common fonts, then any face that has the glyph.
@@ -294,14 +343,35 @@ spans = [
   Sans, DejaVu Sans, FreeSans, Noto symbols/emoji. Naming the Japanese face in
   the list avoids all of this.
 - **Weights** pick the nearest installed face in CSS order (for 400: 400,
-  500, lighter, bolder; above 500: bolder first). There is no synthetic bold:
-  a family with only a regular face (MS Mincho) stays regular.
+  500, lighter, bolder; above 500: bolder first). By default there is no
+  synthetic bold: a family with only a regular face (MS Mincho) stays regular.
+- **Synthetic bold** — `font_synthesis` on `[page]` or a text node (Rhai
+  `.font_synthesis(mode)`): `"none"` (default), `"auto"` — runs asking for
+  weight ≥ 600 that land on a face lighter than 600 (MS Mincho, Arial Unicode
+  MS, HG fonts) are emboldened, as PowerPoint and browsers do — or `"bold"`,
+  every glyph emboldened. Emboldening is an outline in the glyph's own colour,
+  `synthetic_bold_width` em of its size wide (default **1/35 ≈ 0.0286**:
+  PowerPoint's faux bold, measured from its PDF export, which writes such text
+  in fill + stroke mode with a line width of size/35 at every size), round
+  joins, centred on the contour (the glyph grows by size/70 each side).
+  Advances and layout are unchanged. It is drawn like a [text
+  outline](#text-outline) (after node/span outlines, before the fills), so PDF
+  text stays real text, once. A translucent colour shows the overlap of
+  outline and fill.
 - **Italic** uses the family's real italic face when it has one (Arial
   Italic, Times New Roman Italic), else an oblique face, else the upright face
-  **slanted by 14°** (a synthetic oblique — Yu Gothic, MS Mincho, BIZ UD
-  Gothic have no italics). The slant is a shear about each glyph's baseline
-  origin, identical in PNG (swash's fake italic), PDF (a `cm` shear around the
-  run; still real text) and SVG / rotated text / outlines (sheared outlines).
+  **slanted by `synthetic_slant`** (degrees, default **14°**; PowerPoint uses
+  a shear of exactly 1/3 = **18.43°**) — a synthetic oblique for Yu Gothic,
+  MS Mincho, BIZ UD Gothic, which have no italics. Set it on `[page]` or a
+  text node (Rhai `.synthetic_slant(deg)`). The slant is a shear about each
+  glyph's baseline origin, identical in PNG (swash's fake italic at 14°, the
+  glyph outline filled otherwise), PDF (a `cm` shear around the run; still
+  real text) and SVG / rotated text / outlines (sheared outlines).
+- **Script metrics** — `script_metrics = "figs"` (default: × 0.65, +0.35 /
+  −0.15 em) or `"office"` (× 2/3, superscript +30 %, subscript −25 % of the
+  base size: PowerPoint's `baseline="30000"` / `"-25000"` at 2/3 size) on
+  `[page]` or a text node; Rhai `page(..).scripts("office")`,
+  `text(..).scripts("figs")`. An explicit `baseline_shift` still wins.
 
 #### Japanese line breaking
 
@@ -318,6 +388,15 @@ line start hangs at the end of the previous line (*burasage*; it may overhang
 the box by that one glyph). A small kana can still start a line in such a
 box. Tests sweep a mixed paragraph across widths.
 
+**Super/subscripts stay attached.** A script run (or any span with a
+baseline shift) that follows a non-space character is never separated from
+it by a line break: UAX #14 would allow one between `花子` and `¹`, so figs
+shapes the paragraph with a word joiner (U+2060, removed again after
+breaking) at that point. Only inside a "word" wider than the box, broken
+between arbitrary glyphs, a script left at a line start moves up to the end
+of the previous line (overhanging the box by the script, like *burasage*).
+A space before the script (`Tanaka ¹`) is an ordinary break opportunity.
+
 In scripts the core builders mirror the model 1:1:
 
 ```rhai
@@ -327,7 +406,8 @@ text([span("ΔG"), span("300K").sub(), " = ", span("−27.5").color("#e0635a").b
 `text([...])` takes spans and plain strings (nested arrays are flattened).
 Span setters: `.bold()`, `.weight(n)`, `.italic()`, `.upright()`, `.color(hex)`,
 `.size(pt)`, `.sup()`, `.sub()`, `.shift(em)`, `.underline()`, `.strike()`,
-`.font(name | "A, B" | ["A", "B"])`, `.tracking(em)`. The same `.italic()`,
+`.font(name | "A, B" | ["A", "B"] | #{ latin: "A", cjk: "B" })`, `.tracking(em)`,
+`.stroke(hex)`, `.stroke_width(n)`. The same `.italic()`,
 `.underline()`, `.strike()`, `.tracking(em)`, `.font([...])` on a text node set
 the style every span inherits. The framework's [markup](#rich-text-markup)
 writes the same spans concisely.
@@ -888,7 +968,10 @@ setters:
   `.at_baseline(x, y)` puts the left end of the first baseline there (any
   quarter turn).
 - **text**: `.size(n)`, `.weight(n)` / `.bold()`, `.italic()`, `.color(hex)`,
-  `.font(name | "A, B" | ["A", "B"])`, `.tracking(em)`, `.underline()`, `.strike()`,
+  `.font(name | "A, B" | ["A", "B"] | #{ latin: "A", cjk: "B" })`, `.tracking(em)`,
+  `.underline()`, `.strike()`, `.scripts("figs"|"office")`,
+  `.font_synthesis("none"|"auto"|"bold")`, `.synthetic_bold_width(em)`,
+  `.synthetic_slant(deg)`,
   `.align("left"|"center"|"right"|"justify")` / `.center()`, `.line_height(n)`,
   `.nowrap()` / `.wrap(bool)` (see [Unwrapped text](#unwrapped-text-wrap--false)),
   and an outline painted behind the glyphs: `.stroke(hex)`, `.stroke_width(n)`,
@@ -919,7 +1002,10 @@ setters:
   `.arc(r, x, y, #{ sweep, large, rotation })` (`r` a number or `[rx, ry]`) —
   see [Curves](#curves).
 - **image**: `.fit("contain"|"cover"|"fill")`, `.smooth(false)`.
-- **page**: `.unit("cm"|…)`, `.background(hex | gradient)`, `.dpi(n)`, `.font(name | list)`.
+- **page**: `.unit("cm"|…)`, `.background(hex | gradient)`, `.dpi(n)`,
+  `.font(name | list | #{ latin, cjk, symbol, fallback })`, and the text
+  defaults `.scripts(..)`, `.font_synthesis(..)`, `.synthetic_bold_width(em)`,
+  `.synthetic_slant(deg)`.
 - **script-only**: `.meta(key, value)` / `.meta(key)` (a note on the node for
   other script code, `()` when unset; never part of the document — how a plot
   asks `labeled` for label room), `.prepend(child)` (insert a first child into
@@ -1051,8 +1137,9 @@ rich("{#ffd700 bold|Sodium chloride} = 結晶成長部位").font("Arial, Yu Goth
 | `__text__` / `~~text~~` | underline / line-through |
 | `_x`, `_{text}` | subscript (one character, or a braced group) |
 | `^x`, `^{text}` | superscript |
-| `{spec\|text}` | style group; `spec` = space-separated items: `#rrggbb` colour, `bold`/`b`, `italic`/`i`, `upright`, `underline`/`u`, `strike`/`s`, `sup`, `sub`, `size=12` (pt), `weight=600`, `font=Arial` / `font='Times New Roman'`, `tracking=0.1`, `shift=0.3` (em), `color=#hex` |
-| `\c` | `c` literally: `\*`, `\_`, `\^`, `\{`, `\}`, `\~`, `\\` |
+| `{spec\|text}` | style group; `spec` = space-separated items: `#rrggbb` colour, `bold`/`b`, `italic`/`i`, `upright`, `underline`/`u`, `strike`/`s`, `sup`, `sub`, `size=12` (pt), `weight=600`, `font=Arial` / `font='Times New Roman'` / `font='latin: Arial; cjk: Yu Gothic'`, per-script `latin=Arial` `cjk='MS Mincho'` `symbol=…` `fallback=…`, `tracking=0.1`, `shift=0.3` (em), `color=#hex`, `stroke=#hex`, `stroke_width=0.05` (page unit) |
+| `\n`, `\t` | a line break, a tab (a Rhai backtick string passes `\n` through unprocessed, so `` rich(`a\nb`) `` breaks the line) |
+| `\c` | `c` literally for any ASCII punctuation: `\*`, `\_`, `\^`, `\{`, `\}`, `\|`, `\~`, `\#`, `\\` …; any other escape (`\q`) is an error |
 
 Groups nest (`x^{*n*}` is an italic superscript; `{u|… {#f00|…} …}`).
 `*`, `**`, `__`, `~~` open only when followed by a non-space **and** closed
@@ -1060,7 +1147,8 @@ later in the same group (by a delimiter preceded by a non-space); otherwise
 they are literal — `5 * 3`, `Tanaka^{1,*}`, `*corresponding author` need no
 escaping. `_`/`^` before a space or the end are literal. Errors (an unmatched
 `}`, a `{` without `|`, an unknown style item, a bad colour, a dangling `\`,
-an unclosed `_{`) name the 1-based character column:
+an unclosed `_{`, an unknown escape, an unknown font slot) name the 1-based
+character column:
 `rich: markup: in style group: \`#zz\`: invalid colour \`#zz\` (column 4)`.
 
 See [`examples/rich_text.figs`](examples/rich_text.figs) for a poster body

@@ -239,21 +239,11 @@ impl<'a> TinySkiaRenderer<'a> {
     /// upright and drawn as a transformed image.
     fn draw_text_transformed(&mut self, fonts: &FontStore, rect: Rect, text: &TextBox) {
         let shaped = fonts.shape(&geometry::text_props(text), rect.w);
-        // Outline first, as in `draw_text`; `stroke_shape` applies the node
+        // Outlines first, as in `draw_text`; `stroke_shape` applies the node
         // transform itself.
-        if let Some(stroke) = &text.stroke {
-            let segs = self.outlines.text_outline(fonts, &shaped, rect, text.align);
-            if let Some(p) = self.sk_path(&segs) {
-                self.stroke_shape(&p, stroke);
-            }
-        }
+        self.draw_text_strokes(fonts, &shaped, rect, text.align);
         self.draw_decorations(&shaped, rect, text.align, DecorationKind::Underline);
         let device = Transform::from_scale(self.scale, self.scale).pre_concat(self.page_xf());
-        let mut paint = Paint {
-            anti_alias: true,
-            ..Paint::default()
-        };
-        let shear = geometry::italic_shear();
 
         for line in &shaped.lines {
             let align_off = geometry::align_offset(text.align, line.width, rect.w);
@@ -261,13 +251,7 @@ impl<'a> TinySkiaRenderer<'a> {
                 // Pen position in the node's local frame (points).
                 let pen_x = rect.x + align_off + g.x + g.x_offset;
                 let pen_y = rect.y + line.baseline - g.y_offset;
-                if let Some((path, upem)) = self.glyph_outline(fonts, g.font_id, g.glyph_id) {
-                    let k = g.font_size / upem;
-                    let kx = if g.synthetic_italic { k * shear } else { 0.0 };
-                    paint.set_color(sk_color(g.color));
-                    let t = device.pre_concat(Transform::from_row(k, 0.0, kx, -k, pen_x, pen_y));
-                    self.pixmap
-                        .fill_path(&path, &paint, FillRule::Winding, t, None);
+                if self.fill_glyph_outline(fonts, g, pen_x, pen_y, device) {
                     continue;
                 }
                 let (key, _, _) = CacheKey::new(
@@ -300,6 +284,49 @@ impl<'a> TinySkiaRenderer<'a> {
             }
         }
         self.draw_decorations(&shaped, rect, text.align, DecorationKind::Strike);
+    }
+
+    /// Fill glyph `g` from its outline with its pen at (`pen_x`, `pen_y`)
+    /// (points, local frame), through `device` (points -> pixels), sheared by
+    /// its synthetic-italic skew. `false` when the glyph has no outline.
+    fn fill_glyph_outline(
+        &mut self,
+        fonts: &FontStore,
+        g: &ShapedGlyph,
+        pen_x: f32,
+        pen_y: f32,
+        device: Transform,
+    ) -> bool {
+        let Some((path, upem)) = self.glyph_outline(fonts, g.font_id, g.glyph_id) else {
+            return false;
+        };
+        let k = g.font_size / upem;
+        let paint = Paint {
+            anti_alias: true,
+            shader: Shader::SolidColor(sk_color(g.color)),
+            ..Paint::default()
+        };
+        let t = device.pre_concat(Transform::from_row(k, 0.0, k * g.skew, -k, pen_x, pen_y));
+        self.pixmap
+            .fill_path(&path, &paint, FillRule::Winding, t, None);
+        true
+    }
+
+    /// Stroke a text box's outlines and synthetic bold (see
+    /// [`super::outline::OutlineCache::text_strokes`]) under the node
+    /// transform, before its glyphs are filled.
+    fn draw_text_strokes(
+        &mut self,
+        fonts: &FontStore,
+        shaped: &ShapedText,
+        rect: Rect,
+        align: TextAlign,
+    ) {
+        for (style, segs) in self.outlines.text_strokes(fonts, shaped, rect, align) {
+            if let Some(p) = self.sk_path(&segs) {
+                self.stroke_shape(&p, &style);
+            }
+        }
     }
 
     /// Fill the decoration bars of one kind (underlines go under the glyphs,
@@ -871,20 +898,31 @@ impl Renderer for TinySkiaRenderer<'_> {
         let shaped = fonts.shape(&geometry::text_props(text), rect.w);
         let scale = self.scale;
 
-        // Outline first, as one path along the exact (unhinted) glyph
-        // outlines; the glyph bitmaps are then blended on top, so the stroke
+        // Outlines first, each as one path along the exact (unhinted) glyph
+        // outlines; the glyph bitmaps are then blended on top, so a stroke
         // never eats into the glyph shapes.
-        if let Some(stroke) = &text.stroke {
-            let segs = self.outlines.text_outline(fonts, &shaped, rect, text.align);
-            if let Some(p) = self.sk_path(&segs) {
-                self.stroke_shape(&p, stroke);
-            }
-        }
+        self.draw_text_strokes(fonts, &shaped, rect, text.align);
 
         self.draw_decorations(&shaped, rect, text.align, DecorationKind::Underline);
+        let device = Transform::from_scale(scale, scale);
+        let swash_skew = geometry::italic_shear();
         for line in &shaped.lines {
             let align_off = geometry::align_offset(text.align, line.width, rect.w);
             for g in &line.glyphs {
+                // A slant other than swash's fixed 14° is filled from the
+                // outline, sheared exactly as in the vector backends.
+                if g.synthetic_italic
+                    && (g.skew - swash_skew).abs() > 1e-5
+                    && self.fill_glyph_outline(
+                        fonts,
+                        g,
+                        rect.x + align_off + g.x + g.x_offset,
+                        rect.y + line.baseline - g.y_offset,
+                        device,
+                    )
+                {
+                    continue;
+                }
                 let pen_x = (rect.x + align_off + g.x + g.x_offset) * scale;
                 let pen_y = (rect.y + line.baseline - g.y_offset) * scale;
                 // Synthetic italic: swash shears the bitmap about the pen

@@ -17,13 +17,15 @@
 //! [`super::markup`] into the same span array (`text(markup("H_2O"))`); the
 //! prelude's `rich(s)` is `text(markup(s))`.
 
-use rhai::{Array, Dynamic, Engine, EvalAltResult};
+use rhai::{Array, Dynamic, Engine, EvalAltResult, Map};
 
 use crate::geom::Color;
-use crate::schema::span::{FontStyle, RawSpan, Script};
+use crate::schema::span::{
+    parse_family_list, FontSpec, FontStyle, FontSynthesis, RawSpan, Script, ScriptMetrics,
+};
 use crate::schema::NodeKind;
 
-use super::{dyn_to_f32, err, leaf, set_node, ScriptNode};
+use super::{dyn_to_f32, err, leaf, set_doc, set_node, ScriptDoc, ScriptNode};
 
 type SpanResult = Result<RawSpan, Box<EvalAltResult>>;
 
@@ -46,24 +48,79 @@ fn collect_spans(items: Array, out: &mut Vec<RawSpan>) -> Result<(), Box<EvalAlt
     Ok(())
 }
 
-/// A family argument: a name, a comma-separated list, or an array of names.
-fn family_arg(name: &str, v: Dynamic) -> Result<String, Box<EvalAltResult>> {
+/// Family names from a string (`"A, B"`) or an array of strings.
+fn names_arg(name: &str, v: Dynamic) -> Result<Vec<String>, Box<EvalAltResult>> {
     if v.is_string() {
-        return Ok(v.into_string().expect("checked"));
+        return Ok(parse_family_list(&v.into_string().expect("checked")));
     }
-    if let Some(a) = v.clone().try_cast::<Array>() {
-        let names = a
+    if let Some(a) = v.try_cast::<Array>() {
+        return a
             .into_iter()
             .map(|x| {
                 x.into_string()
                     .map_err(|_| err(format!("`{name}`: family names must be strings")))
             })
-            .collect::<Result<Vec<_>, _>>()?;
-        return Ok(names.join(", "));
+            .collect();
     }
     Err(err(format!(
         "`{name}` expects a family name, list or array"
     )))
+}
+
+/// A font spec argument: a name, a comma-separated list, an array of names,
+/// or a per-script map `#{ latin: "Arial", cjk: ["Yu Gothic", "MS Mincho"],
+/// symbol: …, fallback: … }` (see [`FontSpec`]), as the spec string.
+fn family_arg(name: &str, v: Dynamic) -> Result<String, Box<EvalAltResult>> {
+    if v.is_string() {
+        let s = v.into_string().expect("checked");
+        FontSpec::parse(&s).map_err(|e| err(format!("`{name}`: {e}")))?;
+        return Ok(s);
+    }
+    if let Some(m) = v.clone().try_cast::<Map>() {
+        let mut spec = FontSpec {
+            scoped: true,
+            ..Default::default()
+        };
+        for (k, val) in m {
+            let names = names_arg(name, val)?;
+            match k.as_str() {
+                "latin" => spec.latin = Some(names),
+                "cjk" => spec.cjk = Some(names),
+                "symbol" => spec.symbol = Some(names),
+                "fallback" => spec.fallback = names,
+                other => {
+                    return Err(err(format!(
+                        "`{name}`: unknown font slot `{other}` (expected latin, cjk, symbol or fallback)"
+                    )))
+                }
+            }
+        }
+        return Ok(spec.to_string());
+    }
+    Ok(names_arg(name, v)?.join(", "))
+}
+
+/// A `.scripts(..)` preset.
+fn script_metrics_arg(s: &str) -> Result<ScriptMetrics, Box<EvalAltResult>> {
+    match s {
+        "figs" => Ok(ScriptMetrics::Figs),
+        "office" => Ok(ScriptMetrics::Office),
+        _ => Err(err(format!(
+            "`scripts`: unknown preset `{s}` (expected \"figs\" or \"office\")"
+        ))),
+    }
+}
+
+/// A `.font_synthesis(..)` mode.
+fn synthesis_arg(s: &str) -> Result<FontSynthesis, Box<EvalAltResult>> {
+    match s {
+        "none" => Ok(FontSynthesis::None),
+        "auto" => Ok(FontSynthesis::Auto),
+        "bold" => Ok(FontSynthesis::Bold),
+        _ => Err(err(format!(
+            "`font_synthesis`: unknown mode `{s}` (expected \"none\", \"auto\" or \"bold\")"
+        ))),
+    }
 }
 
 fn span_num(name: &'static str, v: &Dynamic) -> Result<f32, Box<EvalAltResult>> {
@@ -153,6 +210,20 @@ pub(super) fn register(engine: &mut Engine) {
         s.font_family = Some(family_arg("font", v)?);
         Ok(s)
     });
+    engine.register_fn("stroke", |mut s: RawSpan, hex: &str| -> SpanResult {
+        s.stroke = Some(
+            Color::parse_hex(hex).map_err(|_| err(format!("`stroke`: invalid color `{hex}`")))?,
+        );
+        Ok(s)
+    });
+    engine.register_fn("stroke_width", |mut s: RawSpan, v: Dynamic| -> SpanResult {
+        let w = span_num("stroke_width", &v)?;
+        if w < 0.0 {
+            return Err(err(format!("`stroke_width` must be non-negative, got {w}")));
+        }
+        s.stroke_width = Some(w);
+        Ok(s)
+    });
 
     // --- text-node style every span inherits ---
     engine.register_fn("italic", |n: ScriptNode| {
@@ -179,11 +250,71 @@ pub(super) fn register(engine: &mut Engine) {
     );
     engine.register_fn(
         "font",
-        |d: super::ScriptDoc, list: Array| -> Result<super::ScriptDoc, Box<EvalAltResult>> {
+        |d: ScriptDoc, list: Array| -> Result<ScriptDoc, Box<EvalAltResult>> {
             let f = family_arg("font", Dynamic::from_array(list))?;
-            Ok(super::set_doc(d, |pg| pg.font_family = Some(f)))
+            Ok(set_doc(d, |pg| pg.font_family = Some(f)))
         },
     );
+    // `.font(#{ latin: "Arial", cjk: "Yu Gothic" })`: per-script families.
+    engine.register_fn(
+        "font",
+        |n: ScriptNode, m: Map| -> Result<ScriptNode, Box<EvalAltResult>> {
+            let f = family_arg("font", Dynamic::from_map(m))?;
+            Ok(set_node(n, |r| r.font_family = Some(f)))
+        },
+    );
+    engine.register_fn(
+        "font",
+        |d: ScriptDoc, m: Map| -> Result<ScriptDoc, Box<EvalAltResult>> {
+            let f = family_arg("font", Dynamic::from_map(m))?;
+            Ok(set_doc(d, |pg| pg.font_family = Some(f)))
+        },
+    );
+
+    // --- typography: script metrics, synthetic bold / slant (page or node) ---
+    type NodeResult = Result<ScriptNode, Box<EvalAltResult>>;
+    type DocResult = Result<ScriptDoc, Box<EvalAltResult>>;
+    engine.register_fn("scripts", |n: ScriptNode, s: &str| -> NodeResult {
+        let m = script_metrics_arg(s)?;
+        Ok(set_node(n, |r| r.script_metrics = Some(m)))
+    });
+    engine.register_fn("scripts", |d: ScriptDoc, s: &str| -> DocResult {
+        let m = script_metrics_arg(s)?;
+        Ok(set_doc(d, |pg| pg.script_metrics = Some(m)))
+    });
+    engine.register_fn("font_synthesis", |n: ScriptNode, s: &str| -> NodeResult {
+        let m = synthesis_arg(s)?;
+        Ok(set_node(n, |r| r.font_synthesis = Some(m)))
+    });
+    engine.register_fn("font_synthesis", |d: ScriptDoc, s: &str| -> DocResult {
+        let m = synthesis_arg(s)?;
+        Ok(set_doc(d, |pg| pg.font_synthesis = Some(m)))
+    });
+    engine.register_fn(
+        "synthetic_bold_width",
+        |n: ScriptNode, v: Dynamic| -> NodeResult {
+            let w = span_num("synthetic_bold_width", &v)?;
+            Ok(set_node(n, |r| r.synthetic_bold_width = Some(w)))
+        },
+    );
+    engine.register_fn(
+        "synthetic_bold_width",
+        |d: ScriptDoc, v: Dynamic| -> DocResult {
+            let w = span_num("synthetic_bold_width", &v)?;
+            Ok(set_doc(d, |pg| pg.synthetic_bold_width = Some(w)))
+        },
+    );
+    engine.register_fn(
+        "synthetic_slant",
+        |n: ScriptNode, v: Dynamic| -> NodeResult {
+            let a = span_num("synthetic_slant", &v)?;
+            Ok(set_node(n, |r| r.synthetic_slant = Some(a)))
+        },
+    );
+    engine.register_fn("synthetic_slant", |d: ScriptDoc, v: Dynamic| -> DocResult {
+        let a = span_num("synthetic_slant", &v)?;
+        Ok(set_doc(d, |pg| pg.synthetic_slant = Some(a)))
+    });
 
     // --- framework sugar: inline markup -> spans ---
     engine.register_fn("markup", |s: &str| -> Result<Array, Box<EvalAltResult>> {

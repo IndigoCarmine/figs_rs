@@ -15,7 +15,7 @@ use crate::geom::{
 };
 use crate::units::Unit;
 
-use super::span::{FontStyle, RawSpan};
+use super::span::{FontStyle, FontSynthesis, RawSpan, ScriptMetrics};
 
 /// `skip_serializing_if` helper for `f32` fields whose clean default is zero.
 fn is_zero_f32(v: &f32) -> bool {
@@ -138,6 +138,20 @@ pub struct RawPage {
         skip_serializing_if = "Option::is_none"
     )]
     pub font_family: Option<String>,
+    /// Super/subscript geometry for every text node (`"figs"`, the default,
+    /// or `"office"`: × 2/3, +30 % / −25 %); a node may override it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script_metrics: Option<ScriptMetrics>,
+    /// Synthetic bold for every text node (`"none"`, the default, `"auto"`,
+    /// `"bold"`); a node may override it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_synthesis: Option<FontSynthesis>,
+    /// Synthetic-bold stroke width, em of the glyph size (default 1/35).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synthetic_bold_width: Option<f32>,
+    /// Slant of a synthetic italic, degrees (default 14; PowerPoint 18.43).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synthetic_slant: Option<f32>,
 }
 
 /// The discriminant of a node, from its `type` field.
@@ -276,7 +290,9 @@ pub struct RawNode {
     /// Ordered font-family list, authoritative per character: each character
     /// uses the first listed family that has a glyph for it (`"Arial, Yu
     /// Gothic"` sets Latin in Arial and Japanese in Yu Gothic). A string with
-    /// comma-separated names or an array of names; stored comma-joined.
+    /// comma-separated names or an array of names; stored comma-joined. Or
+    /// per script, `{ latin = "Yu Gothic", cjk = "MS Mincho" }` (stored as
+    /// `"latin: Yu Gothic; cjk: MS Mincho"`, see [`super::FontSpec`]).
     #[serde(
         default,
         deserialize_with = "super::span::family_list_opt",
@@ -317,6 +333,18 @@ pub struct RawNode {
     /// longer than its axis stays one line instead of breaking).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wrap: Option<bool>,
+    /// Overrides `[page] script_metrics` for this text node.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub script_metrics: Option<ScriptMetrics>,
+    /// Overrides `[page] font_synthesis` (`"none"` / `"auto"` / `"bold"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_synthesis: Option<FontSynthesis>,
+    /// Overrides `[page] synthetic_bold_width` (em of the glyph size).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub synthetic_bold_width: Option<f32>,
+    /// Overrides `[page] synthetic_slant` (degrees).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub synthetic_slant: Option<f32>,
 
     // ---- image ----
     #[serde(skip_serializing_if = "Option::is_none")]

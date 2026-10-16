@@ -4,12 +4,16 @@
 //! geometry is computed exactly once and shared.
 //!
 //! Rich text (inline spans with their own size/weight/style/colour/script/
-//! tracking/decorations) and ordered font-family lists resolved per character
-//! are handled in [`shape`] and `fonts`; see the README's "Rich text" section.
+//! tracking/decorations/outline), ordered font-family lists resolved per
+//! character — optionally per script class ([`char_class`]) — and synthetic
+//! bold/slant are handled in [`shape`] and `fonts`; see the README's "Rich
+//! text" section.
 
+mod classify;
 mod fonts;
 pub mod shape;
 
+pub use classify::{char_class, CharClass};
 pub use fonts::FaceMetrics;
 pub use shape::{
     styled_runs, Decoration, DecorationKind, RunStyle, ShapedGlyph, ShapedLine, ShapedText,

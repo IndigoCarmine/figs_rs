@@ -19,8 +19,9 @@ use crate::geom::{
 };
 use crate::path::arc_to_cubics;
 
+use super::parse::RawPage;
 use super::parse::{NodeKind, RawDocument, RawNode, RawSegment};
-use super::span::{FontStyle, TextSpan};
+use super::span::{FontSpec, FontStyle, TextSpan, TextTypography};
 
 /// Default raster resolution for PNG output when `page.dpi` is unset.
 pub const DEFAULT_DPI: f32 = 300.0;
@@ -275,8 +276,9 @@ pub struct TextProps {
     /// The full text: `content` followed by every span's text.
     pub content: String,
     pub font_size: f32,
-    /// Ordered family list (comma-separated, see
-    /// [`parse_family_list`](super::span::parse_family_list)); `None` = the
+    /// Font spec: an ordered family list (comma-separated, see
+    /// [`parse_family_list`](super::span::parse_family_list)) or a
+    /// per-script spec (see [`FontSpec`](super::FontSpec)); `None` = the
     /// page / store default.
     pub font_family: Option<String>,
     pub font_weight: Option<u16>,
@@ -300,6 +302,8 @@ pub struct TextProps {
     /// Wrap lines to the available width (default). `false`: each paragraph
     /// is one line whatever the width (see [`RawNode::wrap`]).
     pub wrap: bool,
+    /// Script metrics and synthetic bold/slant (node value, else the page's).
+    pub typography: TextTypography,
 }
 
 impl Default for TextProps {
@@ -319,6 +323,7 @@ impl Default for TextProps {
             letter_spacing: 0.0,
             spans: Vec::new(),
             wrap: true,
+            typography: TextTypography::default(),
         }
     }
 }
@@ -441,6 +446,18 @@ pub fn resolve(raw: RawDocument) -> Result<Document, ResolveError> {
         nodes[c].common.y = r.y;
     }
 
+    // Text typography: the node's own settings over the page's.
+    let page_typo = typography("page", None, &raw.page, &TextTypography::default())?;
+    if let Some(f) = &raw.page.font_family {
+        check_font_spec("page", "font_family", f)?;
+    }
+    for (i, id) in ids.iter().enumerate() {
+        if let NodeType::Text(t) = &mut nodes[i].kind {
+            let r = &raw.nodes[id.as_str()];
+            t.typography = typography(id, Some(r), &raw.page, &page_typo)?;
+        }
+    }
+
     let root = index_of[raw.page.root.as_str()];
     detect_cycle(&nodes, root)?;
 
@@ -468,9 +485,75 @@ pub fn resolve(raw: RawDocument) -> Result<Document, ResolveError> {
     })
 }
 
+/// The typography of a text node (`node`) or of the page (`node = None`):
+/// each setting the node leaves unset comes from `base`.
+fn typography(
+    id: &str,
+    node: Option<&RawNode>,
+    page: &RawPage,
+    base: &TextTypography,
+) -> Result<TextTypography, ResolveError> {
+    let (metrics, synthesis, bold, slant) = match node {
+        Some(n) => (
+            n.script_metrics,
+            n.font_synthesis,
+            n.synthetic_bold_width,
+            n.synthetic_slant,
+        ),
+        None => (
+            page.script_metrics,
+            page.font_synthesis,
+            page.synthetic_bold_width,
+            page.synthetic_slant,
+        ),
+    };
+    let invalid = |field, reason: String| ResolveError::InvalidField {
+        node: id.to_string(),
+        field,
+        reason,
+    };
+    if let Some(w) = bold {
+        if !(w.is_finite() && w >= 0.0) {
+            return Err(invalid(
+                "synthetic_bold_width",
+                format!("must be a non-negative number (em), got {w}"),
+            ));
+        }
+    }
+    if let Some(a) = slant {
+        if !(a.is_finite() && a.abs() < 80.0) {
+            return Err(invalid(
+                "synthetic_slant",
+                format!("must be between -80 and 80 degrees, got {a}"),
+            ));
+        }
+    }
+    Ok(TextTypography {
+        script_metrics: metrics.unwrap_or(base.script_metrics),
+        font_synthesis: synthesis.unwrap_or(base.font_synthesis),
+        synthetic_bold_width: bold.unwrap_or(base.synthetic_bold_width),
+        synthetic_slant: slant.unwrap_or(base.synthetic_slant),
+    })
+}
+
+/// Reject a font spec naming an unknown script slot (`latim: Arial`).
+fn check_font_spec(id: &str, field: &'static str, spec: &str) -> Result<(), ResolveError> {
+    FontSpec::parse(spec)
+        .map(|_| ())
+        .map_err(|reason| ResolveError::InvalidField {
+            node: id.to_string(),
+            field,
+            reason,
+        })
+}
+
 /// The full text of a text node (`content` then every span's text) and the
 /// byte range + overrides of each span.
-fn text_spans(id: &str, raw: &RawNode) -> Result<(String, Vec<TextSpan>), ResolveError> {
+fn text_spans(
+    id: &str,
+    raw: &RawNode,
+    factor: f32,
+) -> Result<(String, Vec<TextSpan>), ResolveError> {
     let mut content = raw.content.clone().unwrap_or_default();
     let mut spans = Vec::with_capacity(raw.spans.len());
     let invalid = |reason: String| ResolveError::InvalidField {
@@ -478,7 +561,21 @@ fn text_spans(id: &str, raw: &RawNode) -> Result<(String, Vec<TextSpan>), Resolv
         field: "spans",
         reason,
     };
+    if let Some(f) = &raw.font_family {
+        check_font_spec(id, "font_family", f)?;
+    }
     for s in &raw.spans {
+        if let Some(f) = &s.font_family {
+            FontSpec::parse(f).map_err(|e| invalid(format!("span `{}`: {e}", s.text)))?;
+        }
+        if let Some(w) = s.stroke_width {
+            if !(w.is_finite() && w >= 0.0) {
+                return Err(invalid(format!(
+                    "span `{}`: stroke_width must be non-negative, got {w}",
+                    s.text
+                )));
+            }
+        }
         if let Some(size) = s.font_size {
             if !(size.is_finite() && size > 0.0) {
                 return Err(invalid(format!(
@@ -501,9 +598,11 @@ fn text_spans(id: &str, raw: &RawNode) -> Result<(String, Vec<TextSpan>), Resolv
         let start = content.len();
         content.push_str(&s.text);
         if !s.text.is_empty() {
+            let mut style = s.style();
+            style.stroke_width = style.stroke_width.map(|w| w * factor);
             spans.push(TextSpan {
                 range: start..content.len(),
-                style: s.style(),
+                style,
             });
         }
     }
@@ -738,7 +837,7 @@ fn convert_node(
                     field: "content",
                 });
             }
-            let (content, spans) = text_spans(id, raw)?;
+            let (content, spans) = text_spans(id, raw, factor)?;
             let letter_spacing = raw.letter_spacing.unwrap_or(0.0);
             check_finite(id, "letter_spacing", letter_spacing)?;
             NodeType::Text(TextProps {
@@ -746,6 +845,8 @@ fn convert_node(
                 spans,
                 letter_spacing,
                 wrap: raw.wrap.unwrap_or(true),
+                // Set with the page defaults once every node is converted.
+                typography: TextTypography::default(),
                 font_style: raw.font_style.unwrap_or_default(),
                 underline: raw.underline,
                 strike: raw.strike,

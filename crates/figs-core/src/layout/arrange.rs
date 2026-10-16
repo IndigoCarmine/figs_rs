@@ -581,8 +581,10 @@ fn paint_content(kind: &NodeType, common: &Common, rect: Rect) -> PaintContent {
             letter_spacing,
             spans,
             wrap,
+            typography,
         }) => PaintContent::Text(TextBox {
             wrap: *wrap,
+            typography: *typography,
             content: content.clone(),
             spans: spans.clone(),
             font_style: *font_style,
