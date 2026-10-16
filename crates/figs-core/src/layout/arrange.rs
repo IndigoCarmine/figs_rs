@@ -336,6 +336,7 @@ fn paint_content(kind: &NodeType, common: &Common, rect: Rect) -> PaintContent {
             color,
             align,
             line_height,
+            stroke,
         }) => PaintContent::Text(TextBox {
             content: content.clone(),
             font_size: *font_size,
@@ -344,6 +345,7 @@ fn paint_content(kind: &NodeType, common: &Common, rect: Rect) -> PaintContent {
             color: *color,
             align: *align,
             line_height: *line_height,
+            stroke: stroke.clone(),
         }),
         NodeType::Path(props) => {
             // Box-relative segments -> absolute page points (content-box

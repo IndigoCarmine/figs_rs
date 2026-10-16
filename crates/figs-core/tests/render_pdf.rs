@@ -315,3 +315,79 @@ fn all_examples_render() {
     }
     assert!(n >= 5, "expected the bundled examples, found {n}");
 }
+
+/// Every zlib stream of `pdf`, inflated (fonts, images and page content).
+fn inflated_streams(pdf: &[u8]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut at = 0;
+    while let Some(i) = find(&pdf[at..], "stream\n") {
+        let start = at + i + "stream\n".len();
+        let Some(len) = find(&pdf[start..], "endstream") else {
+            break;
+        };
+        if let Ok(data) = miniz_oxide::inflate::decompress_to_vec_zlib(&pdf[start..start + len]) {
+            out.push(String::from_utf8_lossy(&data).into_owned());
+        }
+        at = start + len + "endstream".len();
+    }
+    out
+}
+
+/// Whitespace-split tokens of the page content stream(s) — the inflated
+/// streams that open a text object.
+fn content_tokens(pdf: &[u8]) -> Vec<String> {
+    inflated_streams(pdf)
+        .into_iter()
+        .filter(|s| s.split_whitespace().any(|t| t == "BT"))
+        .flat_map(|s| s.split_whitespace().map(str::to_owned).collect::<Vec<_>>())
+        .collect()
+}
+
+#[test]
+fn text_stroke_is_a_path_and_the_text_appears_once() {
+    let src = |stroke: &str| {
+        format!(
+            r##"
+            [page]
+            width = 200
+            height = 80
+            unit = "pt"
+            root = "t"
+            [nodes.t]
+            type = "text"
+            content = "Halo"
+            font_size = 30
+            {stroke}
+            "##
+        )
+    };
+    let fonts = FontStore::new();
+    let render = |s: &str| {
+        let doc = Document::from_toml(&src(s)).unwrap();
+        content_tokens(&pdf_with(&doc, Some(&fonts), Path::new(".")))
+    };
+    let plain = render("");
+    let outlined = render("stroke = \"#ffffff\"\nstroke_width = 2");
+    let count = |t: &[String], op: &str| t.iter().filter(|x| *x == op).count();
+    // Text-showing operators (`[(…)]TJ` is one token: no space before TJ).
+    let shows = |t: &[String]| {
+        t.iter()
+            .filter(|x| x.ends_with("TJ") || x.ends_with("Tj"))
+            .count()
+    };
+    // The outline adds no text: one text object showing the string once.
+    assert_eq!(count(&plain, "BT"), 1);
+    assert_eq!(count(&outlined, "BT"), 1);
+    assert_eq!(shows(&outlined), shows(&plain));
+    assert!(shows(&plain) >= 1);
+    // … but one stroked path with round joins, painted before the text.
+    assert_eq!(count(&plain, "S"), 0);
+    assert_eq!(count(&outlined, "S"), 1);
+    let pos = |op: &str| outlined.iter().position(|x| x == op).unwrap();
+    assert!(
+        pos("S") < pos("BT"),
+        "stroke must be painted under the fill"
+    );
+    let join = outlined.windows(2).any(|w| w[0] == "1" && w[1] == "j");
+    assert!(join, "round line join (`1 j`)");
+}

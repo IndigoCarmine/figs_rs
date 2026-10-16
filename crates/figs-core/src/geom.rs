@@ -338,7 +338,8 @@ impl Point {
     }
 }
 
-/// How a vector shape's outline is stroked. Lengths in points once resolved.
+/// How a vector shape's (or a text node's) outline is stroked. Lengths in
+/// points once resolved.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StrokeStyle {
     pub color: Color,
@@ -346,6 +347,21 @@ pub struct StrokeStyle {
     /// Alternating on/off lengths; always even-length (or empty = solid).
     pub dash: Vec<f32>,
     pub cap: LineCap,
+    pub join: LineJoin,
+}
+
+/// How a stroke turns the corners of an outline. Shapes default to `miter`,
+/// text outlines to `round` (a halo without spikes at sharp glyph corners).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LineJoin {
+    /// Sharp corner (bevelled past a miter limit of 4, as in SVG).
+    #[default]
+    Miter,
+    /// Circular arc around the corner.
+    Round,
+    /// Corner cut off flat.
+    Bevel,
 }
 
 /// How the open ends of a stroked line/arrow/path are drawn.

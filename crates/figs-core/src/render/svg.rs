@@ -13,7 +13,11 @@
 //!   placed with `<use>`. The output is therefore exact and identical on every
 //!   viewer, with no dependence on installed fonts; the cost is that text isn't
 //!   selectable (the group carries an `aria-label` with the content). Bitmap-only
-//!   glyphs (e.g. colour emoji) have no outline and are skipped.
+//!   glyphs (e.g. colour emoji) have no outline and are skipped. A text
+//!   `stroke` is a single stroked `<path>` along the placed glyph outlines,
+//!   written *before* the glyph group (paint order stroke → fill for the whole
+//!   string, not per glyph — so a neighbour's outline never covers a glyph,
+//!   and a translucent outline stays uniform where outlines overlap).
 //! - **Images** are embedded as base64 `data:` URIs (PNG/JPEG bytes verbatim,
 //!   other formats re-encoded as PNG); `cover` is clipped to the node rect.
 
@@ -21,20 +25,15 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::Path;
 
-use crate::geom::{Color, ImageFit, LineCap, PathSegment, Point, Rect, StrokeStyle};
+use crate::geom::{Color, ImageFit, LineCap, LineJoin, PathSegment, Point, Rect, StrokeStyle};
 use crate::layout::{ComputedLayout, PageGeom, PathPaint, TextBox};
 use crate::text::FontStore;
 
 use super::geometry;
+use super::outline::OutlineCache;
 use super::{paint, RenderOptions, Renderer};
 
 type FaceId = cosmic_text::fontdb::ID;
-
-/// Raw font file bytes plus face index, for outline extraction.
-struct FaceData {
-    data: Vec<u8>,
-    index: u32,
-}
 
 /// An SVG renderer accumulating markup. Build via [`render_svg`].
 pub struct SvgRenderer<'a> {
@@ -45,7 +44,7 @@ pub struct SvgRenderer<'a> {
     defs: String,
     body: String,
     next_id: usize,
-    faces: HashMap<FaceId, Option<FaceData>>,
+    outlines: OutlineCache,
     /// `<defs>` id of each glyph outline (`None` = no outline, e.g. a space).
     glyphs: HashMap<(FaceId, u16), Option<(String, f32)>>,
 }
@@ -60,7 +59,7 @@ impl<'a> SvgRenderer<'a> {
             defs: String::new(),
             body: String::new(),
             next_id: 0,
-            faces: HashMap::new(),
+            outlines: OutlineCache::new(),
             glyphs: HashMap::new(),
         }
     }
@@ -96,32 +95,15 @@ impl<'a> SvgRenderer<'a> {
         if let Some(hit) = self.glyphs.get(&(face, gid)) {
             return hit.clone();
         }
-        let data = self
-            .faces
-            .entry(face)
-            .or_insert_with(|| {
-                fonts.with_system(|sys| {
-                    sys.db().with_face_data(face, |d, index| FaceData {
-                        data: d.to_vec(),
-                        index,
-                    })
-                })
-            })
-            .as_ref();
-        let outline = data.and_then(|fd| {
-            let parsed = ttf_parser::Face::parse(&fd.data, fd.index).ok()?;
-            let mut b = OutlineToD(String::new());
-            parsed.outline_glyph(ttf_parser::GlyphId(gid), &mut b)?;
-            Some((b.0, parsed.units_per_em() as f32))
+        let outline = self
+            .outlines
+            .glyph(fonts, face, gid)
+            .map(|o| (write_d(&o.segments, ""), o.units_per_em));
+        let entry = outline.map(|(d, upem)| {
+            let id = self.fresh_id("g");
+            let _ = writeln!(self.defs, "<path id=\"{id}\" d=\"{d}\"/>");
+            (id, upem)
         });
-        let entry = match outline {
-            Some((d, upem)) if !d.is_empty() && upem > 0.0 => {
-                let id = self.fresh_id("g");
-                let _ = writeln!(self.defs, "<path id=\"{id}\" d=\"{d}\"/>");
-                Some((id, upem))
-            }
-            _ => None,
-        };
         self.glyphs.insert((face, gid), entry.clone());
         entry
     }
@@ -255,18 +237,28 @@ fn push_paint(el: &mut String, fill: Option<Color>, stroke: Option<&StrokeStyle>
             LineCap::Round => el.push_str(" stroke-linecap=\"round\""),
             LineCap::Square => el.push_str(" stroke-linecap=\"square\""),
         }
+        match s.join {
+            LineJoin::Miter => {}
+            LineJoin::Round => el.push_str(" stroke-linejoin=\"round\""),
+            LineJoin::Bevel => el.push_str(" stroke-linejoin=\"bevel\""),
+        }
     }
 }
 
 /// SVG path data for shared segments.
 fn path_d(segs: &[PathSegment]) -> String {
+    write_d(segs, " ")
+}
+
+/// Path data with `sep` between commands (`""` for compact glyph outlines).
+fn write_d(segs: &[PathSegment], sep: &str) -> String {
     let mut d = String::new();
     let pt = |d: &mut String, p: Point| {
         let _ = write!(d, "{} {}", num(p.x), num(p.y));
     };
     for seg in segs {
         if !d.is_empty() {
-            d.push(' ');
+            d.push_str(sep);
         }
         match *seg {
             PathSegment::MoveTo(p) => {
@@ -295,36 +287,6 @@ fn path_d(segs: &[PathSegment]) -> String {
         }
     }
     d
-}
-
-/// Collects a glyph outline as SVG path data in font units (y up).
-struct OutlineToD(String);
-
-impl ttf_parser::OutlineBuilder for OutlineToD {
-    fn move_to(&mut self, x: f32, y: f32) {
-        let _ = write!(self.0, "M{} {}", num(x), num(y));
-    }
-    fn line_to(&mut self, x: f32, y: f32) {
-        let _ = write!(self.0, "L{} {}", num(x), num(y));
-    }
-    fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
-        let _ = write!(self.0, "Q{} {} {} {}", num(x1), num(y1), num(x), num(y));
-    }
-    fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
-        let _ = write!(
-            self.0,
-            "C{} {} {} {} {} {}",
-            num(x1),
-            num(y1),
-            num(x2),
-            num(y2),
-            num(x),
-            num(y)
-        );
-    }
-    fn close(&mut self) {
-        self.0.push('Z');
-    }
 }
 
 /// Format a coordinate: at most 3 decimals (1/1000 pt), trailing zeros trimmed.
@@ -426,6 +388,7 @@ impl Renderer for SvgRenderer<'_> {
                 width: stroke_width,
                 dash: Vec::new(),
                 cap: LineCap::Butt,
+                join: LineJoin::Miter,
             });
         if fill.is_none() && stroke.is_none() {
             return;
@@ -438,6 +401,19 @@ impl Renderer for SvgRenderer<'_> {
             return;
         };
         let shaped = fonts.shape(&geometry::text_props(text), rect.w);
+        // Outline first: one stroked path under the whole glyph group.
+        if let Some(stroke) = &text.stroke {
+            let segs = self.outlines.text_outline(fonts, &shaped, rect, text.align);
+            if !segs.is_empty() {
+                let mut el = format!("<path d=\"{}\"", path_d(&segs));
+                push_paint(&mut el, None, Some(stroke));
+                el.push_str(
+                    " aria-hidden=\"true\"/>
+",
+                );
+                self.body.push_str(&el);
+            }
+        }
         let mut uses = String::new();
         for line in &shaped.lines {
             let align_off = geometry::align_offset(text.align, line.width, rect.w);

@@ -9,10 +9,15 @@
 //!   text (feature `pdf`, on by default).
 //! - [`svg::SvgRenderer`] — vector SVG with text as glyph outlines.
 //!
+//! A text node's `stroke` (outline) is the same geometry everywhere: the glyph
+//! outlines from [`outline::OutlineCache::text_outline`], stroked as one path
+//! *before* the glyphs are filled (paint order stroke → fill).
+//!
 //! Text, image and shape painting are trait methods with no-op defaults, so a
 //! new backend compiles before it opts in to everything.
 
 pub mod geometry;
+pub mod outline;
 #[cfg(feature = "pdf")]
 pub mod pdf;
 pub mod png;

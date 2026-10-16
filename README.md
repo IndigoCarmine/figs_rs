@@ -61,16 +61,52 @@ You provide: hierarchy, style, content, and constraints (`flex`, `aspect_ratio`,
   `cross_axis_alignment` (`start`/`center`/`end`/`stretch`).
 - **stack**: `children`, `viewbox` (plus the shared `padding`).
 - **text**: `content`, `font_size` (pt), `font_family`, `font_weight`, `color`,
-  `align`, `line_height` (multiple of font size).
+  `align`, `line_height` (multiple of font size), and an outline: `stroke`,
+  `stroke_width`, `join` (see [Text outline](#text-outline)).
 - **image**: `src`, `fit` (`contain`/`cover`/`fill`).
 - **rect**: `fill`, `stroke`, `stroke_width`, `corner_radius`.
 - **line** / **arrow** / **path**: `points`, `segments` (curves), `viewbox`, `stroke`,
-  `stroke_width`, `dash`, `cap`, `head`, `head_size`; **path** adds `fill`,
+  `stroke_width`, `dash`, `cap`, `join`, `head`, `head_size`; **path** adds `fill`,
   `closed`.
-- **ellipse**: `fill`, `stroke`, `stroke_width`, `dash`, `cap`.
+- **ellipse**: `fill`, `stroke`, `stroke_width`, `dash`, `cap`, `join`.
 
 Lengths are in the page `unit`; `font_size` is always points. Internally
 everything is converted to points (1 pt = 1/72 in).
+
+### Text outline
+
+A `text` node takes the same `stroke` (colour) and `stroke_width` (page units,
+like every other stroke width; default 1 pt once `stroke` is set) as the
+shapes, and draws a real outline along the glyph contours:
+
+```toml
+[nodes.label]
+type = "text"
+content = "(a)"
+font_weight = 700
+stroke = "#ffffff"     # a white halo, legible on dark images
+stroke_width = 0.07    # cm here: the rim reaches 0.035 cm past the glyphs
+```
+
+- **Paint order is stroke, then fill** (SVG `paint-order="stroke"`) for the
+  whole string: the outlines of all glyphs are stroked first, then the glyphs are
+  filled on top, so the fill covers the inner half of the stroke and the glyph
+  shapes stay exactly as without it — only `stroke_width / 2` shows outside.
+  A neighbouring glyph's outline never covers a glyph, and a translucent outline
+  (`"#000000a0"`) stays uniform where outlines overlap.
+- **Layout ignores it**: the box is the same as without a stroke; the outline
+  may overhang it by `stroke_width / 2` (it is not clipped).
+- `join` (`round`, the default for text; `miter`, `bevel`) shapes the corners.
+  On shapes it defaults to `miter`. (`dash`/`cap` also apply to a text outline.)
+- Same geometry in every backend: the unhinted glyph outlines (`ttf-parser`)
+  are stroked as one path. PNG strokes them with tiny-skia and blends the glyph
+  bitmaps on top; PDF draws the outline as a vector path (not as stroked text),
+  so the text layer still contains the string exactly once; SVG writes one
+  stroked `<path>` before the glyph group.
+
+In Rhai: `text("(a)").bold().stroke("#ffffff").stroke_width(0.07)` (`.join(..)`
+to change the join). The framework's `halo(t, color, r)` is exactly this with
+`stroke_width = 2r`.
 
 ### Auto page height
 
@@ -228,7 +264,8 @@ dash = [0.2, 0.1]             # on/off lengths; omit for a solid stroke
   to 1 pt. `line`/`arrow` are stroked black unless `stroke` is set; a `path` or
   `ellipse` gets a black stroke only when it has neither `fill` nor `stroke`.
   `dash` is a list of alternating on/off lengths in page units (an odd list is
-  repeated, as in SVG); `cap` is `butt` (default), `round` or `square`.
+  repeated, as in SVG); `cap` is `butt` (default), `round` or `square`; `join`
+  is `miter` (default), `round` or `bevel`.
 - **Arrowheads.** `head` is `none` / `start` / `end` / `both` (default `end` for
   `arrow`, `none` for `line`/`path`, so `path` + `head` gives a bent arrow).
   `head_size` is the head's length in page units (default 5 × the stroke width);
@@ -376,12 +413,15 @@ setters:
 - **offset** (read by a `stack` parent): `.at(x, y)`, `.x(n)`, `.y(n)` — e.g.
   `stack([image("a.png"), text("(a)").at(0.2, 0.2)])`.
 - **text**: `.size(n)`, `.weight(n)` / `.bold()`, `.color(hex)`, `.font(name)`,
-  `.align("left"|"center"|"right"|"justify")` / `.center()`, `.line_height(n)`.
+  `.align("left"|"center"|"right"|"justify")` / `.center()`, `.line_height(n)`,
+  and an outline painted behind the glyphs: `.stroke(hex)`, `.stroke_width(n)`,
+  `.join("round"|"miter"|"bevel")` (see [Text outline](#text-outline)).
 - **container** (`col`/`row`): `.spacing(n)`, `.main("space_between"|…)`,
   `.cross("start"|"center"|"end"|"stretch")` / `.stretch()`.
 - **rect**: `.fill(hex)`, `.stroke(hex)`, `.stroke_width(n)`, `.radius(n)`.
 - **shapes** (`line`/`arrow`/`ellipse`/`path`): `.stroke(hex)`, `.stroke_width(n)`,
   `.fill(hex)` (path/ellipse), `.dash([on, off, …])`, `.cap("butt"|"round"|"square")`,
+  `.join("miter"|"round"|"bevel")`,
   `.head("none"|"start"|"end"|"both")`, `.head_size(n)`, `.closed()` (path) — e.g.
   `stack([image("a.png"), arrow(1, 4, 3, 2).stroke("#e0635a")])`.
 - **curves** (continue a path from its last point): `.to(x, y)`,
@@ -432,7 +472,7 @@ Components (lengths in cm, font sizes in pt):
 | `page(preset, root)` | Page of a named size, unit `cm`, in the style's `font_family()` when one is set. Journal presets `"single"` (`single_width()`, default 8.5 cm column) and `"double"` (`double_width()`, default 17.5 cm) fix only the width and get an [auto height](#auto-page-height) that fits the content. Paper presets `"a5"`, `"a4"`, `"a3"`, `"a0"` (poster), `"letter"` are fixed; append `-landscape` to swap their sides (journal presets have no landscape form). The core `page(w, h, root)` is unchanged. |
 | `paper_size(preset)` | `[w, h]` of a preset, to drop down to core: `let s = paper_size("double"); page(s[0], 5, root).unit("cm")`. For journal presets `h` is the string `"auto"`, so `page(s[0], s[1], root)` stays auto. |
 | `title(s)` / `caption(s)` / `label(s)` / `body(s)` | Semantic text: `title_size()` (1.5× base) bold centered / base centered / `label_size()` (1.25× base) bold / base. |
-| `halo(t, color, r)` | Text node `t` over a halo: 12 copies in `color`, `r` cm around it. Lays out exactly like `t` alone (a negative margin cancels the rim), so it drops in anywhere — what panel labels use by default. |
+| `halo(t, color, r)` | Text node `t` with a halo: the core [text outline](#text-outline) in `color`, reaching `r` cm past the glyphs (`.stroke(color).stroke_width(2 * r)`, round joins). Purely visual — lays out exactly like `t` alone, so it drops in anywhere; what panel labels and scale-bar labels use by default. |
 | `vbox(items)` / `hbox(items)` | `col`/`row` with the default gap, stretched cross axis, and bare strings allowed. |
 | `grid(ncols, items)` / `grid(ncols, gap, items)` | Rows of `ncols` equal-flex cells (rows share height equally); the last row is padded with empty cells so widths stay equal. |
 | `panels(items)` / `panels(style, items)` | Each item overlaid with an auto label, `label_inset()` in from its `label_corner()` (via core `stack`). `style` is a template whose last `a`/`A`/`1` is the counter: `"(a)"` (default), `"a"`, `"A"`, `"a."`, `"Fig. 1"`. |
@@ -468,7 +508,7 @@ fn label_style() { "A" }    // panel labels A, B, C … (default "(a)")
 fn label_inset() { 0.3 }    // cm from the panel corner (default base_size() * 0.02 = 0.16)
 fn label_corner() { "top-right" }   // or "bottom-left" / "bottom-right" (default "top-left")
 fn label_halo() { "" }      // rim around the label (default "#ffffff"; "" for none)
-fn label_halo_width() { 0.05 }      // cm (default label_size() * 0.0035 ≈ 1 pt)
+fn label_halo_width() { 0.05 }      // cm past the glyphs (default label_size() * 0.0035 ≈ 1 pt)
 fn label_background() { "#ffffff" } // box behind the label instead of the halo (default "": none)
 fn label_pad() { 0.1 }      // cm between label text and its box (default base_size() * 0.01)
 fn caption_gap() { 0.15 }   // cm between a panel and its caption (default gap() / 2)
@@ -481,7 +521,7 @@ fn scalebar_color() { "#000000" }   // bar + label (default "#ffffff")
 fn scalebar_thickness() { 0.1 }     // cm (default base_size() * 0.01 = 0.08)
 fn scalebar_corner() { "bottom-left" } // (default "bottom-right")
 fn scalebar_inset() { 0.3 }         // cm from the corner (default label_inset())
-fn scalebar_halo() { "" }           // outline + label shadow colour (default "#000000a0")
+fn scalebar_halo() { "" }           // bar + label outline colour (default "#000000a0")
 fn scalebar_frac_inset() { 0.05 }   // side inset of scalebar(len, field, s), fraction of width (default 0.025)
 ```
 
@@ -548,11 +588,10 @@ By default the label is black with a thin white **halo** (`label_halo()`): on
 white plots and light images the rim is invisible, so the label looks exactly
 as before, while on dark micrographs it keeps the letter crisp instead of
 vanishing — the same contrast trick as `scalebar_halo()`, without covering the
-image with a box. The core has no text outline, so `halo(t, color, r)` builds it
-from ordinary nodes: twelve copies of the text in the halo colour, `r` around it,
-under the label; a negative margin cancels the rim's extent so the label lands
-exactly where a bare one would. (The copies are real text, so a PDF's text layer
-repeats the label — set `fn label_halo() { "" }` if that matters.) With
+image with a box. `halo(t, color, r)` is just the core
+[text outline](#text-outline) — one text node with `stroke` set, painted behind
+the glyphs — so the label lands exactly where a bare one would and a PDF's text
+layer holds it once. With
 `label_background()` set, the label instead becomes a small stack of a filled
 `rect` under the text (padded via the text's margin). All of it is ordinary
 nodes, so you can restyle or replace any piece. Captions go below with
@@ -594,8 +633,8 @@ Every mark is ordinary core nodes (a `rect` bar and `text` in a pinned column,
 an `arrow` + `text`, a closed `path`, an `ellipse`), so core setters still chain
 — `spot(..).stroke("#00ff00")`, `highlight(..).dash([])`. The defaults are
 opinionated for micrographs: the scale bar is white (TEM/SEM/fluorescence
-images are mostly dark), with a thin translucent-black outline and a drop shadow
-under its label (`scalebar_halo()`) so it stays legible over bright regions
+images are mostly dark), with a thin translucent-black outline around the bar
+and its label (`scalebar_halo()`) so it stays legible over bright regions
 without covering the image with a box; callouts, highlights and spots use a warm
 red-orange `accent()` that reads on both light and dark backgrounds, with a
 stroke tied to `base_size()`. Notes:
@@ -777,6 +816,7 @@ the vector formats keep that exactness at any zoom.
 |---|---|---|---|
 | Shapes | anti-aliased raster | vector paths (dash, cap, alpha) | `<rect>`/`<ellipse>`/`<path>` |
 | Text | rasterized glyphs | **real text**: fonts embedded as subsets, ToUnicode map (selectable, searchable) | **glyph outlines** (`<use>` of per-glyph paths in `<defs>`), exact on every viewer with no font dependency; not selectable (`aria-label` carries the text) |
+| Text `stroke` | glyph outlines stroked (tiny-skia), glyphs blended on top | vector path under the text (text layer unchanged) | one stroked `<path>` before the glyph group |
 | Images | resampled | JPEG passed through untouched; other formats embedded losslessly | base64 `data:` URI (PNG/JPEG bytes verbatim) |
 | `cover` | clipped | clip path | `clipPath` |
 | Missing image | gray placeholder | same placeholder | same placeholder |

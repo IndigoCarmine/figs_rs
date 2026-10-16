@@ -37,3 +37,5 @@ watch = ["dep:notify-debouncer-mini"]
 [dev-dependencies]
 roxmltree = "0.21.1"
 tempfile = "3"
+# Inflate PDF content streams in tests (already in the tree via `png`).
+miniz_oxide = "0.8"

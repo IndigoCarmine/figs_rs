@@ -10,7 +10,8 @@
 //! - **Text** is real, selectable PDF text: the glyphs cosmic-text shaped for
 //!   layout are emitted with their exact positions, and each font is embedded
 //!   as a subset (krilla also writes a ToUnicode map, so copy/paste and search
-//!   work).
+//!   work). A text `stroke` is drawn first as a plain vector path along the
+//!   glyph outlines (not as text), so the text layer holds each string once.
 //! - **Images**: JPEGs are embedded as-is (DCT passthrough, no recompression);
 //!   other formats are decoded and embedded losslessly. `cover` is clipped to
 //!   the node rect. Unreadable images get the same placeholder box as PNG.
@@ -29,11 +30,14 @@ use krilla::surface::Surface;
 use krilla::text::{Font, Glyph, GlyphId};
 use krilla::Document;
 
-use crate::geom::{Color, ImageFit, LineCap, PathSegment, Rect, StrokeStyle};
+use crate::geom::{
+    Color, ImageFit, LineCap, LineJoin as GLineJoin, PathSegment, Rect, StrokeStyle,
+};
 use crate::layout::{ComputedLayout, PageGeom, PathPaint, TextBox};
 use crate::text::FontStore;
 
 use super::geometry;
+use super::outline::OutlineCache;
 use super::{paint, RenderOptions, Renderer};
 
 /// Errors from PDF rendering.
@@ -58,6 +62,8 @@ pub struct PdfRenderer<'s, 'a> {
     font_cache: HashMap<cosmic_text::fontdb::ID, Option<Font>>,
     /// Decoded images per resolved path (`None` = unreadable → placeholder).
     image_cache: HashMap<PathBuf, Option<(Image, f32, f32)>>,
+    /// Glyph outlines, for text strokes.
+    outlines: OutlineCache,
 }
 
 impl<'s, 'a> PdfRenderer<'s, 'a> {
@@ -70,6 +76,7 @@ impl<'s, 'a> PdfRenderer<'s, 'a> {
             base_dir: opts.base_dir,
             font_cache: HashMap::new(),
             image_cache: HashMap::new(),
+            outlines: OutlineCache::new(),
         }
     }
 
@@ -172,7 +179,11 @@ fn k_stroke(s: &StrokeStyle) -> Stroke {
             LineCap::Round => KLineCap::Round,
             LineCap::Square => KLineCap::Square,
         },
-        line_join: LineJoin::Miter,
+        line_join: match s.join {
+            GLineJoin::Miter => LineJoin::Miter,
+            GLineJoin::Round => LineJoin::Round,
+            GLineJoin::Bevel => LineJoin::Bevel,
+        },
         opacity: k_opacity(s.color.a),
         dash: (!s.dash.is_empty()).then(|| StrokeDash {
             array: s.dash.clone(),
@@ -188,6 +199,7 @@ fn plain_stroke(color: Color, width: f32) -> StrokeStyle {
         width,
         dash: Vec::new(),
         cap: LineCap::Butt,
+        join: GLineJoin::Miter,
     }
 }
 
@@ -286,6 +298,15 @@ impl Renderer for PdfRenderer<'_, '_> {
         };
         let shaped = fonts.shape(&geometry::text_props(text), rect.w);
         let content = text.content.as_str();
+
+        // Outline first (paint order stroke → fill), as a vector path along
+        // the glyph outlines rather than stroked text: the text layer keeps
+        // the string exactly once (copy/paste, search), and the fill below
+        // covers the inner half of the stroke.
+        if let Some(stroke) = &text.stroke {
+            let segs = self.outlines.text_outline(fonts, &shaped, rect, text.align);
+            self.draw_segs(&segs, None, Some(stroke));
+        }
 
         for line in &shaped.lines {
             let align_off = geometry::align_offset(text.align, line.width, rect.w);

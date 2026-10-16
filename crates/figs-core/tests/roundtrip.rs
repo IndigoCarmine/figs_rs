@@ -236,6 +236,41 @@ fn script_shapes_lower_to_toml_and_back() {
 }
 
 #[test]
+fn text_stroke_round_trips() {
+    let raw1 = parse_str(
+        r##"
+        [page]
+        width = 10
+        height = 5
+        unit = "cm"
+        root = "t"
+        [nodes.t]
+        type = "text"
+        content = "(a)"
+        stroke = "#ffffff80"
+        stroke_width = 0.07
+        join = "bevel"
+        "##,
+    )
+    .expect("parse");
+    let toml = to_toml(&raw1);
+    assert!(toml.contains("join = \"bevel\""), "{toml}");
+    let raw2 = parse_str(&toml).expect("reparse");
+    let (n1, n2) = (&raw1.nodes["t"], &raw2.nodes["t"]);
+    assert_eq!(
+        (n1.stroke, n1.stroke_width, n1.join),
+        (n2.stroke, n2.stroke_width, n2.join)
+    );
+    let d = resolve(raw2).expect("resolve");
+    let NodeType::Text(t) = &d.nodes[d.root].kind else {
+        panic!("text root");
+    };
+    let s = t.stroke.as_ref().expect("stroke");
+    assert!((s.width - 0.07 * 72.0 / 2.54).abs() < 1e-3, "page units");
+    assert_eq!(s.join, figs_core::geom::LineJoin::Bevel);
+}
+
+#[test]
 fn four_panel_round_trips() {
     let src = include_str!("../../../examples/four_panel.toml");
     let raw1 = parse_str(src).expect("parse 1");
