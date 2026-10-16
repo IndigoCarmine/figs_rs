@@ -1,0 +1,86 @@
+// An A0 conference poster in the dark PowerPoint look — header with logos,
+// title, authors and poster number; seven auto-numbered sections in a
+// 3 / 2 / 1 / 1 grid with dashed separators in the gutters; frames, a table,
+// bullets, notes, references and a plot. Everything is fictional placeholder
+// content and synthetic data; the images are placeholders (missing files draw
+// grey boxes).
+style("poster-dark", #{ font_family: "Yu Gothic", bullet_size: 36 });
+
+let h = csv("data/heating.csv");
+let f = csv("data/heating_fit.csv");
+let dots = #{ open: true, size: marker_size() * 0.7 };
+
+poster(#{
+    logos: ["logo_university.png", "logo_project.png"],
+    title: "光駆動ゲルアクチュエーターの設計指針",
+    authors: [#{ name: "山田 太郎", aff: 1, presenter: true }, #{ name: "佐藤 花子", aff: 2 },
+              #{ name: "鈴木 一郎", aff: [2, 3] }],
+    affiliations: ["架空大院理工", "架空大院工", "架空研究機構"],
+    number: "P1-001",
+}, rows([
+    columns([
+        section("はじめに", [
+            row([image("network.png").aspect(1.6).flex(1), image("photo.png").aspect(1.2).flex(1)]).spacing(0.5),
+            body("光で伸縮するゲルは、配線のいらない柔らかいアクチュエーターとして期待されている。応答速度と変形量の両立が課題である。"),
+            ref("A. Author et al., J. Imag. Mater. 2021, 4, 101–110."),
+        ]),
+        section("従来の手法", [
+            image("cartoon.png").aspect(2.0),
+            note("厚いゲルでは光が奥まで届かず、応答が遅い。"),
+            hsep(),
+            frame([image("scheme.png").aspect(5.0)]),
+            ref("B. Author et al., Imag. Lett. 2023, 7, 55–60."),
+        ]),
+        section("本研究の狙い", [
+            frame([image("concept.png").aspect(1.4)]).radius(0).stroke("#7f7f7f").stroke_width(0.1),
+            frame([body("多孔質の骨格で光と水の通り道を作り、速さと大きさを両立する。").center()])
+                .radius(0).stroke("#7f7f7f").stroke_width(0.1),
+        ]),
+    ], [3, 2, 2]),
+    columns([
+        section("ゲルの合成", [
+            frame([image("synthesis.png").aspect(5.5)]),
+            subheading("吸収スペクトル"),
+            row([image("spectrum_a.png").aspect(1.35).flex(1), image("spectrum_b.png").aspect(1.35).flex(1)]).spacing(1.0),
+            subheading("電子顕微鏡像"),
+            row([image("sem_a.png").aspect(1.45).flex(1), image("sem_b.png").aspect(1.45).flex(1)]).spacing(0.5),
+            note("孔径は架橋剤の量でおよそ二倍まで変えられた。"),
+        ]),
+        section("応答特性", [
+            subheading("相転移の解析"),
+            row([
+                plot(#{ title: "昇温曲線", xlabel: "Temperature [°C]", ylabel: "収縮率", x: [20, 100],
+                        y: [-0.04, 1.1], yticks: [0, 0.25, 0.5, 0.75, 1], legend: "text", frame: "box" }, [
+                    scatter(h.T, h.a10, dots + #{ color: 0, label: "Gel A" }),
+                    line_plot(f.T, f.f10, #{ color: 0 }),
+                    scatter(h.T, h.a100, dots + #{ color: 1, label: "Gel B" }),
+                    line_plot(f.T, f.f100, #{ color: 1 }),
+                ]).flex(1),
+                col([body("T₁/₂ (A) = 47 °C"), body("T₁/₂ (B) = 66 °C"), body("ΔT = 19 K")])
+                    .main("center").flex(1),
+            ]).spacing(1.0).cross("center"),
+            note("孔の多いゲル A は低い温度で鋭く収縮する。"),
+            subheading("変形の様子"),
+            row([image("bend_a.png").aspect(2.0).flex(1), image("bend_b.png").aspect(2.0).flex(1)]).spacing(1.0),
+            frame([image("model.png").aspect(3.2)]).cross("center").flex(1),
+        ]),
+    ], [4, 5]),
+    section("応用", [
+        row([
+            image("device.png").aspect(2.4).flex(1),
+            frame([image("assembly.png").aspect(4.5)]).flex(1.3),
+            col([
+                body("試作したデバイスの条件").center(),
+                table([["試料", "光強度", "屈曲角"], ["Gel A", "20 mW/cm²", "85°"],
+                       ["Gel B", "20 mW/cm²", "40°"], ["Gel A′", "50 mW/cm²", "120°"]]),
+            ]).spacing(0.3).stretch().flex(1.1),
+        ]).spacing(1.5).cross("center"),
+        row([image("cycle.png").aspect(1.3).flex(1), image("gripper.png").aspect(1.3).flex(1),
+             image("walker.png").aspect(1.3).flex(1), image("valve.png").aspect(1.3).flex(1)]).spacing(1.0).flex(1),
+        note("同じ設計で、つかむ・歩く・弁を開くの三つの動作を実現した。"),
+    ]),
+    section("まとめ", bullets([
+        "多孔質骨格により、厚いゲルでも数秒で光に応答するようになった。",
+        "孔径と光強度で、屈曲角を幅広く設計できることを示した。",
+    ])),
+], [4, 6, 3.5, 1]))

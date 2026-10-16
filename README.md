@@ -638,7 +638,7 @@ Components (lengths in cm, font sizes in pt):
 | Function | Result |
 |---|---|
 | `style(preset)` / `style(map)` / `style(preset, map)` | Switch a bundle of defaults in one line: `style("nature");` at the top of the script. See [Style presets](#style-presets). |
-| `page(preset, root)` | Page of a named size, unit `cm`, in the style's `font_family()` when one is set and on its `page_bg()` background when one is set. Journal presets `"single"` (`single_width()`, default 8.5 cm column) and `"double"` (`double_width()`, default 17.5 cm) fix only the width and get an [auto height](#auto-page-height) that fits the content. Paper presets `"a5"`, `"a4"`, `"a3"`, `"a0"` (poster), `"letter"` are fixed; append `-landscape` to swap their sides (journal presets have no landscape form). The core `page(w, h, root)` is unchanged. |
+| `page(preset, root)` | Page of a named size, unit `cm`, in the style's `font_family()` when one is set and on its `page_bg()` background when one is set. Journal presets `"single"` (`single_width()`, default 8.5 cm column) and `"double"` (`double_width()`, default 17.5 cm) fix only the width and get an [auto height](#auto-page-height) that fits the content. Paper presets `"a5"`, `"a4"`, `"a3"`, `"a2"`, `"a1"`, `"a0"` (posters), `"letter"` are fixed; append `-landscape` to swap their sides (journal presets have no landscape form). The core `page(w, h, root)` is unchanged. |
 | `paper_size(preset)` | `[w, h]` of a preset, to drop down to core: `let s = paper_size("double"); page(s[0], 5, root).unit("cm")`. For journal presets `h` is the string `"auto"`, so `page(s[0], s[1], root)` stays auto. |
 | `title(s)` / `caption(s)` / `label(s)` / `body(s)` | Semantic text: `title_size()` (1.5× base) bold centered / base centered / `label_size()` (1.25× base) bold / base. |
 | `halo(t, color, r)` | Text node `t` with a halo: the core [text outline](#text-outline) in `color`, reaching `r` cm past the glyphs (`.stroke(color).stroke_width(2 * r)`, round joins). Purely visual — lays out exactly like `t` alone, so it drops in anywhere; what panel labels and scale-bar labels use by default. |
@@ -988,6 +988,84 @@ Data outside an explicit range is clipped (lines are cut at the frame,
 markers outside are dropped); a marker or `marks` node reaching past the plot's
 box makes room for itself like a label does. Note: error bars are vertical
 only.
+
+### Posters
+
+A conference poster — header, numbered section bars, a column grid with
+dashed separators, frames, tables, bullets — is part of the framework too
+([`examples/poster_demo.figs`](examples/poster_demo.figs): a full A0 poster
+in the dark PowerPoint look in 86 lines, nearly all of them content):
+
+```rhai
+style("poster-dark");
+
+poster(#{
+    logos: ["logo.png"],
+    title: "Curvature control in supramolecular gels",
+    authors: [#{ name: "A. Author", aff: 1, presenter: true }, #{ name: "B. Author", aff: [1, 2] }],
+    affiliations: ["Univ. of Somewhere", "Institute of Elsewhere"],
+    number: "P1-001",
+}, rows([
+    columns([
+        section("Background", [image("a.png").aspect(1.6), body("…"), ref("C. Author et al., J. Imag. 2020, 1, 1.")]),
+        section("Methods", [frame(image("setup.png").aspect(3)), subheading("Samples"),
+                            table([["Solvent", "Volume"], ["THF", "150 μL"]])]),
+    ], [3, 2]),
+    section("Conclusion", bullets(["First finding.", "Second finding."])),
+], [5, 1]))
+```
+
+| Function | Result |
+|---|---|
+| `poster(header, body)` / `poster(preset, header, body)` | A `poster_size()` page (default `"a0"`; any paper preset, `-landscape` too) on `poster_bg()` (a colour or gradient; default `page_bg()`), the header above the body, `poster_margin()` from the edges. `header` is a node, a map for `poster_header`, or `()`; `body` an array (→ `rows`) or a node. |
+| `poster_header(#{ title, authors, affiliations, logos, number })` | Logos (`poster_logo_height()` tall) on the left; the title (`poster_title_size()`, bold) and the author line centred right of them; the poster number bold in the top-right corner; a `poster_header_rule()` under it all. |
+| `author_line(authors, affiliations)` | Authors are names or `#{ name, aff: [1, 2], presenter: true }`. With `affiliation_position()` `"before"` (default, the Japanese convention): `（Univ. A¹・Univ. B²）○A. Author¹・B. Author¹,²` on one line; `"below"`: the authors, then the numbered affiliations. Affiliation numbers are superscripts (`sup_scale()` of `author_size()`); a single affiliation is not numbered. |
+| `section(title, content)` / `section(number, title, content)` | A bar (`section_bar_height()`, `section_bar_fill()`, `section_bar_border()`, square unless `section_bar_radius()`) with the title centred on it, over `content` (an array of items `section_gap()` apart, or one node) padded `section_pad()`. Numbered `section_label_style()` (`"1."` → "1. Title") in the order sections are built; an integer `number` restarts the count from it, a string is used as is (`""` for none). |
+| `columns(items)` / `columns(items, widths)` | Side by side, `poster_gutter()` apart, with a dashed `vsep` in each gutter (`separators()`), starting `separator_inset()` down (the middle of the bars). Widths: flex weights, `"12cm"` lengths, `"auto"`. |
+| `rows(items)` / `rows(items, heights)` | Down the page, `poster_row_gap()` apart (dashed `hsep`s with `row_separators()`); same sizes as `columns`. |
+| `vsep()` / `vsep(w)`, `hsep()` / `hsep(h)` | The dashed separators (`separator_color()`, `separator_width()`, `separator_dash()`) on their own: vertical in a gutter `w` wide / horizontal across the parent in a band `h` tall. |
+| `frame(content)` / `dashed_frame(content)` | A thin rounded border box (`frame_color()`, `frame_width()`, `frame_radius()`, `frame_pad()`; `frame_dash()`). Square grey boxes are core setters: `frame(..).radius(0).stroke("#7f7f7f")`. |
+| `note(s)` / `ref(s)` / `subheading(s)` | The highlighted take-home sentence (centred, `note_color()`) / a reference line (`ref_size()`, centred) / `"■ " + s` (`subheading_mark()`, `subheading_size()`). |
+| `bullets(items)` | A list with a hanging indent: each item in a cell `bullet_indent()` right of its `bullet_mark()`, so wrapped lines align; an array item is a nested list. |
+| `table(rows)` / `table(rows, opts)` | Rows of cells (strings, numbers, nodes); the first row a bold header above a `table_header_rule_width()` rule. Options `header` (false: none), `widths`, `align` (one or per column), `rules` (`"grid"`, `"rows"`, `"booktabs"`, `"none"`). Rules are filled rects between the cells, so the grid is exact; cells are padded `table_pad()`, filled `table_fill()` / `table_header_fill()`. |
+
+All sizes derive from `base_size()`, so `style("poster")` (24 pt body) on A0
+gives the proportions of a typical PowerPoint poster: 53.5 pt titles on 2.3 cm
+bars, 80 pt poster title, 40 pt author line, 0.54 cm gutters, 1.5 pt dashed
+separators (12 : 4.5 pt dashes), 1 pt table rules with a 3 pt header rule.
+`style("poster")` is the light look (navy bars on white, grey separators and
+frames); `style("poster-dark")` the dark one — a navy page gradient lit from
+the top, top-lit bars (`#3d4a73` → `#181d2d` → `#080a10`) with a hairline
+pale-cyan border, white text, separators and frames, amber notes (`#ffc000`),
+table cells a shade off the page — plus the dark plot theme. Every hook is a
+`style` key as well:
+
+```rhai
+fn section_bar_radius() { 0.3 }        // rounded bars (default 0: square)
+fn section_label_style() { "" }        // no numbers (default "1.")
+fn separators() { false }              // plain gutters (default true)
+style(#{ note_color: "#ff6b5a", poster_gutter: 1.0, table_rules: "booktabs" });
+```
+
+Hooks: `poster_size`, `poster_bg`, `poster_margin`, `poster_gutter`,
+`poster_row_gap`, `poster_title_size`, `poster_title_font`, `author_size`,
+`sup_scale`, `affiliation_position`, `author_sep`, `presenter_mark`,
+`poster_number_size`, `poster_logo_height`, `poster_header_rule`,
+`poster_header_rule_width`, `section_label_style`, `section_title_size`,
+`section_title_color`, `section_title_font`, `section_bar_height`,
+`section_bar_fill`, `section_bar_border`, `section_bar_border_width`,
+`section_bar_radius`, `section_pad`, `section_gap`, `separators`,
+`row_separators`, `separator_color`, `separator_width`, `separator_dash`,
+`separator_inset`, `frame_color`, `frame_width`, `frame_radius`, `frame_pad`,
+`frame_dash`, `note_color`, `note_size`, `note_font`, `ref_size`, `ref_color`,
+`bullet_mark`, `bullet_size`, `bullet_indent`, `bullet_gap`,
+`subheading_mark`, `subheading_size`, `table_size`, `table_rule`,
+`table_rule_width`, `table_header_rule_width`, `table_rules`, `table_pad`,
+`table_fill`, `table_header_fill`. Lengths are cm; the section counter is
+fresh for every evaluation. A section title is anchored on the bar's centre,
+so it stays centred even when a CJK font's line box is taller than the bar.
+For Japanese posters set the font once: `style("poster-dark", #{ font_family:
+"Yu Gothic" })`.
 
 In the editor (`figs-editor`), the **Script** tab is the source of truth: press
 **Evaluate** (Ctrl+Enter) to lower the script into the editable **TOML** tab, the

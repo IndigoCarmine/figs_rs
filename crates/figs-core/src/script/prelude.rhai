@@ -153,6 +153,14 @@ fn style_presets() {
         fg: "#ffffff", palette: dark_palette(), page_bg: "#0f1a2e",
         label_halo: "#000000", marker_ring: "#0f1a2e",
     };
+    // The dark conference-poster look (see the "Poster" section): a navy
+    // page gradient lit from the top, top-lit section bars with a hairline
+    // pale-cyan border, amber notes, table cells a shade off the page.
+    let poster_dark = #{
+        poster_bg: linear(90, [[0, "#28314c"], [0.12, "#181e2e"], [0.38, "#10141f"], [1, "#080a10"]]),
+        section_bar_fill: linear(90, [[0, "#3d4a73"], [0.56, "#181d2d"], [1, "#080a10"]]),
+        section_bar_border: "#caeefb", note_color: "#ffc000", table_fill: "#121622",
+    };
     #{
         "default": #{},   // quoted: `default` is reserved in Rhai
         nature: journal + #{ label_style: "a", single_width: 8.9, double_width: 18.3 },
@@ -161,7 +169,7 @@ fn style_presets() {
         rsc: journal + #{ label_style: "(a)", single_width: 8.3, double_width: 17.1 },
         poster: poster,
         dark: dark,
-        "poster-dark": poster + dark,
+        "poster-dark": poster + dark + poster_dark,
     }
 }
 
@@ -181,6 +189,21 @@ fn style_keys() {
         "plot_aspect", "plot_label_room", "plot_pad", "ylabel_rotated", "plot_title_size",
         // colours (theme)
         "fg", "plot_fg", "plot_bg", "page_bg",
+        // posters
+        "poster_size", "poster_bg", "poster_margin", "poster_gutter", "poster_row_gap",
+        "poster_title_size", "poster_title_font", "author_size", "sup_scale",
+        "affiliation_position", "author_sep", "presenter_mark", "poster_number_size",
+        "poster_logo_height", "poster_header_rule", "poster_header_rule_width",
+        "section_label_style", "section_title_size", "section_title_color",
+        "section_title_font", "section_bar_height", "section_bar_fill",
+        "section_bar_border", "section_bar_border_width", "section_bar_radius",
+        "section_pad", "section_gap", "separators", "row_separators", "separator_color",
+        "separator_width", "separator_dash", "separator_inset", "frame_color",
+        "frame_width", "frame_radius", "frame_pad", "frame_dash", "note_color",
+        "note_size", "note_font", "ref_size", "ref_color", "bullet_mark", "bullet_size",
+        "bullet_indent", "bullet_gap", "subheading_mark", "subheading_size", "table_size",
+        "table_rule", "table_rule_width", "table_header_rule_width", "table_rules",
+        "table_pad", "table_fill", "table_header_fill",
     ]
 }
 
@@ -620,6 +643,8 @@ fn paper_size(name) {
         a3: [29.7, 42.0],
         a0: [84.1, 118.9],       // poster
         letter: [21.59, 27.94],
+        a2: [42.0, 59.4],        // posters
+        a1: [59.4, 84.1],
     };
     let landscape = name.ends_with("-landscape");
     let key = if landscape { name.sub_string(0, name.len() - 10) } else { name };
@@ -630,7 +655,7 @@ fn paper_size(name) {
         return [journal[key], "auto"];
     }
     if !paper.contains(key) {
-        throw `page(): unknown preset "${name}" (single, double, a5, a4, a3, a0, letter; paper sizes take -landscape)`;
+        throw `page(): unknown preset "${name}" (single, double, a5, a4, a3, a2, a1, a0, letter; paper sizes take -landscape)`;
     }
     let s = paper[key];
     if landscape { [s[1], s[0]] } else { s }
@@ -1721,4 +1746,639 @@ fn plot_minor(ax, log) {
         if i % n != 0 { out.push(ax.ticks[0] + i.to_float() * sub); }
     }
     out
+}
+
+// ---------------------------------------------------------------------------
+// Poster (page, header, numbered sections, column grid, frames, tables, …)
+// ---------------------------------------------------------------------------
+//
+// A conference poster in a few lines:
+//
+//   style("poster-dark");
+//   poster(#{ title: "…", authors: [..], affiliations: [..] }, [
+//       columns([section("Background", [..]), section("Methods", [..])], [3, 2]),
+//       section("Conclusion", bullets(["…", "…"])),
+//   ])
+//
+// `poster` stacks the header (`poster_header`) above `rows` of the body;
+// `columns` puts sections side by side with a dashed separator in each
+// gutter; `section` is a header bar (auto-numbered "1.", "2.", … in the order
+// the sections are built) over padded content. Inside a section: `frame`,
+// `note`, `ref`, `bullets`, `table`, `subheading`, `hsep`, plus everything
+// else in the framework (plots, panels, grids). Every piece is ordinary core
+// nodes, so core setters chain on the results
+// (`frame(..).stroke("#7f7f7f").radius(0)`).
+//
+// The defaults are hooks (and `style` keys) sized from `base_size()`, tuned
+// so that `style("poster")` (24 pt body) on an A0 page gives the proportions
+// of a typical PowerPoint conference poster: 2.3 cm section bars with
+// 53.5 pt titles, 0.54 cm gutters, 1.5 pt dashed separators. The light
+// defaults (`style("poster")`) are a navy bar on white; `style("poster-dark")`
+// switches to the dark look.
+
+// --- Poster defaults (hooks) ---
+
+// Page preset of `poster(header, body)` ("a0", "a3-landscape", …).
+fn poster_size() { style_get("poster_size", "a0") }
+
+// Page background of a poster: a colour or a gradient; defaults to the
+// style's `page_bg()` ("" = none, white).
+fn poster_bg() { style_get("poster_bg", page_bg()) }
+
+// Clear space between the page edge and the poster content (cm): 0.5 cm at
+// 24 pt.
+fn poster_margin() { style_get("poster_margin", base_size() * 0.021) }
+
+// Gutter between columns (cm), which a separator runs through: 0.54 cm.
+fn poster_gutter() { style_get("poster_gutter", base_size() * 0.0225) }
+
+// Space between rows of sections (and under the header), cm.
+fn poster_row_gap() { style_get("poster_row_gap", poster_gutter()) }
+
+// Poster title (pt; 80 pt at 24 pt body) and its font ("" = page font).
+fn poster_title_size() { style_get("poster_title_size", base_size() * 3.33) }
+fn poster_title_font() { style_get("poster_title_font", "") }
+
+// Author line (pt; 40 pt at 24 pt), affiliation numbers at `sup_scale()` of it.
+fn author_size() { style_get("author_size", base_size() * 1.665) }
+fn sup_scale() { style_get("sup_scale", 0.667) }
+
+// "before": the Japanese convention, "（Affil. A¹・Affil. B²）○Author¹・…" on one
+// line; "below": the authors, then a line of numbered affiliations.
+fn affiliation_position() { style_get("affiliation_position", "before") }
+
+// Between authors (and affiliations), and before the presenting author.
+fn author_sep() { style_get("author_sep", "・") }
+fn presenter_mark() { style_get("presenter_mark", "○") }
+
+// Poster number in the top-right corner (pt, bold).
+fn poster_number_size() { style_get("poster_number_size", author_size()) }
+
+// Height of the header logos (cm): 8 cm at 24 pt.
+fn poster_logo_height() { style_get("poster_logo_height", base_size() * 0.33) }
+
+// The rule under the header ("" for none) and its width (cm, 1 pt at 24 pt).
+fn poster_header_rule() {
+    let f = fg();
+    style_get("poster_header_rule", if f == "" { "#7f7f7f" } else { f })
+}
+fn poster_header_rule_width() { style_get("poster_header_rule_width", base_size() * 0.00147) }
+
+// Section numbering template: "1." gives "1. Title" (any `panel_label`
+// template: "(1)", "A.", "I-1"); "" for none.
+fn section_label_style() { style_get("section_label_style", "1.") }
+
+// Section bar: title size (pt; 53.5 pt at 24 pt), colour, font ("" = page font).
+fn section_title_size() { style_get("section_title_size", base_size() * 2.23) }
+fn section_title_color() { style_get("section_title_color", "#ffffff") }
+fn section_title_font() { style_get("section_title_font", "") }
+
+// Bar height (cm): 2.3 cm for the 53.5 pt title.
+fn section_bar_height() { style_get("section_bar_height", section_title_size() * 0.043) }
+
+// Bar fill (colour or gradient), border colour ("" for none), border width
+// (cm, 0.25 pt at 24 pt) and corner radius (cm; square by default).
+fn section_bar_fill() {
+    style_get("section_bar_fill", linear(90, [[0, "#4a6597"], [1, "#1f3359"]]))
+}
+fn section_bar_border() { style_get("section_bar_border", "") }
+fn section_bar_border_width() { style_get("section_bar_border_width", base_size() * 0.000367) }
+fn section_bar_radius() { style_get("section_bar_radius", 0) }
+
+// Padding around a section's content (cm) and the gap between its items.
+fn section_pad() { style_get("section_pad", base_size() * 0.0125) }
+fn section_gap() { style_get("section_gap", base_size() * 0.02) }
+
+// Dashed separators in the column gutters (`separators()`) and between rows
+// of sections (`row_separators()`, off by default).
+fn separators() { style_get("separators", true) }
+fn row_separators() { style_get("row_separators", false) }
+
+// Separator colour, width (cm; 1.5 pt at 24 pt) and dash (12 pt on, 4.5 off).
+fn separator_color() {
+    let f = fg();
+    style_get("separator_color", if f == "" { "#7f7f7f" } else { f })
+}
+fn separator_width() { style_get("separator_width", base_size() * 0.0022) }
+fn separator_dash() {
+    style_get("separator_dash", [separator_width() * 8.0, separator_width() * 3.0])
+}
+
+// Where a column separator starts below the top of its row (cm): the middle
+// of the section bars, so it hangs from them.
+fn separator_inset() { style_get("separator_inset", section_bar_height() * 0.5) }
+
+// `frame`: border colour, width (cm), corner radius (cm), padding (cm) and
+// the dash of `dashed_frame`.
+fn frame_color() {
+    let f = fg();
+    style_get("frame_color", if f == "" { "#7f7f7f" } else { f })
+}
+fn frame_width() { style_get("frame_width", separator_width()) }
+fn frame_radius() { style_get("frame_radius", base_size() * 0.011) }
+fn frame_pad() { style_get("frame_pad", base_size() * 0.015) }
+fn frame_dash() { style_get("frame_dash", [frame_width() * 4.0, frame_width() * 3.0]) }
+
+// `note` (the highlighted take-home sentence): colour, size (pt), font.
+fn note_color() { style_get("note_color", "#b85c00") }
+fn note_size() { style_get("note_size", base_size()) }
+fn note_font() { style_get("note_font", "") }
+
+// `ref` (literature references): size (pt; 20 pt at 24 pt) and colour
+// ("" = `fg()`).
+fn ref_size() { style_get("ref_size", base_size() * 0.835) }
+fn ref_color() { style_get("ref_color", fg()) }
+
+// `bullets`: mark, text size (pt), hanging indent (cm; 1.58 cm at 36 pt) and
+// gap between items (cm).
+fn bullet_mark() { style_get("bullet_mark", "•") }
+fn bullet_size() { style_get("bullet_size", base_size()) }
+fn bullet_indent() { style_get("bullet_indent", bullet_size() * 0.044) }
+fn bullet_gap() { style_get("bullet_gap", bullet_size() * 0.004) }
+
+// `subheading`: the mark before it ("" for none) and its size (pt; 32 pt at 24).
+fn subheading_mark() { style_get("subheading_mark", "■") }
+fn subheading_size() { style_get("subheading_size", base_size() * 1.335) }
+
+// `table`: text size (pt), rule colour, rule width (cm; 1 pt at 24 pt), the
+// header rule (3x), rules ("grid", "rows": horizontal only, "booktabs": top,
+// header and bottom, "none"), cell padding (cm), cell fill and header fill
+// ("" for none).
+fn table_size() { style_get("table_size", base_size()) }
+fn table_rule() {
+    let f = fg();
+    style_get("table_rule", if f == "" { "#000000" } else { f })
+}
+fn table_rule_width() { style_get("table_rule_width", base_size() * 0.00147) }
+fn table_header_rule_width() { style_get("table_header_rule_width", table_rule_width() * 3.0) }
+fn table_rules() { style_get("table_rules", "grid") }
+fn table_pad() { style_get("table_pad", base_size() * 0.011) }
+fn table_fill() { style_get("table_fill", "") }
+fn table_header_fill() { style_get("table_header_fill", "") }
+
+// --- helpers ---
+
+// Is paint `p` (a colour string or a gradient) set, i.e. not ""?
+fn poster_has_paint(p) { type_of(p) != "string" || p != "" }
+
+// The length in cm of a "12cm" / "12 cm" size, or () for anything else.
+fn poster_cm(who, w) {
+    if type_of(w) != "string" || !w.ends_with("cm") { return (); }
+    let s = w.sub_string(0, w.len() - 2);
+    s.trim();
+    let v = 0.0;
+    try { v = parse_float(s); } catch { throw `${who}(): bad length "${w}" (e.g. "12cm")`; }
+    if !(v > 0.0) { throw `${who}(): a length must be positive (got "${w}")`; }
+    v
+}
+
+// `node` sized along a container's main axis by `w`: a number is a flex
+// weight, "12cm" an absolute length, "auto" its natural size.
+fn poster_sized(who, node, w, vertical) {
+    let t = type_of(w);
+    if t == "i64" || t == "f64" {
+        if !(w > 0) { throw `${who}(): a flex weight must be positive (got ${w})`; }
+        return node.flex(w);
+    }
+    if w == "auto" { return node; }
+    let v = poster_cm(who, w);
+    if type_of(v) == "()" {
+        throw `${who}(): sizes are flex weights (2), lengths ("12cm") or "auto" (got ${w})`;
+    }
+    if vertical { node.height(v) } else { node.width(v) }
+}
+
+// Sizes for `n` items: `ws` checked against `n`, or n ones.
+fn poster_weights(who, n, ws) {
+    if type_of(ws) == "()" {
+        let out = [];
+        for i in 0..n { out.push(1); }
+        return out;
+    }
+    if type_of(ws) != "array" { throw `${who}(): sizes must be an array (got ${type_of(ws)})`; }
+    if ws.len() != n { throw `${who}(): ${n} items but ${ws.len()} sizes`; }
+    ws
+}
+
+// --- separators ---
+
+// A dashed vertical separator for a gutter `w` cm wide (default
+// `poster_gutter()`): centred in it, from `separator_inset()` below the top
+// to the bottom.
+fn vsep() { vsep(poster_gutter()) }
+fn vsep(w) {
+    let l = line(0.5, 0, 0.5, 1).viewbox(0, 0, 1, 1).stroke(separator_color())
+        .stroke_width(separator_width()).dash(separator_dash()).flex(1);
+    let inset = separator_inset();
+    col(if inset > 0 { [rect().height(inset), l] } else { [l] }).stretch().width(w)
+}
+
+// A dashed horizontal separator across its parent, centred in a band
+// `h` cm tall (default `section_gap()`).
+fn hsep() { hsep(section_gap()) }
+fn hsep(h) {
+    line(0, 0.5, 1, 0.5).viewbox(0, 0, 1, 1).stroke(separator_color())
+        .stroke_width(separator_width()).dash(separator_dash()).height(h)
+}
+
+// --- grid ---
+
+// Sections (or any nodes) side by side, sharing the width equally or by
+// `widths` (flex weights, "12cm" lengths, "auto"), `poster_gutter()` apart
+// with a dashed `vsep` in each gutter while `separators()` is on.
+fn columns(items) { columns(items, ()) }
+fn columns(items, widths) {
+    if type_of(items) != "array" {
+        throw `columns(): expected an array of nodes (got ${type_of(items)})`;
+    }
+    let ws = poster_weights("columns", items.len(), widths);
+    let g = poster_gutter();
+    let sep = separators();
+    let out = [];
+    for i in 0..items.len() {
+        if i > 0 && sep { out.push(vsep(g)); }
+        out.push(poster_sized("columns", as_node(items[i]), ws[i], false));
+    }
+    row(out).spacing(if sep { 0 } else { g }).stretch()
+}
+
+// Rows of sections (or `columns`) down the page, sharing the height equally
+// or by `heights` (flex weights, "12cm", "auto"), `poster_row_gap()` apart (a
+// dashed `hsep` in each gap while `row_separators()` is on).
+fn rows(items) { rows(items, ()) }
+fn rows(items, heights) {
+    if type_of(items) != "array" {
+        throw `rows(): expected an array of nodes (got ${type_of(items)})`;
+    }
+    let hs = poster_weights("rows", items.len(), heights);
+    let g = poster_row_gap();
+    let sep = row_separators();
+    let out = [];
+    for i in 0..items.len() {
+        if i > 0 && sep { out.push(hsep(g)); }
+        out.push(poster_sized("rows", as_node(items[i]), hs[i], true));
+    }
+    col(out).spacing(if sep { 0 } else { g }).stretch()
+}
+
+// --- sections ---
+
+// A section bar: `s` centred (both ways) on a `section_bar_height()` bar
+// filled with `section_bar_fill()` and bordered in `section_bar_border()`.
+// The title is anchored on the bar's centre in a unit viewbox, so it stays
+// centred and keeps its size even when its line box (a CJK font's tall
+// ascent + descent) is taller than the bar.
+fn section_bar(s) {
+    let t = text(s).size(section_title_size()).color(section_title_color()).center();
+    let f = section_title_font();
+    if f != "" { t = t.font(f); }
+    let bar = stack([t.at(0.5, 0.5).anchor(0.5, 0.5)]).viewbox(0, 0, 1, 1)
+        .height(section_bar_height());
+    let fill = section_bar_fill();
+    if poster_has_paint(fill) { bar = bar.fill(fill); }
+    let b = section_bar_border();
+    if b != "" { bar = bar.stroke(b).stroke_width(section_bar_border_width()); }
+    let r = section_bar_radius();
+    if r > 0 { bar = bar.radius(r); }
+    bar
+}
+
+// The next section number (1, 2, … in the order sections are built), or `n`
+// when given (the count continues from it). Kept in the style registry, which
+// is fresh for every evaluation.
+fn section_number(n) {
+    if type_of(n) == "()" { n = style_get("__section_no", 0) + 1; }
+    style_set(#{ "__section_no": n });
+    n
+}
+
+// `section(title, content)`: a numbered bar ("1. Title", `section_label_style()`)
+// over `content` — an array of items `section_gap()` apart, or one node —
+// padded `section_pad()`; the content takes the section's spare height.
+// `section(number, title, content)` sets the number: an integer (the count
+// continues from it) or a string used as is ("" for none).
+fn section(title, content) { section_make(section_number(()), title, content) }
+fn section(number, title, content) {
+    if type_of(number) == "i64" { return section_make(section_number(number), title, content); }
+    if type_of(number) != "string" {
+        throw `section(): the number must be an integer or a string (got ${type_of(number)})`;
+    }
+    section_make(number, title, content)
+}
+
+fn section_make(n, title, content) {
+    if type_of(title) != "string" {
+        throw `section(): the title must be a string (got ${type_of(title)})`;
+    }
+    let label = if type_of(n) == "string" { n } else {
+        let st = section_label_style();
+        if st == "" { "" } else { panel_label(st, n - 1) }
+    };
+    let s = if label == "" { title } else { `${label} ${title}` };
+    let items = if type_of(content) == "array" { nodes(content) } else { [as_node(content)] };
+    let body = col(items).spacing(section_gap()).stretch().pad(section_pad()).flex(1);
+    col([section_bar(s), body]).stretch()
+}
+
+// --- content blocks ---
+
+// A thin rounded border box (`frame_color()`, `frame_width()`,
+// `frame_radius()`) around `content` (an array `section_gap()` apart, or one
+// node), padded `frame_pad()`. Square / grey / heavy variants are core
+// setters: `frame(..).radius(0).stroke("#7f7f7f").stroke_width(0.1)`.
+fn frame(content) {
+    let items = if type_of(content) == "array" { nodes(content) } else { [as_node(content)] };
+    col(items).spacing(section_gap()).stretch().pad(frame_pad())
+        .stroke(frame_color()).stroke_width(frame_width()).radius(frame_radius())
+}
+
+// `frame` with a dashed border (`frame_dash()`).
+fn dashed_frame(content) { frame(content).dash(frame_dash()) }
+
+// The highlighted take-home sentence of a section: centred, `note_color()`.
+fn note(s) {
+    let t = text(s).size(note_size()).color(note_color()).center();
+    let f = note_font();
+    if f == "" { t } else { t.font(f) }
+}
+
+// A literature reference line: small (`ref_size()`), centred.
+fn ref(s) {
+    let t = text(s).size(ref_size()).center();
+    let c = ref_color();
+    if c == "" { t } else { t.color(c) }
+}
+
+// A small heading inside a section: "■ " + `s` at `subheading_size()`.
+fn subheading(s) {
+    let m = subheading_mark();
+    fg_text(if m == "" { s } else { `${m} ${s}` }).size(subheading_size())
+}
+
+// A bulleted list with a hanging indent: each item (a string or a node) in a
+// cell `bullet_indent()` right of its `bullet_mark()`, so wrapped lines align
+// with the first. An array item is a nested list under the previous item.
+fn bullets(items) {
+    if type_of(items) != "array" {
+        throw `bullets(): expected an array of items (got ${type_of(items)})`;
+    }
+    let ind = bullet_indent();
+    let out = [];
+    for x in items {
+        if type_of(x) == "array" {
+            out.push(row([rect().width(ind), bullets(x).flex(1)]).stretch());
+            continue;
+        }
+        let item = if type_of(x) == "string" { fg_text(x).size(bullet_size()) } else { x };
+        let mark = fg_text(bullet_mark()).size(bullet_size()).width(ind);
+        out.push(row([mark, item.flex(1)]).cross("start"));
+    }
+    col(out).spacing(bullet_gap()).stretch()
+}
+
+// `table(rows)` / `table(rows, opts)`: `rows` is an array of equally long
+// arrays of cells (strings, numbers or nodes); the first row is the header
+// (bold, above a `table_header_rule_width()` rule). Options:
+//   header  false: no header row (default true)
+//   widths  per column: flex weights, "4cm" lengths or "auto" (default equal)
+//   align   "left" (default), "center", "right", or one per column
+//   rules   "grid", "rows", "booktabs" or "none" (default `table_rules()`)
+// The rules are filled rects between the cells (`table_rule()`,
+// `table_rule_width()`), so the grid is exact at any size; cells are padded
+// `table_pad()` and filled `table_fill()` / `table_header_fill()`.
+fn table(rows) { table(rows, #{}) }
+fn table(rows, opts) {
+    if type_of(opts) != "map" { throw `table(): options must be a map (got ${type_of(opts)})`; }
+    for k in opts.keys() {
+        if !["header", "widths", "align", "rules"].contains(k) {
+            throw `table(): unknown option "${k}" (header, widths, align, rules)`;
+        }
+    }
+    if type_of(rows) != "array" || rows.len() == 0 { throw "table(): expected a non-empty array of rows"; }
+    let nc = 0;
+    for r in rows {
+        if type_of(r) != "array" { throw `table(): each row must be an array of cells (got ${type_of(r)})`; }
+        if nc == 0 { nc = r.len(); }
+        if r.len() != nc || nc == 0 { throw `table(): rows differ in length (${nc} vs ${r.len()})`; }
+    }
+    let header = plot_opt(opts, "header", true);
+    let ws = poster_weights("table", nc, plot_opt(opts, "widths", ()));
+    let al = plot_opt(opts, "align", "left");
+    if type_of(al) == "string" {
+        let a = [];
+        for i in 0..nc { a.push(al); }
+        al = a;
+    }
+    if type_of(al) != "array" || al.len() != nc {
+        throw "table(): align must be a string or one per column";
+    }
+    let rules = plot_opt(opts, "rules", table_rules());
+    if !["grid", "rows", "booktabs", "none"].contains(rules) {
+        throw `table(): unknown rules "${rules}" (grid, rows, booktabs, none)`;
+    }
+    let rc = table_rule();
+    let rw = table_rule_width();
+    let vertical = rules == "grid";
+    let inner = rules == "grid" || rules == "rows";
+    let outer = rules != "none";
+    let parts = [];
+    if outer { parts.push(rect().height(rw).fill(rc)); }
+    for i in 0..rows.len() {
+        let head = header && i == 0;
+        if i == 1 && header && outer {
+            parts.push(rect().height(table_header_rule_width()).fill(rc));
+        } else if i > 0 && inner {
+            parts.push(rect().height(rw).fill(rc));
+        }
+        let cells = [];
+        if vertical { cells.push(rect().width(rw).fill(rc)); }
+        for j in 0..nc {
+            cells.push(poster_sized("table", table_cell(rows[i][j], head, al[j]), ws[j], false));
+            if vertical { cells.push(rect().width(rw).fill(rc)); }
+        }
+        parts.push(row(cells).stretch());
+    }
+    if outer { parts.push(rect().height(rw).fill(rc)); }
+    let t = col(parts).stretch();
+    // All widths absolute: the table is exactly as wide as its columns.
+    let total = 0.0;
+    for w in ws {
+        let v = poster_cm("table", w);
+        if type_of(v) == "()" { return t; }
+        total += v;
+    }
+    if vertical { total += rw * (nc + 1).to_float(); }
+    t.width(total)
+}
+
+// One table cell: `x` (a string or number becomes text, bold in the header)
+// padded `table_pad()`, vertically centred, aligned `align`, filled
+// `table_header_fill()` (header) or `table_fill()`.
+fn table_cell(x, head, align) {
+    let t = type_of(x);
+    let n = if t == "string" || t == "i64" || t == "f64" {
+        let s = fg_text(`${x}`).size(table_size()).align(align);
+        if head { s.bold() } else { s }
+    } else { x };
+    let c = col([n]).pad(table_pad()).main("center").stretch();
+    let f = if head { table_header_fill() } else { "" };
+    if !poster_has_paint(f) { f = table_fill(); }
+    if poster_has_paint(f) { c.fill(f) } else { c }
+}
+
+// --- header ---
+
+// The author line as runs `[text, superscript?]` (adjacent plain runs merged):
+// `authors` are names or maps #{ name, aff: [1, 2] (or 1), presenter: true };
+// affiliation numbers are only shown with more than one affiliation.
+fn author_runs(authors, affiliations) {
+    let runs = [];
+    let numbered = affiliations.len() > 1;
+    let i = 0;
+    for a in authors {
+        if i > 0 { runs = runs_push(runs, author_sep(), false); }
+        i += 1;
+        if type_of(a) == "string" {
+            runs = runs_push(runs, a, false);
+            continue;
+        }
+        if type_of(a) != "map" || !a.contains("name") {
+            throw `poster_header(): an author is a name or #{ name, aff, presenter } (got ${type_of(a)})`;
+        }
+        if plot_opt(a, "presenter", false) { runs = runs_push(runs, presenter_mark(), false); }
+        runs = runs_push(runs, a.name, false);
+        let aff = plot_opt(a, "aff", []);
+        if type_of(aff) != "array" { aff = [aff]; }
+        if numbered && aff.len() > 0 {
+            let s = "";
+            for k in aff {
+                if s != "" { s += ","; }
+                s += `${k}`;
+            }
+            runs = runs_push(runs, s, true);
+        }
+    }
+    runs
+}
+
+// The affiliations as runs: "Affil. A¹・Affil. B²" (unnumbered when single).
+fn affiliation_runs(affiliations) {
+    let runs = [];
+    let n = affiliations.len();
+    for i in 0..n {
+        if i > 0 { runs = runs_push(runs, author_sep(), false); }
+        runs = runs_push(runs, affiliations[i], false);
+        if n > 1 { runs = runs_push(runs, `${i + 1}`, true); }
+    }
+    runs
+}
+
+// `runs` with run [s, sup] appended (merged into a preceding plain run).
+fn runs_push(runs, s, sup) {
+    if s == "" { return runs; }
+    let n = runs.len();
+    if n > 0 && !sup && !runs[n - 1][1] {
+        runs[n - 1][0] += s;
+    } else {
+        runs.push([s, sup]);
+    }
+    runs
+}
+
+// A line of text runs at `size` pt, centred: plain runs at full size,
+// superscripts at `sup_scale()` of it, top-aligned in a row so they ride up
+// like superscripts. (The one place to switch to rich-text spans.)
+fn runs_line(runs, size) {
+    let parts = [];
+    for r in runs {
+        parts.push(fg_text(r[0]).size(if r[1] { size * sup_scale() } else { size }));
+    }
+    row(parts).cross("start").main("center")
+}
+
+// The author line(s) of a poster header. `affiliation_position()` "before":
+// "（Affil. A¹・Affil. B²）○Author¹・Author²" on one line; "below": the
+// authors, and the numbered affiliations a size smaller under them.
+fn author_line(authors, affiliations) {
+    if type_of(authors) != "array" { authors = [authors]; }
+    if type_of(affiliations) != "array" { affiliations = [affiliations]; }
+    let size = author_size();
+    let who = author_runs(authors, affiliations);
+    if affiliations.len() == 0 { return runs_line(who, size); }
+    let where = affiliation_position();
+    if where == "before" {
+        // "（" affiliations "）" then the authors.
+        let runs = runs_push([], "（", false);
+        for r in affiliation_runs(affiliations) { runs = runs_push(runs, r[0], r[1]); }
+        runs = runs_push(runs, "）", false);
+        for r in who { runs = runs_push(runs, r[0], r[1]); }
+        return runs_line(runs, size);
+    }
+    if where != "below" {
+        throw `affiliation_position(): must be "before" or "below" (got "${where}")`;
+    }
+    col([runs_line(who, size), runs_line(affiliation_runs(affiliations), size * 0.8)])
+        .spacing(size * 0.005).stretch()
+}
+
+// The poster header; `opts` is a map of
+//   title         the title (a string or a node): `poster_title_size()`, bold
+//   authors       names or #{ name, aff, presenter } (see `author_line`)
+//   affiliations  affiliation names, numbered from 1
+//   logos         images (or paths) left of the title, `poster_logo_height()` tall
+//   number        the poster number, top-right
+// The title and author line are centred (both ways) between the logos and the
+// number; a `poster_header_rule()` runs under it all.
+fn poster_header(opts) {
+    if type_of(opts) != "map" { throw `poster_header(): expected a map (got ${type_of(opts)})`; }
+    for k in opts.keys() {
+        if !["title", "authors", "affiliations", "logos", "number"].contains(k) {
+            throw `poster_header(): unknown key "${k}" (title, authors, affiliations, logos, number)`;
+        }
+    }
+    let main = [];
+    let title = plot_opt(opts, "title", "");
+    if type_of(title) != "string" {
+        main.push(title);
+    } else if title != "" {
+        let t = fg_text(title).size(poster_title_size()).bold().center();
+        let f = poster_title_font();
+        main.push(if f == "" { t } else { t.font(f) });
+    }
+    let authors = plot_opt(opts, "authors", []);
+    if type_of(authors) != "array" || authors.len() > 0 {
+        main.push(author_line(authors, plot_opt(opts, "affiliations", [])));
+    }
+    let parts = [];
+    for l in plot_opt(opts, "logos", []) {
+        let n = if type_of(l) == "string" { image(l) } else { l };
+        parts.push(n.height(poster_logo_height()));
+    }
+    parts.push(col(main).main("center").stretch().spacing(author_size() * 0.008).flex(1));
+    // The number in its own column at the top right, so a long title wraps
+    // before it instead of running under it.
+    let num = plot_opt(opts, "number", "");
+    if num != "" { parts.push(col([fg_text(num).size(poster_number_size()).bold()])); }
+    let head = row(parts).stretch().spacing(poster_gutter());
+    let rule = poster_header_rule();
+    if rule == "" { return head; }
+    col([head, rect().height(poster_header_rule_width()).fill(rule)])
+        .spacing(poster_row_gap() * 0.5).stretch()
+}
+
+// --- the page ---
+
+// `poster(header, body)` / `poster(preset, header, body)`: a `poster_size()`
+// (or `preset`) page on `poster_bg()`; the header — a node, a map for
+// `poster_header`, or () for none — above the body — an array of rows for
+// `rows`, or one node — `poster_margin()` in from the edges.
+fn poster(header, body) { poster(poster_size(), header, body) }
+fn poster(preset, header, body) {
+    if type_of(header) == "map" { header = poster_header(header); }
+    let content = if type_of(body) == "array" { rows(body) } else { as_node(body) };
+    let parts = if type_of(header) == "()" { [content.flex(1)] } else { [header, content.flex(1)] };
+    let root = col(parts).spacing(poster_row_gap()).pad(poster_margin()).stretch();
+    let d = page(preset, root);
+    let bg = poster_bg();
+    if poster_has_paint(bg) { d.background(bg) } else { d }
 }
