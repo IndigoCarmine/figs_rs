@@ -1158,7 +1158,7 @@ only.
 A conference poster — header, numbered section bars, a column grid with
 dashed separators, frames, tables, bullets — is part of the framework too
 ([`examples/poster_demo.figs`](examples/poster_demo.figs): a full A0 poster
-in the dark PowerPoint look in 86 lines, nearly all of them content):
+in the dark PowerPoint look in 87 lines (78 without comments and blank lines), nearly all of them content):
 
 ```rhai
 style("poster-dark");
@@ -1173,7 +1173,7 @@ poster(#{
     columns([
         section("Background", [image("a.png").aspect(1.6), body("…"), ref("C. Author et al., J. Imag. 2020, 1, 1.")]),
         section("Methods", [frame(image("setup.png").aspect(3)), subheading("Samples"),
-                            table([["Solvent", "Volume"], ["THF", "150 μL"]])]),
+                            table([["Sample", "Light dose"], ["Gel A", "20 mW/cm²"]])]),
     ], [3, 2]),
     section("Conclusion", bullets(["First finding.", "Second finding."])),
 ], [5, 1]))
@@ -1183,7 +1183,7 @@ poster(#{
 |---|---|
 | `poster(header, body)` / `poster(preset, header, body)` | A `poster_size()` page (default `"a0"`; any paper preset, `-landscape` too) on `poster_bg()` (a colour or gradient; default `page_bg()`), the header above the body, `poster_margin()` from the edges. `header` is a node, a map for `poster_header`, or `()`; `body` an array (→ `rows`) or a node. |
 | `poster_header(#{ title, authors, affiliations, logos, number })` | Logos (`poster_logo_height()` tall) on the left; the title (`poster_title_size()`, bold) and the author line centred right of them; the poster number bold in the top-right corner; a `poster_header_rule()` under it all. |
-| `author_line(authors, affiliations)` | Authors are names or `#{ name, aff: [1, 2], presenter: true }`. With `affiliation_position()` `"before"` (default, the Japanese convention): `（Univ. A¹・Univ. B²）○A. Author¹・B. Author¹,²` on one line; `"below"`: the authors, then the numbered affiliations. Affiliation numbers are superscripts (`sup_scale()` of `author_size()`); a single affiliation is not numbered. |
+| `author_line(authors, affiliations)` | Authors are names or `#{ name, aff: [1, 2], presenter: true }`. With `affiliation_position()` `"before"` (default, the Japanese convention): `（Univ. A¹・Univ. B²）○A. Author¹・B. Author¹,²` on one line; `"below"`: the authors, then the numbered affiliations. The line is one text node of rich-text spans — affiliation numbers are superscript spans — so it wraps like any text; a single affiliation is not numbered. |
 | `section(title, content)` / `section(number, title, content)` | A bar (`section_bar_height()`, `section_bar_fill()`, `section_bar_border()`, square unless `section_bar_radius()`) with the title centred on it, over `content` (an array of items `section_gap()` apart, or one node) padded `section_pad()`. Numbered `section_label_style()` (`"1."` → "1. Title") in the order sections are built; an integer `number` restarts the count from it, a string is used as is (`""` for none). |
 | `columns(items)` / `columns(items, widths)` | Side by side, `poster_gutter()` apart, with a dashed `vsep` in each gutter (`separators()`), starting `separator_inset()` down (the middle of the bars). Widths: flex weights, `"12cm"` lengths, `"auto"`. |
 | `rows(items)` / `rows(items, heights)` | Down the page, `poster_row_gap()` apart (dashed `hsep`s with `row_separators()`); same sizes as `columns`. |
@@ -1213,7 +1213,7 @@ style(#{ note_color: "#ff6b5a", poster_gutter: 1.0, table_rules: "booktabs" });
 
 Hooks: `poster_size`, `poster_bg`, `poster_margin`, `poster_gutter`,
 `poster_row_gap`, `poster_title_size`, `poster_title_font`, `author_size`,
-`sup_scale`, `affiliation_position`, `author_sep`, `presenter_mark`,
+`affiliation_position`, `author_sep`, `presenter_mark`,
 `poster_number_size`, `poster_logo_height`, `poster_header_rule`,
 `poster_header_rule_width`, `section_label_style`, `section_title_size`,
 `section_title_color`, `section_title_font`, `section_bar_height`,
@@ -1228,8 +1228,12 @@ Hooks: `poster_size`, `poster_bg`, `poster_margin`, `poster_gutter`,
 `table_fill`, `table_header_fill`. Lengths are cm; the section counter is
 fresh for every evaluation. A section title is anchored on the bar's centre,
 so it stays centred even when a CJK font's line box is taller than the bar.
-For Japanese posters set the font once: `style("poster-dark", #{ font_family:
-"Yu Gothic" })`.
+For Japanese posters set a font list once — `style("poster-dark", #{
+font_family: "Arial, Yu Gothic" })` puts Latin in Arial and Japanese in Yu
+Gothic, as PowerPoint does. Every text argument (titles, section titles,
+items, cells, notes, refs) also takes rich text:
+`ref(markup("A. Author *et al.*, *J. Imag.* **2021**, *4*, 101."))`,
+`section(markup("H_2O *in situ*"), …)`.
 
 In the editor (`figs-editor`), the **Script** tab is the source of truth: press
 **Evaluate** (Ctrl+Enter) to lower the script into the editable **TOML** tab, the

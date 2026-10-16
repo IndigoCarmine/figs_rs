@@ -11,6 +11,7 @@ use std::path::Path;
 
 use figs_core::geom::{Color, Paint, PathSegment, Rect, Size, TextAlign};
 use figs_core::layout::{ComputedLayout, PaintContent};
+use figs_core::schema::span::Script;
 use figs_core::schema::{ImageProps, NodeKind, RawDocument, RawNode, TextProps};
 use figs_core::units::Unit;
 use figs_core::{eval_script, layout, Document, LeafMeasure, NullMeasurer};
@@ -80,10 +81,25 @@ fn texts(d: &RawDocument) -> Vec<String> {
         .nodes
         .iter()
         .filter(|(_, n)| n.kind == NodeKind::Text)
-        .map(|(id, n)| (order(id), n.content.clone().unwrap_or_default()))
+        .map(|(id, n)| (order(id), plain(n)))
         .collect();
     v.sort();
     v.into_iter().map(|(_, s)| s).collect()
+}
+
+/// The text of a text node: its content, or its spans joined.
+fn plain(n: &RawNode) -> String {
+    n.content
+        .clone()
+        .unwrap_or_else(|| n.spans.iter().map(|s| s.text.as_str()).collect())
+}
+
+/// The spans of a text node as (text, superscript?) pairs.
+fn spans(n: &RawNode) -> Vec<(String, bool)> {
+    n.spans
+        .iter()
+        .map(|s| (s.text.clone(), s.script == Some(Script::Super)))
+        .collect()
 }
 
 fn order(id: &str) -> usize {
@@ -549,38 +565,27 @@ fn author_line_runs_and_superscripts() {
     let d = raw(r#"page(80, 10, author_line(
         [#{ name: "Alice", aff: 1, presenter: true }, #{ name: "Bob", aff: [1, 2] }, "Carol"],
         ["Univ A", "Univ B"]))"#);
-    let kids = children(&d, "root");
-    let runs: Vec<_> = kids
-        .iter()
-        .map(|(_, n)| n.content.clone().unwrap())
-        .collect();
+    // One centred text node of spans; the affiliation numbers are
+    // superscript spans (adjacent plain runs merged).
+    let root = &d.nodes["root"];
+    assert_eq!(root.kind, NodeKind::Text);
+    assert_eq!(root.align, Some(TextAlign::Center));
+    approx(root.font_size.unwrap(), 8.0 * 1.665);
     assert_eq!(
-        runs,
+        spans(root),
         [
-            "（Univ A",
-            "1",
-            "・Univ B",
-            "2",
-            "）○Alice",
-            "1",
-            "・Bob",
-            "1,2",
-            "・Carol"
+            ("（Univ A", false),
+            ("1", true),
+            ("・Univ B", false),
+            ("2", true),
+            ("）○Alice", false),
+            ("1", true),
+            ("・Bob", false),
+            ("1,2", true),
+            ("・Carol", false),
         ]
+        .map(|(s, sup)| (s.to_string(), sup))
     );
-    let size = 8.0 * 1.665;
-    for (i, (_, n)) in kids.iter().enumerate() {
-        let want = if i % 2 == 1 && i < 8 {
-            size * 0.667
-        } else {
-            size
-        };
-        approx(n.font_size.unwrap(), want);
-    }
-    // Superscripts are top-aligned with the line: they ride up.
-    let l =
-        lay_fixed(r#"page(300, 20, author_line([#{ name: "A", aff: 1 }], ["U", "V"])).unit("pt")"#);
-    approx(text_rect(&l, "1").y, text_rect(&l, "（U").y);
 
     // A single affiliation is not numbered.
     let d = raw(r#"page(80, 10, author_line([#{ name: "Alice", aff: 1 }, "Bob"], ["Univ A"]))"#);
@@ -589,10 +594,13 @@ fn author_line_runs_and_superscripts() {
     let d = raw(r#"
         style(#{ affiliation_position: "below", author_sep: ", " });
         page(80, 10, author_line([#{ name: "Alice", aff: 2 }, #{ name: "Bob", aff: 1 }], ["U1", "U2"]))"#);
+    assert_eq!(texts(&d), ["Alice2, Bob1", "U11, U22"]);
+    let kids = children(&d, "root");
     assert_eq!(
-        texts(&d),
-        ["Alice", "2", ", Bob", "1", "U1", "1", ", U2", "2"]
+        spans(kids[1].1),
+        [("U1", false), ("1", true), (", U2", false), ("2", true)].map(|(s, b)| (s.to_string(), b))
     );
+    approx(kids[1].1.font_size.unwrap(), 8.0 * 1.665 * 0.8);
     assert_eq!(d.nodes["root"].kind, NodeKind::Column);
     assert!(fail(
         r#"style(#{ affiliation_position: "left" }); page(1, 1, author_line(["A"], ["U"]))"#
@@ -619,12 +627,12 @@ fn poster_header_layout() {
         .unwrap();
     assert_xywh(rect_of(&l, img.0), 0.0, 0.0, 40.0, 30.0);
     // The title spans the space between the logos and the number, centred,
-    // mid-height.
+    // mid-height (the author line below would get the full width).
     assert_xywh(text_rect(&l, "T"), 45.0, 10.0, 130.0, 10.0);
     assert_eq!(text_node(&d, "T").1.align, Some(TextAlign::Center));
     approx(text_node(&d, "T").1.font_size.unwrap(), 8.0 * 3.33);
-    // The poster number in the top-right corner, bold.
-    assert_xywh(text_rect(&l, "N"), 180.0, 0.0, 20.0, 10.0);
+    // The poster number at the right end of the title row, bold.
+    assert_xywh(text_rect(&l, "N"), 180.0, 10.0, 20.0, 10.0);
     assert_eq!(text_node(&d, "N").1.font_weight, Some(700));
 
     // The rule under the header spans it.
@@ -704,9 +712,45 @@ fn poster_demo_example() {
     let d = figs_core::eval_script_in(&src, Some(&examples)).unwrap();
     let bars: Vec<_> = texts(&d)
         .into_iter()
-        .filter(|s| s.as_bytes()[0].is_ascii_digit() && s.contains(". "))
+        .filter(|s| s.starts_with(|c: char| c.is_ascii_digit()) && s.contains(". "))
         .collect();
     assert_eq!(bars.len(), 7, "{bars:?}");
     assert!(bars[6].starts_with("7. "));
     assert!(l.nodes[0].rect.h <= l.page.height_pt + 0.01);
+}
+
+#[test]
+fn components_take_rich_text() {
+    let d = raw(r#"page(30, 30, col([
+        section(markup("H_2O *uptake*"), [
+            subheading(markup("**Bold** head")),
+            bullets([markup("item *one*"), ["nested"]]),
+            table([[markup("**T**_m"), "b"], ["1", markup("x^2")]]),
+            ref(markup("A. Author *et al.*")),
+            note(markup("note **here**")),
+        ]),
+    ]))"#);
+    let all = texts(&d);
+    for want in [
+        "1. H2O uptake",
+        "■ Bold head",
+        "item one",
+        "nested",
+        "Tm",
+        "x2",
+        "A. Author et al.",
+        "note here",
+    ] {
+        assert!(all.iter().any(|s| s == want), "{want:?} in {all:?}");
+    }
+    let bar_title = d
+        .nodes
+        .values()
+        .find(|n| plain(n) == "1. H2O uptake")
+        .unwrap();
+    assert_eq!(bar_title.spans[0].text, "1. ");
+    assert!(bar_title
+        .spans
+        .iter()
+        .any(|s| s.script == Some(Script::Sub) && s.text == "2"));
 }

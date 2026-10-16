@@ -191,7 +191,7 @@ fn style_keys() {
         "fg", "plot_fg", "plot_bg", "page_bg",
         // posters
         "poster_size", "poster_bg", "poster_margin", "poster_gutter", "poster_row_gap",
-        "poster_title_size", "poster_title_font", "author_size", "sup_scale",
+        "poster_title_size", "poster_title_font", "author_size",
         "affiliation_position", "author_sep", "presenter_mark", "poster_number_size",
         "poster_logo_height", "poster_header_rule", "poster_header_rule_width",
         "section_label_style", "section_title_size", "section_title_color",
@@ -1807,9 +1807,8 @@ fn poster_row_gap() { style_get("poster_row_gap", poster_gutter()) }
 fn poster_title_size() { style_get("poster_title_size", base_size() * 3.33) }
 fn poster_title_font() { style_get("poster_title_font", "") }
 
-// Author line (pt; 40 pt at 24 pt), affiliation numbers at `sup_scale()` of it.
+// Author line (pt; 40 pt at 24 pt); affiliation numbers are superscript spans.
 fn author_size() { style_get("author_size", base_size() * 1.665) }
-fn sup_scale() { style_get("sup_scale", 0.667) }
 
 // "before": the Japanese convention, "（Affil. A¹・Affil. B²）○Author¹・…" on one
 // line; "below": the authors, then a line of numbered affiliations.
@@ -1928,6 +1927,16 @@ fn table_header_fill() { style_get("table_header_fill", "") }
 
 // Is paint `p` (a colour string or a gradient) set, i.e. not ""?
 fn poster_has_paint(p) { type_of(p) != "string" || p != "" }
+
+// Is `x` rich text: an array holding spans (`[span(..), ..]`, `markup(..)`)?
+fn poster_is_rich(x) {
+    if type_of(x) != "array" { return false; }
+    for v in x { if type_of(v) == "Span" { return true; } }
+    false
+}
+
+// `prefix` (a string) before `s`, a string or spans.
+fn poster_prefix(prefix, s) { if type_of(s) == "string" { prefix + s } else { [span(prefix)] + s } }
 
 // The length in cm of a "12cm" / "12 cm" size, or () for anything else.
 fn poster_cm(who, w) {
@@ -2075,14 +2084,14 @@ fn section(number, title, content) {
 }
 
 fn section_make(n, title, content) {
-    if type_of(title) != "string" {
-        throw `section(): the title must be a string (got ${type_of(title)})`;
+    if type_of(title) != "string" && !poster_is_rich(title) {
+        throw `section(): the title must be a string or spans (got ${type_of(title)})`;
     }
     let label = if type_of(n) == "string" { n } else {
         let st = section_label_style();
         if st == "" { "" } else { panel_label(st, n - 1) }
     };
-    let s = if label == "" { title } else { `${label} ${title}` };
+    let s = if label == "" { title } else { poster_prefix(`${label} `, title) };
     let items = if type_of(content) == "array" { nodes(content) } else { [as_node(content)] };
     let body = col(items).spacing(section_gap()).stretch().pad(section_pad()).flex(1);
     col([section_bar(s), body]).stretch()
@@ -2120,7 +2129,7 @@ fn ref(s) {
 // A small heading inside a section: "■ " + `s` at `subheading_size()`.
 fn subheading(s) {
     let m = subheading_mark();
-    fg_text(if m == "" { s } else { `${m} ${s}` }).size(subheading_size())
+    fg_text(if m == "" { s } else { poster_prefix(`${m} `, s) }).size(subheading_size())
 }
 
 // A bulleted list with a hanging indent: each item (a string or a node) in a
@@ -2133,11 +2142,11 @@ fn bullets(items) {
     let ind = bullet_indent();
     let out = [];
     for x in items {
-        if type_of(x) == "array" {
+        if type_of(x) == "array" && !poster_is_rich(x) {
             out.push(row([rect().width(ind), bullets(x).flex(1)]).stretch());
             continue;
         }
-        let item = if type_of(x) == "string" { fg_text(x).size(bullet_size()) } else { x };
+        let item = if type_of(x) == "string" || poster_is_rich(x) { fg_text(x).size(bullet_size()) } else { x };
         let mark = fg_text(bullet_mark()).size(bullet_size()).width(ind);
         out.push(row([mark, item.flex(1)]).cross("start"));
     }
@@ -2224,8 +2233,8 @@ fn table(rows, opts) {
 // `table_header_fill()` (header) or `table_fill()`.
 fn table_cell(x, head, align) {
     let t = type_of(x);
-    let n = if t == "string" || t == "i64" || t == "f64" {
-        let s = fg_text(`${x}`).size(table_size()).align(align);
+    let n = if t == "string" || t == "i64" || t == "f64" || poster_is_rich(x) {
+        let s = fg_text(if poster_is_rich(x) { x } else { `${x}` }).size(table_size()).align(align);
         if head { s.bold() } else { s }
     } else { x };
     let c = col([n]).pad(table_pad()).main("center").stretch();
@@ -2293,15 +2302,13 @@ fn runs_push(runs, s, sup) {
     runs
 }
 
-// A line of text runs at `size` pt, centred: plain runs at full size,
-// superscripts at `sup_scale()` of it, top-aligned in a row so they ride up
-// like superscripts. (The one place to switch to rich-text spans.)
+// One centred text node of `runs` at `size` pt: plain runs as spans, the
+// affiliation numbers as superscript spans (the core script size and
+// shift), so the line wraps and breaks like any text.
 fn runs_line(runs, size) {
-    let parts = [];
-    for r in runs {
-        parts.push(fg_text(r[0]).size(if r[1] { size * sup_scale() } else { size }));
-    }
-    row(parts).cross("start").main("center")
+    let spans = [];
+    for r in runs { spans.push(if r[1] { span(r[0]).sup() } else { span(r[0]) }); }
+    fg_text(spans).size(size).center()
 }
 
 // The author line(s) of a poster header. `affiliation_position()` "before":
@@ -2335,8 +2342,11 @@ fn author_line(authors, affiliations) {
 //   affiliations  affiliation names, numbered from 1
 //   logos         images (or paths) left of the title, `poster_logo_height()` tall
 //   number        the poster number, top-right
-// The title and author line are centred (both ways) between the logos and the
-// number; a `poster_header_rule()` runs under it all.
+// Text (titles, items, cells) may be a string or rich-text spans
+// (`markup("…")`, `[span(..), ..]`) throughout the poster components.
+// The title (with the number at its right end) and the author line are
+// centred in the space right of the logos; a `poster_header_rule()` runs
+// under it all.
 fn poster_header(opts) {
     if type_of(opts) != "map" { throw `poster_header(): expected a map (got ${type_of(opts)})`; }
     for k in opts.keys() {
@@ -2344,15 +2354,24 @@ fn poster_header(opts) {
             throw `poster_header(): unknown key "${k}" (title, authors, affiliations, logos, number)`;
         }
     }
-    let main = [];
     let title = plot_opt(opts, "title", "");
-    if type_of(title) != "string" {
-        main.push(title);
-    } else if title != "" {
+    let tnode = if type_of(title) != "string" && !poster_is_rich(title) {
+        title
+    } else if type_of(title) != "string" || title != "" {
         let t = fg_text(title).size(poster_title_size()).bold().center();
         let f = poster_title_font();
-        main.push(if f == "" { t } else { t.font(f) });
+        if f == "" { t } else { t.font(f) }
+    } else { () };
+    // The number at the right end of the title row, so a long title wraps
+    // before it instead of running under it, while the author line below
+    // keeps the full width.
+    let num = plot_opt(opts, "number", "");
+    if num != "" {
+        let n = fg_text(num).size(poster_number_size()).bold();
+        let t = if type_of(tnode) == "()" { rect() } else { tnode };
+        tnode = row([t.flex(1), n]).cross("start").spacing(poster_gutter());
     }
+    let main = if type_of(tnode) == "()" { [] } else { [tnode] };
     let authors = plot_opt(opts, "authors", []);
     if type_of(authors) != "array" || authors.len() > 0 {
         main.push(author_line(authors, plot_opt(opts, "affiliations", [])));
@@ -2363,10 +2382,6 @@ fn poster_header(opts) {
         parts.push(n.height(poster_logo_height()));
     }
     parts.push(col(main).main("center").stretch().spacing(author_size() * 0.008).flex(1));
-    // The number in its own column at the top right, so a long title wraps
-    // before it instead of running under it.
-    let num = plot_opt(opts, "number", "");
-    if num != "" { parts.push(col([fg_text(num).size(poster_number_size()).bold()])); }
     let head = row(parts).stretch().spacing(poster_gutter());
     let rule = poster_header_rule();
     if rule == "" { return head; }
