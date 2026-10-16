@@ -19,6 +19,8 @@ rhai = { version = "1.24", features = ["sync"], optional = true }
 ttf-parser = "0.25"
 # PDF backend: embeds/subsets fonts as real text, vector paths, images.
 krilla = { version = "0.8.2", default-features = false, features = ["raster-images"], optional = true }
+# File watching for watch mode / live reload (`watch` module).
+notify-debouncer-mini = { version = "0.7", optional = true }
 
 [features]
 default = ["script", "pdf"]
@@ -28,6 +30,10 @@ script = ["dep:rhai"]
 # The PDF backend (`render::pdf`, via krilla). The PNG and SVG backends are
 # always available (they add no heavy dependencies).
 pdf = ["dep:krilla"]
+# `watch::FileWatcher`: debounced watching of a document and its dependencies
+# (used by `figs watch` and the editor's live reload). Off by default.
+watch = ["dep:notify-debouncer-mini"]
 
 [dev-dependencies]
 roxmltree = "0.21.1"
+tempfile = "3"

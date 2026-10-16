@@ -4,15 +4,20 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Command-line front-end for figs: render a TOML layout to PNG/PDF."
+description = "Command-line front-end for figs: render a layout to PNG/PDF/SVG, once or on every change."
 
 [[bin]]
 name = "figs"
 path = "src/main.rs"
 
 [dependencies]
-figs-core = { path = "../figs-core", features = ["pdf"] }
+figs-core = { path = "../figs-core", features = ["pdf", "watch"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Clean exit from `figs watch` on Ctrl+C.
+ctrlc = "3"
+
+[dev-dependencies]
+tempfile = "3"

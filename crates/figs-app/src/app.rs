@@ -1,9 +1,12 @@
 //! The editor application: state, the live render bridge, and the top-level
 //! egui layout (menu bar, left rail, TOML source pane, canvas, status bar).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 
 use eframe::egui;
+use figs_core::deps::absolutize;
+use figs_core::watch::{same_path, FileWatcher, DEFAULT_DEBOUNCE};
 use figs_core::{layout, render_rgba, ComputedLayout, FontStore, RenderOptions};
 
 use crate::model;
@@ -65,6 +68,22 @@ pub struct FigsApp {
     pub script_error: Option<String>,
     /// Which tab the source pane shows (Script or TOML).
     pub source_tab: SourceTab,
+    /// The open file's contents as last loaded/saved: a disk event whose
+    /// contents equal this (e.g. our own save) is not an external change.
+    pub disk_text: Option<String>,
+    /// Newer on-disk contents of the open file that arrived while the editor
+    /// had unsaved edits; drives the "changed on disk" banner.
+    pub disk_conflict: Option<String>,
+    /// Files the last script evaluation read (recorded by data built-ins).
+    pub data_files: Vec<PathBuf>,
+    /// Absolute dependencies (images, data) of the last resolved document.
+    pub deps: Vec<PathBuf>,
+    /// Watches the open file and `deps`; `None` if the OS watcher failed.
+    watcher: Option<FileWatcher>,
+    /// The set last handed to `watcher` (to skip redundant updates).
+    watched: Vec<PathBuf>,
+    /// Changed files reported by `watcher`.
+    disk_events: mpsc::Receiver<Vec<PathBuf>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -82,7 +101,8 @@ pub enum SourceTab {
 }
 
 impl FigsApp {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    /// Create the editor, opening `file` if given (else the default script).
+    pub fn new(cc: &eframe::CreationContext<'_>, file: Option<PathBuf>) -> Self {
         install_fonts(&cc.egui_ctx);
         let script_buffer = model::default_script();
         let model =
@@ -90,7 +110,18 @@ impl FigsApp {
         let toml_buffer = model::to_toml(&model).unwrap_or_default();
         let fonts = FontStore::new();
         let font_families = fonts.families();
-        FigsApp {
+
+        // Disk events arrive on the watcher's thread; wake the UI to handle them.
+        let (tx, disk_events) = mpsc::channel();
+        let ctx = cc.egui_ctx.clone();
+        let watcher = FileWatcher::new(DEFAULT_DEBOUNCE, move |paths| {
+            let _ = tx.send(paths);
+            ctx.request_repaint();
+        })
+        .map_err(|e| tracing::warn!("live reload disabled: {e}"))
+        .ok();
+
+        let mut app = FigsApp {
             model,
             path: None,
             dirty: false,
@@ -112,7 +143,18 @@ impl FigsApp {
             script_buffer,
             script_error: None,
             source_tab: SourceTab::Script,
+            disk_text: None,
+            disk_conflict: None,
+            data_files: Vec::new(),
+            deps: Vec::new(),
+            watcher,
+            watched: Vec::new(),
+            disk_events,
+        };
+        if let Some(path) = file {
+            app.open_path(&path);
         }
+        app
     }
 
     /// Mark the model dirty and schedule a preview rebuild + TOML re-sync.
@@ -125,9 +167,15 @@ impl FigsApp {
     /// Evaluate the Rhai script buffer into the model, refreshing the preview,
     /// the TOML pane and the inspector. On error the current model is kept.
     pub fn evaluate_script(&mut self) {
-        match figs_core::eval_script_in(&self.script_buffer, Some(&self.base_dir)) {
+        // Files the script reads (data built-ins such as `csv()`, resolved
+        // against the document's directory) become watched dependencies.
+        let (result, data_files) = figs_core::deps::capture(|| {
+            figs_core::eval_script_in(&self.script_buffer, Some(&self.base_dir))
+        });
+        match result {
             Ok(raw) => {
                 self.model = raw;
+                self.data_files = data_files;
                 self.script_error = None;
                 self.error = None;
                 self.dirty = true;
@@ -146,13 +194,17 @@ impl FigsApp {
         // Images without an aspect ratio take their file's natural aspect.
         self.fonts.set_image_base_dir(Some(self.base_dir.clone()));
         let raw = self.model.clone();
-        let doc = match figs_core::schema::resolve::resolve(raw) {
+        let mut doc = match figs_core::schema::resolve::resolve(raw) {
             Ok(d) => d,
             Err(e) => {
                 self.error = Some(e.to_string());
                 return;
             }
         };
+        // Watch what this document reads, so edits to its images refresh it.
+        doc.data_files = self.data_files.clone();
+        self.deps = doc.dependencies(&self.base_dir);
+        self.sync_watch();
         let mut computed = layout(&doc, &self.fonts);
 
         // Cap the preview resolution so big 300-dpi posters stay a sane texture
@@ -183,6 +235,8 @@ impl FigsApp {
         self.script_buffer = model::default_script();
         self.source_tab = SourceTab::Script;
         self.path = None;
+        self.disk_text = None;
+        self.disk_conflict = None;
         self.selected = Selection::Page;
         self.error = None;
         self.toml_error = None;
@@ -192,48 +246,155 @@ impl FigsApp {
     }
 
     pub fn open_dialog(&mut self) {
-        let Some(path) = rfd::FileDialog::new()
+        if let Some(path) = rfd::FileDialog::new()
             .add_filter("figs script", &["figs", "rhai"])
             .add_filter("TOML", &["toml"])
             .pick_file()
-        else {
-            return;
-        };
+        {
+            self.open_path(&path);
+        }
+    }
+
+    /// Open `path` (from the dialog or the command line). Relative image paths
+    /// then resolve against the file's directory, and the file is watched.
+    pub fn open_path(&mut self, path: &Path) {
+        let path = absolutize(Path::new(""), path);
         let text = match std::fs::read_to_string(&path) {
             Ok(t) => t,
             Err(e) => {
-                self.error = Some(format!("open failed: {e}"));
+                self.error = Some(format!("open failed: `{}`: {e}", path.display()));
                 return;
             }
         };
-        self.base_dir = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+        if !is_script_path(&path) {
+            // Validate before replacing the current document.
+            if let Err(e) = figs_core::schema::parse::parse_str(&text) {
+                self.error = Some(format!("open failed: {e}"));
+                return;
+            }
+        }
+        self.base_dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
         self.selected = Selection::Page;
+        self.data_files.clear();
+        self.path = Some(path);
+        self.load_text(text);
+        self.sync_watch();
+    }
+
+    /// Load `text` as the open file's contents (fresh open or disk reload):
+    /// scripts go to the Script tab and are evaluated, TOML to the TOML tab.
+    /// The selection is kept when the node still exists.
+    fn load_text(&mut self, text: String) {
+        self.disk_text = Some(text.clone());
+        self.disk_conflict = None;
         self.toml_error = None;
         self.script_error = None;
-
-        let is_script = matches!(
-            path.extension().and_then(|e| e.to_str()),
-            Some("figs") | Some("rhai")
-        );
-        if is_script {
+        self.error = None;
+        if self.path.as_deref().is_some_and(is_script_path) {
             self.script_buffer = text;
             self.source_tab = SourceTab::Script;
-            self.path = Some(path);
             self.evaluate_script();
-            self.dirty = false; // freshly opened
         } else {
             match figs_core::schema::parse::parse_str(&text) {
                 Ok(doc) => {
                     self.model = doc;
                     self.source_tab = SourceTab::Toml;
-                    self.path = Some(path);
-                    self.dirty = false;
-                    self.error = None;
                     self.needs_rebuild = true;
                     self.regen_toml = true;
                 }
-                Err(e) => self.error = Some(format!("open failed: {e}")),
+                // Keep the last good model; show the broken text and its error.
+                Err(e) => {
+                    self.toml_buffer = text;
+                    self.toml_error = Some(e.to_string());
+                    self.source_tab = SourceTab::Toml;
+                }
             }
+        }
+        if let Selection::Node(id) = &self.selected {
+            if !self.model.nodes.contains_key(id) {
+                self.selected = Selection::Page;
+            }
+        }
+        self.dirty = false; // matches the disk
+    }
+
+    // ---- live reload -----------------------------------------------------
+
+    /// Point the watcher at the open file plus the current dependencies.
+    fn sync_watch(&mut self) {
+        let want: Vec<PathBuf> = self.path.iter().cloned().chain(self.deps.clone()).collect();
+        if want != self.watched {
+            if let Some(w) = self.watcher.as_mut() {
+                w.set_files(want.clone());
+            }
+            self.watched = want;
+        }
+    }
+
+    /// Handle files the watcher reported as changed: reload the open file (or
+    /// raise the conflict banner if there are unsaved edits), re-evaluate the
+    /// script when its data changed, and re-render when an image changed.
+    fn poll_disk(&mut self) {
+        let changed: Vec<PathBuf> = self.disk_events.try_iter().flatten().collect();
+        if changed.is_empty() {
+            return;
+        }
+        let is = |list: &[PathBuf], p: &Path| list.iter().any(|q| same_path(q, p));
+        let source_changed = self
+            .path
+            .as_deref()
+            .is_some_and(|src| changed.iter().any(|p| same_path(p, src)));
+        let data_changed = changed.iter().any(|p| is(&self.data_files_abs(), p));
+
+        if source_changed {
+            // A read can fail mid-save (rename in progress): the next event retries.
+            if let Some(text) = self
+                .path
+                .as_ref()
+                .and_then(|p| std::fs::read_to_string(p).ok())
+            {
+                if self.disk_text.as_ref() == Some(&text) {
+                    // Our own save, a touch, or a revert: nothing to reload.
+                    self.disk_conflict = None;
+                } else if self.disk_conflict.as_ref() != Some(&text) {
+                    if self.dirty {
+                        self.disk_conflict = Some(text);
+                    } else {
+                        self.load_text(text);
+                        return;
+                    }
+                }
+            }
+        }
+        if data_changed && self.path.as_deref().is_some_and(is_script_path) {
+            // Data is read at evaluation time; re-run without marking edits.
+            let dirty = self.dirty;
+            self.evaluate_script();
+            self.dirty = dirty;
+        }
+        // Images are read at render time (rebuild also drops cached aspects).
+        self.needs_rebuild = true;
+    }
+
+    fn data_files_abs(&self) -> Vec<PathBuf> {
+        self.data_files
+            .iter()
+            .map(|p| absolutize(&self.base_dir, p))
+            .collect()
+    }
+
+    /// "Reload": discard unsaved edits for the newer on-disk contents.
+    pub fn accept_disk_version(&mut self) {
+        if let Some(text) = self.disk_conflict.take() {
+            self.load_text(text);
+        }
+    }
+
+    /// "Keep mine": keep the edits (saving overwrites the disk version). Only a
+    /// further external change raises the banner again.
+    pub fn keep_my_version(&mut self) {
+        if let Some(text) = self.disk_conflict.take() {
+            self.disk_text = Some(text);
         }
     }
 
@@ -258,25 +419,33 @@ impl FigsApp {
             self.write_to(&path);
             self.base_dir = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
             self.path = Some(path);
+            // Relative image paths now resolve against the new folder.
+            self.needs_rebuild = true;
+            self.sync_watch();
         }
     }
 
     /// Write the document. `.figs`/`.rhai` saves the script source; anything else
     /// saves the lowered TOML document.
     fn write_to(&mut self, path: &std::path::Path) {
-        let is_script = matches!(
-            path.extension().and_then(|e| e.to_str()),
-            Some("figs") | Some("rhai")
-        );
-        let result = if is_script {
-            std::fs::write(path, &self.script_buffer).map_err(|e| e.to_string())
+        let text = if is_script_path(path) {
+            Ok(self.script_buffer.clone())
         } else {
-            model::to_toml(&self.model)
-                .map_err(|e| e.to_string())
-                .and_then(|text| std::fs::write(path, text).map_err(|e| e.to_string()))
+            model::to_toml(&self.model).map_err(|e| e.to_string())
         };
+        let result = text.and_then(|text| {
+            std::fs::write(path, &text)
+                .map(|()| text)
+                .map_err(|e| e.to_string())
+        });
         match result {
-            Ok(()) => self.dirty = false,
+            Ok(text) => {
+                self.dirty = false;
+                // Our own write must not look like an external change; saving
+                // also resolves a pending conflict in favor of the editor.
+                self.disk_text = Some(text);
+                self.disk_conflict = None;
+            }
             Err(e) => self.error = Some(format!("save failed: {e}")),
         }
     }
@@ -420,6 +589,51 @@ impl FigsApp {
             });
     }
 
+    /// Non-modal notice under the menu bar when the open file changed on disk
+    /// while the editor has unsaved edits.
+    fn disk_banner(&mut self, ctx: &egui::Context) {
+        if self.disk_conflict.is_none() {
+            return;
+        }
+        let p = self.theme.palette();
+        // The accent tint, composited over the bar color (panels need an opaque
+        // fill: the translucent tint alone would show the clear color).
+        let a = 1.0 - p.acc_soft.a() as f32 / 255.0;
+        let ch = |top: u8, base: u8| (top as f32 + base as f32 * a).round().min(255.0) as u8;
+        let fill = egui::Color32::from_rgb(
+            ch(p.acc_soft.r(), p.bar.r()),
+            ch(p.acc_soft.g(), p.bar.g()),
+            ch(p.acc_soft.b(), p.bar.b()),
+        );
+        egui::TopBottomPanel::top("disk_banner")
+            .frame(
+                egui::Frame::none()
+                    .fill(fill)
+                    .inner_margin(egui::Margin::symmetric(12.0, 5.0)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.colored_label(p.acc, "\u{21bb}");
+                    ui.colored_label(p.tx, "File changed on disk");
+                    ui.colored_label(p.dim, "\u{2014} you have unsaved edits.");
+                    if ui
+                        .button("Reload")
+                        .on_hover_text("Discard your edits and load the file from disk")
+                        .clicked()
+                    {
+                        self.accept_disk_version();
+                    }
+                    if ui
+                        .button("Keep mine")
+                        .on_hover_text("Keep your edits; saving overwrites the file")
+                        .clicked()
+                    {
+                        self.keep_my_version();
+                    }
+                });
+            });
+    }
+
     fn status_bar(&mut self, ctx: &egui::Context) {
         let p = self.theme.palette();
         egui::TopBottomPanel::bottom("status")
@@ -476,12 +690,14 @@ impl FigsApp {
 impl eframe::App for FigsApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.theme.apply(ctx);
+        self.poll_disk();
         if self.needs_rebuild {
             self.rebuild(ctx);
             self.needs_rebuild = false;
         }
 
         self.menu_bar(ctx);
+        self.disk_banner(ctx);
         self.status_bar(ctx);
         crate::panels::left_rail(self, ctx);
         match self.source_tab {
@@ -490,6 +706,14 @@ impl eframe::App for FigsApp {
         }
         crate::panels::canvas(self, ctx);
     }
+}
+
+/// `.figs`/`.rhai` files hold the Rhai script; anything else is TOML.
+fn is_script_path(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|e| e.to_str()),
+        Some("figs") | Some("rhai")
+    )
 }
 
 pub fn unit_label(u: figs_core::units::Unit) -> &'static str {
