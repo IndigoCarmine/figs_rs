@@ -1,0 +1,50 @@
+// Plots on a dark poster: `style("poster-dark")` switches every plot colour
+// (axes, ticks, labels, legend text) to white, series to `dark_palette()`
+// (contrast >= 6:1 on navy) and the page to dark navy (`page_bg()`), at
+// poster text sizes. Data markers are hollow (`open: true`) under fit lines of
+// the same colour (`color: 0` = palette colour 0), the legend is coloured
+// text only, and the spectrum is annotated in data coordinates
+// (`plot_text` / `plot_arrow`). Synthetic data (sigmoids, gaussian bands).
+// Figure text a notch under the poster body (24 pt): 16 pt reads from ~1.5 m.
+style("poster-dark", #{ base_size: 16, plot_frame: "box", tick_direction: "in", minor_ticks: 2 });
+
+let h = csv("data/heating.csv");        // measured: T, a10, a100
+let f = csv("data/heating_fit.csv");    // fits on a fine grid
+let uv = csv("data/uvvis.csv");         // wl, a110, a20
+
+let dots = #{ open: true, size: marker_size() * 0.7 };   // hollow, a bit smaller
+let heating = plot(#{
+    title: "加熱曲線", xlabel: "Temperature [°C]", ylabel: "会合度",
+    x: [20, 100], y: [-0.04, 1.1], yticks: [0, 0.25, 0.5, 0.75, 1], legend: "text",
+}, [
+    scatter(h.T, h.a10, dots + #{ color: 0, label: "10 μM" }),
+    line_plot(f.T, f.f10, #{ color: 0 }),
+    scatter(h.T, h.a100, dots + #{ color: 1, label: "100 μM" }),
+    line_plot(f.T, f.f100, #{ color: 1 }),
+]);
+
+// Thermodynamic values beside the plot, the entropy term highlighted.
+let thermo = col([
+    body("ΔH = −92 kJ/mol"),
+    row([body("ΔS = "), body("−215").color(palette_color(5)), body(" J/(mol·K)")]),
+    body("ΔG(300 K) = −27.5 kJ/mol"),
+]).main("center").spacing(0.15);
+
+let hot = "#ff3b30";     // 110 °C
+let cold = "#2ea8ff";    // 20 °C
+let thick = #{ width: series_width() * 1.6 };
+let spectrum = plot(#{ title: "VT-UV/Vis", xlabel: "wavelength [nm]", ylabel: "absorbance",
+                       x: [250, 410], y: [-0.2, 2.2], xticks: [250, 300, 350, 400] }, [
+    line_plot(uv.wl, uv.a110, thick + #{ color: hot }),
+    line_plot(uv.wl, uv.a20, thick + #{ color: cold }),
+    plot_text(318, 1.22, "110 °C", #{ color: hot, bold: true }),
+    plot_text(385, 0.42, "20 °C", #{ color: cold, bold: true }),
+    plot_arrow(271, 1.25, 275, 0.82),       // band at 272 nm drops on cooling
+    plot_arrow(322, 0.84, 331, 0.66),       // and the 325 nm band shifts
+    plot_arrow(366, 0.1, 366, 0.55),        // tail rises
+]);
+
+page(42, "auto", grid(2, panels("1", [
+    row([heating.flex(1), thermo]).spacing(gap()).cross("center"),
+    spectrum,
+])).pad(1.0)).unit("cm").background(page_bg())

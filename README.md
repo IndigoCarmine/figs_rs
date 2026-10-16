@@ -550,7 +550,7 @@ Components (lengths in cm, font sizes in pt):
 | Function | Result |
 |---|---|
 | `style(preset)` / `style(map)` / `style(preset, map)` | Switch a bundle of defaults in one line: `style("nature");` at the top of the script. See [Style presets](#style-presets). |
-| `page(preset, root)` | Page of a named size, unit `cm`, in the style's `font_family()` when one is set. Journal presets `"single"` (`single_width()`, default 8.5 cm column) and `"double"` (`double_width()`, default 17.5 cm) fix only the width and get an [auto height](#auto-page-height) that fits the content. Paper presets `"a5"`, `"a4"`, `"a3"`, `"a0"` (poster), `"letter"` are fixed; append `-landscape` to swap their sides (journal presets have no landscape form). The core `page(w, h, root)` is unchanged. |
+| `page(preset, root)` | Page of a named size, unit `cm`, in the style's `font_family()` when one is set and on its `page_bg()` background when one is set. Journal presets `"single"` (`single_width()`, default 8.5 cm column) and `"double"` (`double_width()`, default 17.5 cm) fix only the width and get an [auto height](#auto-page-height) that fits the content. Paper presets `"a5"`, `"a4"`, `"a3"`, `"a0"` (poster), `"letter"` are fixed; append `-landscape` to swap their sides (journal presets have no landscape form). The core `page(w, h, root)` is unchanged. |
 | `paper_size(preset)` | `[w, h]` of a preset, to drop down to core: `let s = paper_size("double"); page(s[0], 5, root).unit("cm")`. For journal presets `h` is the string `"auto"`, so `page(s[0], s[1], root)` stays auto. |
 | `title(s)` / `caption(s)` / `label(s)` / `body(s)` | Semantic text: `title_size()` (1.5× base) bold centered / base centered / `label_size()` (1.25× base) bold / base. |
 | `halo(t, color, r)` | Text node `t` with a halo: the core [text outline](#text-outline) in `color`, reaching `r` cm past the glyphs (`.stroke(color).stroke_width(2 * r)`, round joins). Purely visual — lays out exactly like `t` alone, so it drops in anywhere; what panel labels and scale-bar labels use by default. |
@@ -604,6 +604,8 @@ fn scalebar_corner() { "bottom-left" } // (default "bottom-right")
 fn scalebar_inset() { 0.3 }         // cm from the corner (default label_inset())
 fn scalebar_halo() { "" }           // bar + label outline colour (default "#000000a0")
 fn scalebar_frac_inset() { 0.05 }   // side inset of scalebar(len, field, s), fraction of width (default 0.025)
+fn fg() { "#ffffff" }       // colour of semantic text and (via plot_fg()) plots (default "": renderer black, no colour set)
+fn page_bg() { "#0f1a2e" }  // background of page(preset, root) (default "": none)
 ```
 
 The label and caption defaults derive from `base_size()` / `gap()`, so
@@ -633,6 +635,15 @@ page("double", grid(2, panels([image("a.png"), image("b.png")])))
 | `"acs"` | Arial | 7 pt | `(a)`, 8 pt bold | 8.25 / 17.78 cm (3.25 / 7 in) |
 | `"rsc"` | Arial | 7 pt | `(a)`, 8 pt bold | 8.3 / 17.1 cm |
 | `"poster"` | renderer default sans | 24 pt (60 pt titles, 1 cm gaps) | `(a)`, 30 pt bold | 8.5 / 17.5 cm |
+| `"dark"` | renderer default sans | 8 pt, white (`fg`) | `(a)`, white with a black halo | 8.5 / 17.5 cm |
+| `"poster-dark"` | renderer default sans | `"poster"` sizes + the `"dark"` theme | `(a)`, 30 pt, white | 8.5 / 17.5 cm |
+
+The two dark presets are **themes**: `fg` white (semantic text, and through
+`plot_fg()` every axis, tick, label and legend of a plot), series colours from
+`dark_palette()`, a dark navy `page_bg` (`#0f1a2e`, applied by
+`page(preset, root)`; `.background(page_bg())` on a core page), black label
+halos and marker rings in the page colour. See [Plots](#plots) for the plot
+keys.
 
 The journal presets are **approximations** of each publisher's author
 guidelines (which change, and differ between titles) — sensible starting points,
@@ -773,23 +784,67 @@ page("double", grid(2, panels([
 | `plot(series)` / `plot(opts, series)` | Axes of whatever size the layout gives (default aspect `plot_aspect()` = 4:3, so plots get a height on auto pages), holding `series` (an array, or one series). |
 | `line_plot(xs, ys)` / `line_plot(xs, ys, opts)` | A line through the points; `NaN`/missing values break it. |
 | `scatter(xs, ys)` / `scatter(xs, ys, opts)` | Markers (`"o"` circles by default). |
-| `bars(xs, ys)` / `bars(xs, ys, opts)` | Bars from 0. `xs` are numbers or **category names** (a categorical axis); several bar series are grouped side by side. Error bars on bars are black. |
-| `errorbars(xs, ys, errs)` / `(…, opts)` | Error bars alone (y ± err, black by default). |
-| `legend(series)` | The legend as a standalone node (e.g. beside a row of plots). |
+| `bars(xs, ys)` / `bars(xs, ys, opts)` | Bars from 0. `xs` are numbers or **category names** (a categorical axis); several bar series are grouped side by side. Error bars on bars are in `plot_fg()` (black). |
+| `errorbars(xs, ys, errs)` / `(…, opts)` | Error bars alone (y ± err, in `plot_fg()` — black — by default). |
+| `plot_text(x, y, s)` / `(…, opts)` | Text at the **data point** (x, y), centred on it; goes among the series or in `marks`. Options: `color` (hex or palette index; default `plot_fg()`), `size` (pt, default `base_size()`), `bold`, `anchor: [ax, ay]` (which point of the text sits there, default `[0.5, 0.5]`). |
+| `plot_arrow(x1, y1, x2, y2)` / `(…, opts)` | An arrow between two data points, in `plot_fg()`, `series_width()` wide. Options: `color`, `width` (cm), `head` (`"end"`, `"start"`, `"both"`), `dash`. |
+| `palette_color(i)` | Colour `i` (0-based, wrapping) of `palette()` — to give markers and their fit line one colour; `#{ color: i }` does the same in series options. |
+| `legend(series)` / `legend(style, series)` | The legend as a standalone node (e.g. beside a row of plots), in `legend_style()` or `"swatch"` / `"text"`. |
 | `csv(path)` | A map of columns: numbers when every non-empty cell parses (an empty cell is `NaN`), else strings. Comma- or tab-separated (TSV when the header has tabs and no commas), RFC 4180 quotes, `#` comment lines skipped. Relative paths resolve against the script's directory (the CLI and editor pass it), like image `src`. |
 
 **Series options** (a map, or a string = `label`): `label` (legend entry),
-`color` (default: next `palette()` colour, in order), `width` (cm), `dash`,
-`marker` (`"o"`, `"s"`, `"^"`, `"d"`, `"none"`), `size` (marker diameter, cm),
-`yerr` (symmetric error per point).
+`color` (`"#rrggbb"`, or a palette index `0`, `1`, …; default: next
+`palette()` colour, in order), `width` (cm), `dash`, `marker` (`"o"`, `"s"`,
+`"^"`, `"d"`, `"none"`), `open` (`true`: hollow markers, outlined in the
+series colour `marker_stroke_width()` wide; default `marker_open()`), `size`
+(marker diameter, cm), `yerr` (symmetric error per point).
 
 **Plot options**: `x` / `y` ranges `[lo, hi]` (default: the data plus a 2 %
-margin — not past 0 — widened to whole ticks), `xlabel` / `ylabel`, `xscale` /
-`yscale` (`"linear"` or `"log"`), `xticks` / `yticks` (explicit values),
-`legend` (a corner, `"auto"`, or `""`/`false`), `frame` (`"open"`, `"box"`,
-`"none"`), and `marks`: extra nodes overlaid on the data area, placed with
-`.at(x, y)` in data units (log10 of the value on a log axis) — e.g.
-`text("p < 0.05").at(2, 0.9).anchor(0.5, 1)`.
+margin — not past 0 — widened to whole ticks), `xlabel` / `ylabel`, `title`
+(centred above the data area, `plot_title_size()`), `xscale` / `yscale`
+(`"linear"` or `"log"`), `xticks` / `yticks` (explicit values), `legend` (a
+corner, `"auto"`, `"text"` / `"swatch"` for that style at `legend_corner()`,
+`""`/`false` for none, or a map `#{ style, corner }` / `#{ style, at: [x, y],
+anchor: [ax, ay] }` placing the legend's top-left — or its `anchor` point — at
+a data point), `frame` (`"open"`, `"box"`, `"none"`), and `marks`: extra nodes
+overlaid on the data area, placed with `.at(x, y)` in data units (log10 of the
+value on a log axis) — e.g. `text("p < 0.05").at(2, 0.9).anchor(0.5, 1)` — and
+`plot_text` / `plot_arrow` annotations, which take plain data values (the plot
+applies log axes) and may equally go in the series array.
+
+**Fits over data, text legends, annotations, dark themes**
+([`examples/plot_dark.figs`](examples/plot_dark.figs), the heating-curve /
+spectrum style of a dark conference poster):
+
+```rhai
+style("poster-dark", #{ base_size: 16, plot_frame: "box", tick_direction: "in", minor_ticks: 2 });
+let h = csv("data/heating.csv");
+let f = csv("data/heating_fit.csv");
+
+plot(#{ title: "加熱曲線", xlabel: "Temperature [°C]", ylabel: "会合度", legend: "text" }, [
+    scatter(h.T, h.a10, #{ color: 0, open: true, label: "10 μM" }),   // data: hollow markers
+    line_plot(f.T, f.f10, #{ color: 0 }),                            // its fit, same colour
+    scatter(h.T, h.a100, #{ color: 1, open: true, label: "100 μM" }),
+    line_plot(f.T, f.f100, #{ color: 1 }),
+    plot_text(30, 0.2, "MCH", #{ bold: true }),                       // at a data point
+    plot_arrow(60, 0.9, 70, 0.6),
+])
+```
+
+- **Theme.** No plot colour is hard-wired: axes, frame, ticks, tick and axis
+  labels, titles, swatch-legend text, uncoloured error bars and annotations
+  use `plot_fg()` (which follows `fg()`, black by default), series
+  `palette()`, marker rings `marker_ring()`, the panel fill `plot_bg()`. The
+  `"dark"` / `"poster-dark"` presets switch them together; `dark_palette()`
+  lifts the Okabe–Ito hues to at least 6:1 WCAG contrast on `#0f1a2e`
+  (legible as legend *text*) while keeping them apart under deuteranopia /
+  protanopia. The light default renders pixel-identically to before.
+- **Text legend.** `legend: "text"` (or `legend_style()` `"text"`) stacks the
+  labels alone, each in its series colour — the slide/poster convention — in a
+  corner or at `at: [x, y]`. The swatch legend stays the default.
+- **CJK.** Plot text sets no font of its own, so labels and titles use the
+  page font (`font_family()`) and whatever fallback the renderer applies:
+  `"会合度"` turned for the y label reads upwards like the Latin labels.
 
 Defaults are journal-style and overridable hooks: open L-shaped axes, outward
 ticks, labels at `base_size()`, the y label turned 90° (`.rotate(-90)`, reading
@@ -811,7 +866,19 @@ fn plot_aspect() { 1.0 }        // width / height of a plot panel; 0 = size it y
 fn plot_label_room() { 0 }      // band kept free at the top for a panel label, cm
 fn plot_pad() { 0 }             // clear space between the outermost labels and the plot's box, cm (default base_size() * 0.01)
 fn ylabel_rotated() { false }   // y label horizontal above the axis (default true: turned 90° left of the tick labels)
+fn tick_direction() { "in" }    // ticks into the data area (default "out")
+fn minor_ticks() { 2 }          // minor intervals per labelled step on linear axes (default 0: none)
+fn marker_open() { true }       // hollow markers by default (default false)
+fn marker_stroke_width() { 0.03 }  // hollow-marker outline, cm (default 1.25 × plot_line_width())
+fn marker_ring() { "" }         // ring around filled markers (default "#ffffff"; "" for none)
+fn legend_style() { "text" }    // "swatch" (default) / "text": coloured labels only
+fn plot_title_size() { 10 }     // pt, the `title` option (default base_size())
+fn plot_fg() { "#ffffff" }      // axes, ticks, labels, titles, legend text, annotations (default fg(), i.e. black)
+fn plot_bg() { "#1b2a44" }      // fill behind the whole plot panel (default "": transparent)
 ```
+
+Every plot hook reads its style key first, so all of them can also be set with
+`style(#{ … })` or a preset (`palette: dark_palette()`, `plot_frame: "box"`, …).
 
 How it maps data: the plot area is a core `stack` with
 `.viewbox(xlo, yhi, xhi, ylo)`; lines and bars are `path`s with the same
