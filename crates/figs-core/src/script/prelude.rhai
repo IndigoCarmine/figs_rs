@@ -25,6 +25,25 @@ fn gap() { 0.2 }
 // Panel label template used by `panels(items)`; see `panel_label`.
 fn label_style() { "(a)" }
 
+// Distance from the panel corner to the label (cm). Scales with the text so
+// the label never sits flush against the edge: 0.16 cm at the default 8 pt.
+fn label_inset() { base_size() * 0.02 }
+
+// Panel corner the label sits in: "top-left" (default), "top-right",
+// "bottom-left" or "bottom-right".
+fn label_corner() { "top-left" }
+
+// Fill colour of a box behind the label (e.g. "#ffffff" for readability over
+// dark images); "" (default) draws no box.
+fn label_background() { "" }
+
+// Padding between the label text and its background box (cm).
+fn label_pad() { base_size() * 0.01 }
+
+// Space between a panel and its caption in captioned panels (cm). Tighter than
+// `gap()` so a caption reads as belonging to the panel above it.
+fn caption_gap() { gap() * 0.5 }
+
 // ---------------------------------------------------------------------------
 // Semantic text
 // ---------------------------------------------------------------------------
@@ -133,17 +152,73 @@ fn panel_label(style, i) {
     style.sub_string(0, pos) + token + style.sub_string(pos + 1)
 }
 
-// Overlay label `s` at the top-left corner of `item`.
-fn labeled(item, s) { stack([as_node(item), label(s).at(0.0, 0.0)]) }
+// The label node: `label(s)`, boxed in `label_background()` when that is set
+// (a stack of a filling rect under the text, padded via the text's margin).
+fn label_tag(s) {
+    let t = label(s);
+    let bg = label_background();
+    if bg == "" { return t; }
+    stack([rect().fill(bg), t.at(0.0, 0.0).margin(label_pad())])
+}
+
+// Overlay label `s` on `item`, `label_inset()` in from its `label_corner()`.
+//
+// Stack offsets only measure from the top-left, so "top-left" pins the label
+// with `.at(inset, inset)`. The other corners put it in a column that fills the
+// stack (no offset, no size), padded by the inset and aligned to the corner
+// with main/cross "end" — plain core nodes either way.
+fn labeled(item, s) {
+    let tag = label_tag(s);
+    let inset = label_inset();
+    let corner = label_corner();
+    // [main, cross] alignment of the filling column, per corner.
+    let align = #{
+        "top-right": ["start", "end"],
+        "bottom-left": ["end", "start"],
+        "bottom-right": ["end", "end"],
+    };
+    let overlay = if corner == "top-left" {
+        tag.at(inset, inset)
+    } else if align.contains(corner) {
+        let a = align[corner];
+        col([tag]).pad(inset).main(a[0]).cross(a[1])
+    } else {
+        throw `label_corner(): unknown corner "${corner}" (top-left, top-right, bottom-left, bottom-right)`;
+    };
+    stack([as_node(item), overlay])
+}
+
+// `item` with caption `c` (a string becomes `caption(c)`) below it, `caption_gap()`
+// apart. The item takes the cell's spare height; the caption spans its width.
+fn captioned(item, c) {
+    let cap = if type_of(c) == "string" { caption(c) } else { c };
+    col([as_node(item).flex(1), cap]).spacing(caption_gap()).stretch()
+}
 
 // Label each item in order with `label_style()` ("(a)", "(b)", …).
 fn panels(items) { panels(label_style(), items) }
 
+// `panels(style, items)`, or `panels(items, captions)`: labeled + captioned.
 fn panels(style, items) {
+    if type_of(style) == "array" { return panels(label_style(), style, items); }
     let out = [];
     let i = 0;
     for x in items {
         out.push(labeled(x, panel_label(style, i)));
+        i += 1;
+    }
+    out
+}
+
+// Labeled panels, each with its caption below: `captioned(labeled(..), c)`.
+fn panels(style, items, captions) {
+    if items.len() != captions.len() {
+        throw `panels(): ${items.len()} items but ${captions.len()} captions`;
+    }
+    let out = [];
+    let i = 0;
+    for x in panels(style, items) {
+        out.push(captioned(x, captions[i]));
         i += 1;
     }
     out
