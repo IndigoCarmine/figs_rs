@@ -916,7 +916,12 @@ fn arrow_points(src: &str) -> Vec<(f32, f32)> {
     let id = find_id(&d, |n| n.kind == NodeKind::Arrow);
     let l = lay_fixed(src);
     match &l.nodes.iter().find(|n| n.id == id).unwrap().content {
-        PaintContent::Path(p) => p.points.iter().map(|p| (p.x, p.y)).collect(),
+        PaintContent::Path(p) => p
+            .segments
+            .iter()
+            .filter_map(|s| s.end())
+            .map(|p| (p.x, p.y))
+            .collect(),
         other => panic!("not a path: {other:?}"),
     }
 }
