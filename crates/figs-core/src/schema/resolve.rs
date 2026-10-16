@@ -78,6 +78,10 @@ pub struct Document {
     pub page: PageInfo,
     pub nodes: Vec<Node>,
     pub root: usize,
+    /// Files read while producing the document besides images (e.g. data a
+    /// script loaded), as recorded via [`crate::deps::record`]. Relative paths
+    /// are relative to the document's directory. See [`Document::dependencies`].
+    pub data_files: Vec<std::path::PathBuf>,
 }
 
 impl Document {
@@ -90,8 +94,11 @@ impl Document {
     /// Evaluate a Rhai script and resolve it in one step.
     #[cfg(feature = "script")]
     pub fn from_script(src: &str) -> Result<Document, crate::Error> {
-        let raw = crate::script::eval_script(src)?;
-        Ok(resolve(raw)?)
+        // Built-ins that read files record them; keep them as dependencies.
+        let (raw, data_files) = crate::deps::capture(|| crate::script::eval_script(src));
+        let mut doc = resolve(raw?)?;
+        doc.data_files = data_files;
+        Ok(doc)
     }
 
     pub fn node(&self, idx: usize) -> &Node {
@@ -258,7 +265,12 @@ pub fn resolve(raw: RawDocument) -> Result<Document, ResolveError> {
         font_family: raw.page.font_family.clone(),
     };
 
-    Ok(Document { page, nodes, root })
+    Ok(Document {
+        page,
+        nodes,
+        root,
+        data_files: Vec::new(),
+    })
 }
 
 fn convert_node(

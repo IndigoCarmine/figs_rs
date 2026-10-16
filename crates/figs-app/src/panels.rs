@@ -1354,11 +1354,12 @@ pub fn toml_pane(app: &mut FigsApp, ctx: &egui::Context) {
                 .inner;
 
             // Live parse: valid TOML drives the model; invalid keeps last good.
+            // Either way the edit is unsaved (live reload must not clobber it).
             if out.response.changed() {
+                app.dirty = true;
                 match figs_core::schema::parse::parse_str(&app.toml_buffer) {
                     Ok(raw) => {
                         app.model = raw;
-                        app.dirty = true;
                         app.needs_rebuild = true;
                         app.toml_error = None;
                     }
@@ -1505,13 +1506,20 @@ pub fn script_pane(app: &mut FigsApp, ctx: &egui::Context) {
             egui::ScrollArea::both()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    ui.add(
-                        egui::TextEdit::multiline(&mut app.script_buffer)
-                            .id(egui::Id::new("figs_script_editor"))
-                            .code_editor()
-                            .desired_width(f32::INFINITY)
-                            .desired_rows(30),
-                    );
+                    let edited = ui
+                        .add(
+                            egui::TextEdit::multiline(&mut app.script_buffer)
+                                .id(egui::Id::new("figs_script_editor"))
+                                .code_editor()
+                                .desired_width(f32::INFINITY)
+                                .desired_rows(30),
+                        )
+                        .changed();
+                    // Typing is an unsaved edit even before it is evaluated
+                    // (live reload must not clobber it).
+                    if edited {
+                        app.dirty = true;
+                    }
                 });
         });
 }
