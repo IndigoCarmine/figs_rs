@@ -4,7 +4,7 @@
 //! (parent before children, siblings in array order — so later stack children
 //! paint on top).
 
-use crate::geom::{Axis, CrossAxisAlign, Edges, MainAxisAlign, Point, Rect, Size};
+use crate::geom::{Axis, CrossAxisAlign, Edges, MainAxisAlign, Rect, Size};
 use crate::schema::{Common, NodeType, RectProps, TextProps};
 
 use super::computed::{ComputedNode, PaintContent, PathPaint, TextBox};
@@ -319,15 +319,14 @@ fn paint_content(kind: &NodeType, common: &Common, rect: Rect) -> PaintContent {
             line_height: *line_height,
         }),
         NodeType::Path(props) => {
-            // Box-relative points -> absolute page points (content-box origin).
+            // Box-relative segments -> absolute page points (content-box origin).
             let origin = rect.inset(common.padding);
             PaintContent::Path(PathPaint {
-                points: props
-                    .points
+                segments: props
+                    .segments
                     .iter()
-                    .map(|p| Point::new(origin.x + p.x, origin.y + p.y))
+                    .map(|s| s.translated(origin.x, origin.y))
                     .collect(),
-                closed: props.closed,
                 fill: props.fill,
                 stroke: props.stroke.clone(),
                 head: props.head,

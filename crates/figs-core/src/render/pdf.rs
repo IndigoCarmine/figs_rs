@@ -29,11 +29,11 @@ use krilla::surface::Surface;
 use krilla::text::{Font, Glyph, GlyphId};
 use krilla::Document;
 
-use crate::geom::{Color, ImageFit, LineCap, Rect, StrokeStyle};
+use crate::geom::{Color, ImageFit, LineCap, PathSegment, Rect, StrokeStyle};
 use crate::layout::{ComputedLayout, PageGeom, PathPaint, TextBox};
 use crate::text::FontStore;
 
-use super::geometry::{self, PathSeg};
+use super::geometry;
 use super::{paint, RenderOptions, Renderer};
 
 /// Errors from PDF rendering.
@@ -79,7 +79,7 @@ impl<'s, 'a> PdfRenderer<'s, 'a> {
     }
 
     /// Fill and/or stroke a shared-geometry outline.
-    fn draw_segs(&mut self, segs: &[PathSeg], fill: Option<Color>, stroke: Option<&StrokeStyle>) {
+    fn draw_segs(&mut self, segs: &[PathSegment], fill: Option<Color>, stroke: Option<&StrokeStyle>) {
         if fill.is_none() && stroke.is_none() {
             return; // krilla would default to a black fill
         }
@@ -184,14 +184,15 @@ fn plain_stroke(color: Color, width: f32) -> StrokeStyle {
 }
 
 /// Translate shared segments into a krilla path (same point space).
-fn k_path(segs: &[PathSeg]) -> Option<KPath> {
+fn k_path(segs: &[PathSegment]) -> Option<KPath> {
     let mut pb = PathBuilder::new();
     for seg in segs {
         match *seg {
-            PathSeg::MoveTo(p) => pb.move_to(p.x, p.y),
-            PathSeg::LineTo(p) => pb.line_to(p.x, p.y),
-            PathSeg::CubicTo(c1, c2, p) => pb.cubic_to(c1.x, c1.y, c2.x, c2.y, p.x, p.y),
-            PathSeg::Close => pb.close(),
+            PathSegment::MoveTo(p) => pb.move_to(p.x, p.y),
+            PathSegment::LineTo(p) => pb.line_to(p.x, p.y),
+            PathSegment::QuadTo(c, p) => pb.quad_to(c.x, c.y, p.x, p.y),
+            PathSegment::CubicTo(c1, c2, p) => pb.cubic_to(c1.x, c1.y, c2.x, c2.y, p.x, p.y),
+            PathSegment::Close => pb.close(),
         }
     }
     pb.finish()
@@ -353,19 +354,21 @@ impl Renderer for PdfRenderer<'_, '_> {
     }
 
     fn draw_path(&mut self, path: &PathPaint) {
-        if path.points.len() < 2 {
+        if path.segments.len() < 2 {
             return;
         }
         if let Some(fill) = path.fill {
-            self.draw_segs(&geometry::polyline(&path.points, path.closed), Some(fill), None);
+            self.draw_segs(&path.segments, Some(fill), None);
         }
         let Some(stroke) = &path.stroke else {
             return;
         };
-        let arrow = geometry::arrow_geometry(path);
-        self.draw_segs(&geometry::polyline(&arrow.shaft, path.closed), None, Some(stroke));
-        for tri in &arrow.heads {
-            self.draw_segs(&geometry::polyline(tri, true), Some(stroke.color), None);
+        // Shaft pulled back into the heads, then the heads filled in the
+        // stroke color (geometry shared with every backend).
+        let geo = path.stroke_geometry();
+        self.draw_segs(&geo.shaft, None, Some(stroke));
+        for tri in &geo.heads {
+            self.draw_segs(&geometry::polygon(tri), Some(stroke.color), None);
         }
     }
 

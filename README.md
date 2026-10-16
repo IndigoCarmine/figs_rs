@@ -64,8 +64,9 @@ You provide: hierarchy, style, content, and constraints (`flex`, `aspect_ratio`,
   `align`, `line_height` (multiple of font size).
 - **image**: `src`, `fit` (`contain`/`cover`/`fill`).
 - **rect**: `fill`, `stroke`, `stroke_width`, `corner_radius`.
-- **line** / **arrow** / **path**: `points`, `stroke`, `stroke_width`, `dash`,
-  `cap`, `head`, `head_size`; **path** adds `fill`, `closed`.
+- **line** / **arrow** / **path**: `points`, `segments` (curves), `stroke`,
+  `stroke_width`, `dash`, `cap`, `head`, `head_size`; **path** adds `fill`,
+  `closed`.
 - **ellipse**: `fill`, `stroke`, `stroke_width`, `dash`, `cap`.
 
 Lengths are in the page `unit`; `font_size` is always points. Internally
@@ -155,7 +156,7 @@ Four leaf nodes draw arrows, highlights and callouts:
 |---|---|
 | `line` | A stroke between exactly two `points`. |
 | `arrow` | A `line` with a filled arrowhead at the end (`head = "end"` by default). |
-| `path` | A polyline through two or more `points`; `closed = true` makes it a polygon. Segments are straight (no Béziers — generate dense points in a script for curves). |
+| `path` | A polyline through two or more `points`, optionally continued by curved [`segments`](#curves); `closed = true` makes it a polygon. |
 | `ellipse` | The ellipse inscribed in its box (a circle when the box is square). |
 
 ```toml
@@ -188,6 +189,70 @@ dash = [0.2, 0.1]             # on/off lengths; omit for a solid stroke
   on dashed strokes; closed paths have no heads.
 
 See [`examples/annotations.figs`](examples/annotations.figs).
+
+### Curves
+
+`points` is the straight-polyline shorthand. To add curves, list further
+`segments` that **continue from the last of `points`** (so a curve needs at least
+one point as its start). Each segment ends at `to`, with at most one curve key
+(SVG-path semantics):
+
+```toml
+[nodes.wave]
+type = "path"
+points = [[0, 0]]                                 # start point
+segments = [
+  { to = [2, 0] },                                # straight
+  { quad = [3, -1], to = [4, 0] },                # quadratic Bézier: one control point
+  { cubic = [[5, 1], [6, -1]], to = [7, 0] },     # cubic Bézier: two control points
+  { arc = 1, to = [9, 0] },                       # circular arc, radius 1
+  { arc = [2, 1], rotation = 30, large = true, sweep = "ccw", to = [9, 3] },
+]
+```
+
+- **Arcs** use SVG's endpoint form: `arc` is the radius (`r`, or `[rx, ry]` with
+  `rotation` in degrees for an ellipse); of the arcs of that size joining the two
+  points, `large = true` takes the one spanning more than 180° and `sweep` the
+  turning direction as seen on the page, `"cw"` (default) or `"ccw"`. A radius
+  too small to reach `to` is scaled up (so `arc = 0.001` is always a semicircle).
+  Arcs are converted to cubic Béziers at resolve time, so every renderer only
+  draws lines and Béziers.
+- **Validation.** `large`/`sweep`/`rotation` need `arc`; radii must be positive;
+  unknown keys are errors. Without `segments`, `line`/`arrow` take exactly two
+  points; with them, a `line`/`arrow` is still **one segment** — one point plus one
+  `segments` entry — so a curved arrow is `type = "arrow"`, `points = [[0, 0]]`,
+  `segments = [{ quad = [2, -1], to = [4, 0] }]`. A `path` takes any mix;
+  `closed` joins the end back to the first point with a straight line.
+- **Size.** The intrinsic size uses the exact extent of the curves (Bézier
+  extrema), not their control points.
+- **Arrowheads** point along the curve's tangent at the tip (from the last
+  distinct control point), and the shaft is shortened along the curve into the
+  head. Dashes follow the curve.
+
+In scripts, curve builders continue a `path`, each appending a segment from the
+current end (`line(…)`/`arrow(…)` already hold two points, so a curved arrow is
+`path([[x, y]]).quad(…).head("end")`, or the prelude's `curved_arrow`):
+
+```rhai
+path([[0, 0]])
+    .to(2, 0)                          // straight
+    .quad(3, -1, 4, 0)                 // control, end
+    .cubic(5, 1, 6, -1, 7, 0)          // control 1, control 2, end
+    .arc(1, 9, 0)                      // radius, end (small, clockwise)
+    .arc([2, 1], 9, 3, #{ large: true, sweep: "ccw", rotation: 30 })
+```
+
+The prelude adds sugar on top (positive `bend`/`depth` goes left of the direction
+of travel — upwards for a left-to-right chord):
+
+| Function | Result |
+|---|---|
+| `curve(x1, y1, x2, y2, bend)` | A quadratic `path` whose midpoint sits `bend` off the straight chord. |
+| `curved_arrow(x1, y1, x2, y2, bend)` | `curve(...)` with a head at the end. |
+| `brace(x1, y1, x2, y2, depth)` | A curly brace with its ends on the two points and its tip `depth` off the chord. |
+| `bracket(x1, y1, x2, y2, depth)` | A square bracket whose back is `depth` off the chord. |
+
+See [`examples/curves.figs`](examples/curves.figs).
 
 ### Equal spacing & edge-to-edge
 
@@ -269,6 +334,10 @@ setters:
   `.fill(hex)` (path/ellipse), `.dash([on, off, …])`, `.cap("butt"|"round"|"square")`,
   `.head("none"|"start"|"end"|"both")`, `.head_size(n)`, `.closed()` (path) — e.g.
   `stack([image("a.png"), arrow(1, 4, 3, 2).stroke("#e0635a")])`.
+- **curves** (continue a path from its last point): `.to(x, y)`,
+  `.quad(cx, cy, x, y)`, `.cubic(c1x, c1y, c2x, c2y, x, y)`, `.arc(r, x, y)` /
+  `.arc(r, x, y, #{ sweep, large, rotation })` (`r` a number or `[rx, ry]`) —
+  see [Curves](#curves).
 - **image**: `.fit("contain"|"cover"|"fill")`.
 - **page**: `.unit("cm"|…)`, `.background(hex)`, `.dpi(n)`, `.font(name)`.
 
@@ -318,6 +387,13 @@ Components (lengths in cm, font sizes in pt):
 | `panels(items, captions)` / `panels(style, items, captions)` | The same labeled panels, each with its caption below (`captioned`). `captions` must match `items` in length. |
 | `labeled(item, s)` / `panel_label(style, i)` | One labeled panel / the `i`-th (0-based) label string. |
 | `circle(r)` / `circle(cx, cy, r)` | A square `ellipse` of radius `r`; the 3-argument form is centered on (`cx`, `cy`) of the enclosing `stack` (via `.at`). |
+| `curve` / `curved_arrow` / `brace` / `bracket` `(x1, y1, x2, y2, bend_or_depth)` | Curved annotations built on the core curve builders — see [Curves](#curves). |
+| `annotate(item, marks)` | `stack([item, ..marks])`: overlays annotation nodes (an array, or one node) on a panel; coordinates inside are cm from the panel's top-left. Composes with labels: `panels([annotate(..), ..])`, `labeled(annotate(..), "(a)")`. |
+| `scalebar(len, s)` | A `len` cm bar (white, `scalebar_thickness()` thick) with label `s` centered above it (`""` for none), `scalebar_inset()` in from `scalebar_corner()` (default bottom-right). |
+| `scalebar(len, field, s)` | The same bar in image/physical units: `len` out of a field `field` wide (same unit), so exactly `len / field` of the panel width whatever the layout — `scalebar(5, 50, "5 μm")` for a 50 μm field, `scalebar(80, 1024, "1 μm")` for 80 px of a 1024 px image. |
+| `callout(tx, ty, x, y, s)` | The core `arrow(tx, ty, x, y)` in `accent()` with label `s` at its tail, beside it on the side away from the target and vertically centered on `ty`. |
+| `highlight(x, y, w, h)` / `spot(cx, cy, r)` | Dashed box with its top-left at (`x`, `y`) / dashed circle centered on (`cx`, `cy`), in `accent()` (a closed `path` / an `ellipse`; `.dash([])` makes them solid). |
+| `pin(node, corner)` / `pin(node, corner, inset)` | Any node pinned `inset` (default `label_inset()`) in from a corner of the enclosing stack — what `labeled` and `scalebar` use. |
 | `captioned(item, c)` | `item` above caption `c` (a string becomes `caption(c)`, a node is used as is), `caption_gap()` apart; the item takes the spare height. |
 | `nodes(items)` / `as_node(x)` | Bare-string sugar: a string becomes `body(s)`. Use `col(nodes([...]))` to get it in core containers. |
 
@@ -339,6 +415,15 @@ fn label_corner() { "top-right" }   // or "bottom-left" / "bottom-right" (defaul
 fn label_background() { "#ffffff" } // box behind the label (default "": none)
 fn label_pad() { 0.1 }      // cm between label text and its box (default base_size() * 0.01)
 fn caption_gap() { 0.15 }   // cm between a panel and its caption (default gap() / 2)
+fn accent() { "#ffd400" }   // callout / highlight / spot colour (default "#ff5a3c")
+fn annotation_width() { 0.05 }      // their stroke, cm (default base_size() * 0.005)
+fn annotation_dash() { [0.2, 0.1] } // highlight/spot dash, cm (default 3x / 2x the width)
+fn scalebar_color() { "#000000" }   // bar + label (default "#ffffff")
+fn scalebar_thickness() { 0.1 }     // cm (default base_size() * 0.01 = 0.08)
+fn scalebar_corner() { "bottom-left" } // (default "bottom-right")
+fn scalebar_inset() { 0.3 }         // cm from the corner (default label_inset())
+fn scalebar_halo() { "" }           // outline + label shadow colour (default "#000000a0")
+fn scalebar_frac_inset() { 0.05 }   // side inset of scalebar(len, field, s), fraction of width (default 0.025)
 ```
 
 The label and caption defaults derive from `base_size()` / `gap()`, so
@@ -365,6 +450,50 @@ page("double", grid(2, panels(
     ["As-grown film", "After annealing"],
 )))
 ```
+
+**Annotations.** `annotate(item, marks)` turns a panel into a core `stack` with
+the item at the bottom and each mark overlaid, so one line adds scale bars,
+callouts and highlights; wrap it in `panels`/`labeled` and the label goes on top
+([`examples/annotated_figure.figs`](examples/annotated_figure.figs)):
+
+```rhai
+fn label_background() { "#ffffff" }   // labels readable on dark micrographs
+
+page("double", grid(2, panels([
+    annotate(image("a.png"), [
+        scalebar(2, "500 nm"),                          // 2 cm bar, bottom-right
+        callout(3.3, 1.3, 4.6, 2.6, "grain boundary"),  // arrow from label to target
+        spot(5.2, 3.2, 0.7),                            // dashed circle
+    ]),
+    annotate(image("b.png"), [
+        scalebar(5, 50, "5 μm"),         // 5 μm of a 50 μm wide field
+        highlight(4.6, 1.2, 2.6, 2.0),   // dashed box
+    ]),
+])))
+```
+
+Every mark is ordinary core nodes (a `rect` bar and `text` in a pinned column,
+an `arrow` + `text`, a closed `path`, an `ellipse`), so core setters still chain
+— `spot(..).stroke("#00ff00")`, `highlight(..).dash([])`. The defaults are
+opinionated for micrographs: the scale bar is white (TEM/SEM/fluorescence
+images are mostly dark), with a thin translucent-black outline and a drop shadow
+under its label (`scalebar_halo()`) so it stays legible over bright regions
+without covering the image with a box; callouts, highlights and spots use a warm
+red-orange `accent()` that reads on both light and dark backgrounds, with a
+stroke tied to `base_size()`. Notes:
+
+- `scalebar(len, s)` takes `len` in cm. When you only know the image's field of
+  view, use `scalebar(len, field, s)`: the bar is laid out as flex shares of the
+  panel width, so it is exact however the layout sizes the panel — but only if
+  the image spans the whole panel width (its natural aspect, as on auto-height
+  pages; not letterboxed by `contain` in a fixed cell, nor cropped by `cover`).
+  Because that form is all fractions, its side inset is `scalebar_frac_inset()`
+  of the width rather than cm, and a label wider than the bar plus its insets
+  wraps — keep it short.
+- `callout` measures nothing: (`tx`, `ty`) is where the arrow starts, and the
+  label is placed beside that point (right-aligned to it when the target is to
+  the right, else left-aligned), centered on a box of about three font sizes, so
+  a label sitting right at the panel's bottom edge may drift.
 
 **Errors point at your script.** An error raised inside the framework is
 reported at *your* call into it, named after the function you called — never at
@@ -412,6 +541,22 @@ Modeled on Flutter's `BoxConstraints`/`RenderFlex`:
   stretched cross axis or a flex share is handed to the child during measure
   too, so `aspect_ratio` children report their real height (this is what sizes
   an auto-height page).
+- **images under loose constraints**: an image with neither side known (no
+  `width`/`height`, no stretch or flex share — e.g. inside a `cross("center")`
+  column) takes the largest box of its aspect that fits the space it is offered:
+  the full available width, or the full available height when that is the
+  tighter limit (like CSS `img { max-width: 100% }` / Flutter's `AspectRatio`).
+  The aspect is `aspect_ratio`, else the file's natural aspect, else 4:3. An
+  unbounded axis (auto page height) doesn't limit; it never yields an infinite
+  size. Several such images side by side in a `row` each claim the full width
+  and overflow — give them `flex` or a size.
+- **text boxes**: a text block is its stacked line boxes (`font_size ×
+  line_height` each, glyphs centred per CSS half-leading), grown at the top and
+  bottom when the font's ascent/descent is taller than the line box (e.g. Segoe
+  UI at the default 1.2), so accents and descenders never poke out and get
+  clipped at a page edge. Spacing between lines is unchanged. Glyphs may still
+  sit flush with the box edge — the box is the font's metrics, with no extra
+  padding; add `spacing`/`pad` for breathing room.
 
 ## Output formats
 

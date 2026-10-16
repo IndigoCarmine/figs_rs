@@ -21,11 +21,11 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::Path;
 
-use crate::geom::{Color, ImageFit, LineCap, Point, Rect, StrokeStyle};
+use crate::geom::{Color, ImageFit, LineCap, PathSegment, Point, Rect, StrokeStyle};
 use crate::layout::{ComputedLayout, PageGeom, PathPaint, TextBox};
 use crate::text::FontStore;
 
-use super::geometry::{self, PathSeg};
+use super::geometry;
 use super::{paint, RenderOptions, Renderer};
 
 type FaceId = cosmic_text::fontdb::ID;
@@ -202,7 +202,7 @@ impl<'a> SvgRenderer<'a> {
         self.body.push_str(&el);
     }
 
-    fn path_element(&mut self, segs: &[PathSeg], fill: Option<Color>, stroke: Option<&StrokeStyle>) {
+    fn path_element(&mut self, segs: &[PathSegment], fill: Option<Color>, stroke: Option<&StrokeStyle>) {
         if segs.is_empty() {
             return;
         }
@@ -243,7 +243,7 @@ fn push_paint(el: &mut String, fill: Option<Color>, stroke: Option<&StrokeStyle>
 }
 
 /// SVG path data for shared segments.
-fn path_d(segs: &[PathSeg]) -> String {
+fn path_d(segs: &[PathSegment]) -> String {
     let mut d = String::new();
     let pt = |d: &mut String, p: Point| {
         let _ = write!(d, "{} {}", num(p.x), num(p.y));
@@ -253,15 +253,21 @@ fn path_d(segs: &[PathSeg]) -> String {
             d.push(' ');
         }
         match *seg {
-            PathSeg::MoveTo(p) => {
+            PathSegment::MoveTo(p) => {
                 d.push('M');
                 pt(&mut d, p);
             }
-            PathSeg::LineTo(p) => {
+            PathSegment::LineTo(p) => {
                 d.push('L');
                 pt(&mut d, p);
             }
-            PathSeg::CubicTo(c1, c2, p) => {
+            PathSegment::QuadTo(c, p) => {
+                d.push('Q');
+                pt(&mut d, c);
+                d.push(' ');
+                pt(&mut d, p);
+            }
+            PathSegment::CubicTo(c1, c2, p) => {
                 d.push('C');
                 pt(&mut d, c1);
                 d.push(' ');
@@ -269,7 +275,7 @@ fn path_d(segs: &[PathSeg]) -> String {
                 d.push(' ');
                 pt(&mut d, p);
             }
-            PathSeg::Close => d.push('Z'),
+            PathSegment::Close => d.push('Z'),
         }
     }
     d
@@ -448,19 +454,21 @@ impl Renderer for SvgRenderer<'_> {
     }
 
     fn draw_path(&mut self, path: &PathPaint) {
-        if path.points.len() < 2 {
+        if path.segments.len() < 2 {
             return;
         }
         if let Some(fill) = path.fill {
-            self.path_element(&geometry::polyline(&path.points, path.closed), Some(fill), None);
+            self.path_element(&path.segments, Some(fill), None);
         }
         let Some(stroke) = &path.stroke else {
             return;
         };
-        let arrow = geometry::arrow_geometry(path);
-        self.path_element(&geometry::polyline(&arrow.shaft, path.closed), None, Some(stroke));
-        for tri in &arrow.heads {
-            self.path_element(&geometry::polyline(tri, true), Some(stroke.color), None);
+        // Shaft pulled back into the heads, then the heads filled in the
+        // stroke color (geometry shared with every backend).
+        let geo = path.stroke_geometry();
+        self.path_element(&geo.shaft, None, Some(stroke));
+        for tri in &geo.heads {
+            self.path_element(&geometry::polygon(tri), Some(stroke.color), None);
         }
     }
 

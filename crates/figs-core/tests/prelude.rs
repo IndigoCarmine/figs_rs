@@ -7,8 +7,8 @@
 
 #![cfg(feature = "script")]
 
-use figs_core::geom::{CrossAxisAlign, MainAxisAlign, Rect, Size, TextAlign};
-use figs_core::layout::ComputedLayout;
+use figs_core::geom::{Color, CrossAxisAlign, MainAxisAlign, Rect, Size, TextAlign};
+use figs_core::layout::{ComputedLayout, PaintContent};
 use figs_core::schema::{ImageProps, NodeKind, PageHeight, RawDocument, RawNode, TextProps};
 use figs_core::units::Unit;
 use figs_core::{eval_script, layout, Document, LeafMeasure, NullMeasurer};
@@ -714,4 +714,301 @@ fn core_page_unchanged() {
     assert_eq!(d.page.unit, Unit::default());
     approx(d.page.width, 10.0);
     approx(d.page.height.fixed().expect("fixed height"), 20.0);
+}
+
+// ---- annotations -------------------------------------------------------------
+
+/// Hooks that make annotation geometry exact on a pt page: inset 5, bar 4 pt
+/// thick (label gap = half of it = 2), no halo (the label is a bare text node).
+const PLAIN_BAR: &str = r#"
+    fn scalebar_inset() { 5 }
+    fn scalebar_thickness() { 4 }
+    fn scalebar_halo() { "" }
+"#;
+
+/// Id of the only node matching `pred`.
+fn find_id(d: &RawDocument, pred: impl Fn(&RawNode) -> bool) -> String {
+    let ids: Vec<&String> = d
+        .nodes
+        .iter()
+        .filter(|(_, n)| pred(n))
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(ids.len(), 1, "expected exactly one match, got {ids:?}");
+    ids[0].clone()
+}
+
+/// The scale bar: the only rect with a fill.
+fn bar_id(d: &RawDocument) -> String {
+    find_id(d, |n| n.kind == NodeKind::Rect && n.fill.is_some())
+}
+
+#[track_caller]
+fn assert_xywh(r: Rect, x: f32, y: f32, w: f32, h: f32) {
+    for (got, want) in [(r.x, x), (r.y, y), (r.w, w), (r.h, h)] {
+        approx(got, want);
+    }
+}
+
+fn hex(s: &str) -> Option<Color> {
+    Color::parse_hex(s).ok()
+}
+
+#[test]
+fn annotate_stacks_marks_over_item() {
+    let d = raw(
+        r#"page("single", annotate(image("a.png"), [spot(1, 1, 0.5), highlight(0, 0, 1, 1)]))"#,
+    );
+    assert_eq!(d.nodes["root"].kind, NodeKind::Stack);
+    let kinds: Vec<NodeKind> = children(&d, "root").iter().map(|(_, n)| n.kind).collect();
+    assert_eq!(kinds, [NodeKind::Image, NodeKind::Ellipse, NodeKind::Path]);
+
+    // A single mark needs no array; bare strings still become body text.
+    let d = raw(r#"page("single", annotate("plot", scalebar(1, "1 cm")))"#);
+    let kids = children(&d, "root");
+    assert_eq!(kids.len(), 2);
+    assert_eq!(kids[0].1.content.as_deref(), Some("plot"));
+    assert_eq!(kids[1].1.kind, NodeKind::Column);
+}
+
+#[test]
+fn annotate_composes_with_labels_and_panels() {
+    let d = raw(r#"page("double", grid(2, panels([
+            annotate(rect(), scalebar(1, "1 cm")),
+            annotate(rect(), spot(1, 1, 0.3)),
+        ])))"#);
+    let row = children(&d, children(&d, "root")[0].0);
+    for ((sid, s), want) in row.iter().zip(["(a)", "(b)"]) {
+        // labeled stack: [annotated stack, label]
+        assert_eq!(s.kind, NodeKind::Stack);
+        let kids = children(&d, sid);
+        assert_eq!(kids[0].1.kind, NodeKind::Stack);
+        assert_eq!(children(&d, kids[0].0)[0].1.kind, NodeKind::Rect);
+        assert_eq!(kids[1].1.content.as_deref(), Some(want));
+    }
+}
+
+#[test]
+fn scalebar_cm_bottom_right_layout() {
+    // 100 x 80 pt panel, 30 pt bar, label 20 x 10 centered above it, 2 apart.
+    let src =
+        format!(r#"{PLAIN_BAR} page(100, 80, annotate(rect(), scalebar(30, "1 um"))).unit("pt")"#);
+    let d = raw(&src);
+    let l = lay_fixed(&src);
+    assert_xywh(rect_of(&l, &bar_id(&d)), 65.0, 71.0, 30.0, 4.0);
+    assert_xywh(label_rect(&src, "1 um"), 70.0, 59.0, TEXT_W, TEXT_H);
+    // Default colour: white bar and label.
+    assert_eq!(d.nodes[&bar_id(&d)].fill, hex("#ffffff"));
+    assert_eq!(text_node(&d, "1 um").color, hex("#ffffff"));
+}
+
+#[test]
+fn scalebar_corner_and_no_label() {
+    let src = format!(
+        r#"{PLAIN_BAR} fn scalebar_corner() {{ "top-left" }}
+        page(100, 80, annotate(rect(), scalebar(30, "1 um"))).unit("pt")"#
+    );
+    let d = raw(&src);
+    assert_xywh(rect_of(&lay_fixed(&src), &bar_id(&d)), 5.0, 17.0, 30.0, 4.0);
+    assert_xywh(label_rect(&src, "1 um"), 10.0, 5.0, TEXT_W, TEXT_H);
+
+    // "" draws the bar alone, flush in the corner.
+    let src = format!(
+        r#"{PLAIN_BAR} fn scalebar_corner() {{ "bottom-left" }}
+        page(100, 80, annotate(rect(), scalebar(30, ""))).unit("pt")"#
+    );
+    let d = raw(&src);
+    assert!(d.nodes.values().all(|n| n.kind != NodeKind::Text));
+    assert_xywh(rect_of(&lay_fixed(&src), &bar_id(&d)), 5.0, 71.0, 30.0, 4.0);
+}
+
+#[test]
+fn scalebar_halo_defaults() {
+    // Default halo: an outlined bar and a label over a nudged-down shadow copy.
+    let d = raw(r#"page("double", annotate(rect(), scalebar(2, "5 um")))"#);
+    let bar = &d.nodes[&bar_id(&d)];
+    approx(bar.width.unwrap(), 2.0);
+    approx(bar.height.unwrap(), 0.08); // base_size() * 0.01
+    assert!(bar.stroke.is_some());
+    let texts: Vec<&RawNode> = d
+        .nodes
+        .values()
+        .filter(|n| n.content.as_deref() == Some("5 um"))
+        .collect();
+    assert_eq!(texts.len(), 2, "label + shadow");
+    assert!(texts
+        .iter()
+        .all(|t| t.font_weight == Some(700) && t.font_size == Some(8.0)));
+    let mut ys: Vec<f32> = texts.iter().map(|t| t.y.unwrap()).collect();
+    ys.sort_by(f32::total_cmp);
+    approx(ys[0], 0.0);
+    approx(ys[1], 0.02); // thickness / 4
+    assert!(
+        texts.iter().all(|t| t.x.is_none()),
+        "both span the label box"
+    );
+}
+
+#[test]
+fn scalebar_field_units_layout() {
+    // 10 of a 50-wide field = 1/5 of the panel; side inset 10% of the width.
+    let at = |w: u32, corner: &str| {
+        let src = format!(
+            r#"{PLAIN_BAR} fn scalebar_frac_inset() {{ 0.1 }}
+            fn scalebar_corner() {{ "{corner}" }}
+            page({w}, 80, annotate(rect(), scalebar(10, 50, "1 um"))).unit("pt")"#
+        );
+        let d = raw(&src);
+        (
+            rect_of(&lay_fixed(&src), &bar_id(&d)),
+            label_rect(&src, "1 um"),
+        )
+    };
+    let (bar, label) = at(100, "bottom-right");
+    assert_xywh(bar, 70.0, 71.0, 20.0, 4.0);
+    // The label cell is centered on the bar (60..100) and the text spans it.
+    assert_xywh(label, 60.0, 59.0, 40.0, TEXT_H);
+    approx(label.x + label.w / 2.0, bar.x + bar.w / 2.0);
+
+    // The bar stays exactly 1/5 of the panel whatever its width.
+    let (bar, _) = at(200, "bottom-right");
+    assert_xywh(bar, 140.0, 71.0, 40.0, 4.0);
+
+    let (bar, label) = at(100, "bottom-left");
+    assert_xywh(bar, 10.0, 71.0, 20.0, 4.0);
+    approx(label.x + label.w / 2.0, 20.0);
+
+    let (bar, label) = at(100, "top-right");
+    assert_xywh(bar, 70.0, 5.0 + TEXT_H + 2.0, 20.0, 4.0);
+    approx(label.y, 5.0);
+}
+
+#[test]
+fn scalebar_errors() {
+    let e = eval_script(r#"page("single", annotate(rect(), scalebar(60, 50, "x")))"#).unwrap_err();
+    assert!(
+        e.to_string().contains("scalebar: need 0 < len <= field"),
+        "{e}"
+    );
+    let e = eval_script(
+        r#"fn scalebar_corner() { "middle" }
+        page("single", annotate(rect(), scalebar(1, "x")))"#,
+    )
+    .unwrap_err();
+    assert!(e.to_string().contains("unknown corner \"middle\""), "{e}");
+    let e = eval_script(r#"page("single", annotate(rect(), pin(rect(), "centre")))"#).unwrap_err();
+    assert!(e.to_string().contains("pin: unknown corner"), "{e}");
+}
+
+#[test]
+fn pin_places_any_node_in_a_corner() {
+    let src = r#"page(100, 80, stack([rect(), pin(text("T"), "bottom-right", 5)])).unit("pt")"#;
+    assert_xywh(label_rect(src, "T"), 75.0, 65.0, TEXT_W, TEXT_H);
+    // Default inset: label_inset().
+    let d = raw(r#"fn label_inset() { 3 } page(1, 1, stack([pin(text("T"), "top-left")]))"#);
+    let t = text_node(&d, "T");
+    assert_eq!((t.x, t.y), (Some(3.0), Some(3.0)));
+}
+
+/// Paint points of the only arrow in `src`.
+fn arrow_points(src: &str) -> Vec<(f32, f32)> {
+    let d = raw(src);
+    let id = find_id(&d, |n| n.kind == NodeKind::Arrow);
+    let l = lay_fixed(src);
+    match &l.nodes.iter().find(|n| n.id == id).unwrap().content {
+        PaintContent::Path(p) => p
+            .segments
+            .iter()
+            .filter_map(|s| s.end())
+            .map(|p| (p.x, p.y))
+            .collect(),
+        other => panic!("not a path: {other:?}"),
+    }
+}
+
+#[test]
+fn callout_layout() {
+    // base_size 100 on a pt page: gap 1, a 10.6 tall box centering the label.
+    let at = |x: i32, y: i32| {
+        let src = format!(
+            r#"fn base_size() {{ 100 }}
+            page(100, 80, annotate(rect(), callout(50, 40, {x}, {y}, "t"))).unit("pt")"#
+        );
+        (label_rect(&src, "t"), arrow_points(&src))
+    };
+    // Target to the right: the label ends 1 left of the tail, centered on y = 40.
+    let (label, pts) = at(80, 20);
+    assert_xywh(label, 29.0, 35.0, TEXT_W, TEXT_H);
+    assert_eq!(pts, [(50.0, 40.0), (80.0, 20.0)]);
+    // Target to the left: the label starts 1 right of the tail.
+    let (label, pts) = at(10, 70);
+    assert_xywh(label, 51.0, 35.0, TEXT_W, TEXT_H);
+    assert_eq!(pts, [(50.0, 40.0), (10.0, 70.0)]);
+}
+
+#[test]
+fn callout_style_hooks() {
+    let d = raw(r#"page("single", annotate(rect(), callout(1, 1, 2, 2, "t")))"#);
+    let a = &d.nodes[&find_id(&d, |n| n.kind == NodeKind::Arrow)];
+    assert_eq!(a.stroke, hex("#ff5a3c")); // accent()
+    approx(a.stroke_width.unwrap(), 0.04); // base_size() * 0.005
+    let t = text_node(&d, "t");
+    assert_eq!(
+        (t.color, t.font_size, t.font_weight),
+        (hex("#ff5a3c"), Some(8.0), Some(700))
+    );
+
+    let d = raw(r##"
+        fn accent() { "#00ff00" }
+        fn annotation_width() { 0.1 }
+        page("single", annotate(rect(), [
+            callout(1, 1, 2, 2, "t"), spot(1, 1, 1), highlight(0, 0, 1, 1),
+        ]))
+        "##);
+    let marks: Vec<&RawNode> = d
+        .nodes
+        .values()
+        .filter(|n| matches!(n.kind, NodeKind::Arrow | NodeKind::Ellipse | NodeKind::Path))
+        .collect();
+    assert_eq!(marks.len(), 3);
+    for n in marks {
+        assert_eq!(n.stroke, hex("#00ff00"));
+        approx(n.stroke_width.unwrap(), 0.1);
+    }
+}
+
+#[test]
+fn highlight_and_spot() {
+    let src = r#"fn annotation_width() { 2 }
+        page(100, 80, annotate(rect(), [highlight(10, 20, 30, 15), spot(70, 40, 5)])).unit("pt")"#;
+    let d = raw(src);
+    let l = lay_fixed(src);
+    let hid = find_id(&d, |n| n.kind == NodeKind::Path);
+    let h = &d.nodes[&hid];
+    assert!(h.closed);
+    assert_eq!(
+        h.points,
+        [[0.0, 0.0], [30.0, 0.0], [30.0, 15.0], [0.0, 15.0]]
+    );
+    assert_eq!(h.dash, [6.0, 4.0]); // annotation_dash(): 3x / 2x the width
+    assert_eq!(h.fill, None);
+    assert_xywh(rect_of(&l, &hid), 10.0, 20.0, 30.0, 15.0);
+
+    let sid = find_id(&d, |n| n.kind == NodeKind::Ellipse);
+    assert_eq!(d.nodes[&sid].dash, [6.0, 4.0]);
+    assert_xywh(rect_of(&l, &sid), 65.0, 35.0, 10.0, 10.0);
+
+    // Core setters still chain: a solid highlight.
+    let d = raw(r#"page("single", annotate(rect(), highlight(0, 0, 1, 1).dash([])))"#);
+    assert!(d.nodes[&find_id(&d, |n| n.kind == NodeKind::Path)]
+        .dash
+        .is_empty());
+}
+
+#[test]
+fn annotated_figure_example() {
+    let src = include_str!("../../../examples/annotated_figure.figs");
+    let l = lay(src);
+    assert!(!l.nodes.is_empty());
+    assert!(l.nodes[0].rect.w <= l.page.width_pt + 0.01);
 }

@@ -335,3 +335,33 @@ fn all_examples_render_well_formed() {
     }
     assert!(count >= 5, "expected the bundled examples, found {count}");
 }
+
+#[test]
+fn curves_are_emitted_as_svg_curves() {
+    let svg = svg_of(
+        r##"
+        [page]
+        width = 100
+        height = 100
+        unit = "pt"
+        root = "root"
+        [nodes.root]
+        type = "stack"
+        children = ["p"]
+        [nodes.p]
+        type = "path"
+        points = [[0, 50]]
+        segments = [
+          { quad = [20, 0], to = [40, 50] },
+          { cubic = [[50, 100], [70, 0]], to = [80, 50] },
+        ]
+        stroke = "#000000"
+        "##,
+    );
+    let doc = roxmltree::Document::parse(&svg).unwrap();
+    let p = elements(&doc, "path")
+        .into_iter()
+        .find(|p| p.attribute("stroke") == Some("#000000"))
+        .expect("curve path");
+    assert_eq!(p.attribute("d"), Some("M0 50 Q20 0 40 50 C50 100 70 0 80 50"));
+}

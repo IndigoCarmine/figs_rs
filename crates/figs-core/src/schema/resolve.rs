@@ -13,11 +13,12 @@
 use std::collections::HashMap;
 
 use crate::geom::{
-    ArrowHead, Axis, Color, CrossAxisAlign, Edges, ImageFit, MainAxisAlign, Point,
-    StrokeStyle, TextAlign,
+    ArcSweep, ArrowHead, Axis, Color, CrossAxisAlign, Edges, ImageFit, MainAxisAlign,
+    PathSegment, Point, StrokeStyle, TextAlign,
 };
+use crate::path::arc_to_cubics;
 
-use super::parse::{NodeKind, RawDocument, RawNode};
+use super::parse::{NodeKind, RawDocument, RawNode, RawSegment};
 
 /// Default raster resolution for PNG output when `page.dpi` is unset.
 pub const DEFAULT_DPI: f32 = 300.0;
@@ -181,12 +182,15 @@ pub struct RectProps {
     pub corner_radius: f32,
 }
 
-/// A polyline/polygon (`line`, `arrow`, `path`). Points are in points, relative
-/// to the node's content-box origin; they are not scaled with the box.
+/// A stroked/filled outline (`line`, `arrow`, `path`). Coordinates are in
+/// points, relative to the node's content-box origin; they are not scaled with
+/// the box.
 #[derive(Debug, Clone)]
 pub struct PathProps {
-    pub points: Vec<Point>,
-    pub closed: bool,
+    /// `MoveTo` (first point), then one segment per further point/`segments`
+    /// entry — arcs already converted to cubics — and a trailing `Close` when
+    /// `closed`. See [`PathSegment`].
+    pub segments: Vec<PathSegment>,
     pub fill: Option<Color>,
     pub stroke: Option<StrokeStyle>,
     /// Ignored when `closed` or when there is no stroke.
@@ -362,16 +366,30 @@ fn convert_node(
                     field: "points",
                 });
             }
-            let n = raw.points.len();
-            if exact && n != 2 {
-                return Err(invalid("points", format!("{kind} needs exactly 2 points, got {n}")));
-            }
-            if n < 2 {
-                return Err(invalid("points", format!("{kind} needs at least 2 points, got {n}")));
+            let (np, ns) = (raw.points.len(), raw.segments.len());
+            if ns == 0 {
+                if exact && np != 2 {
+                    let reason = format!("{kind} needs exactly 2 points, got {np}");
+                    return Err(invalid("points", reason));
+                }
+                if np < 2 {
+                    let reason = format!("{kind} needs at least 2 points, got {np}");
+                    return Err(invalid("points", reason));
+                }
+            } else if exact && np + ns != 2 {
+                return Err(invalid(
+                    "segments",
+                    format!(
+                        "{kind} is a single segment: give 2 points, or 1 point and 1 segment \
+                         (got {np} points and {ns} segments)"
+                    ),
+                ));
             }
             if raw.points.iter().flatten().any(|v| !v.is_finite()) {
                 return Err(invalid("points", "coordinates must be finite numbers".into()));
             }
+            let segments = path_segments(&raw.points, &raw.segments, raw.closed, factor)
+                .map_err(|reason| invalid("segments", reason))?;
             // Line/arrow are pure strokes, so they default to a black one; a path
             // is stroked black only when it has neither fill nor stroke.
             let default_stroke = exact || raw.fill.is_none();
@@ -388,12 +406,7 @@ fn convert_node(
                 }
             };
             NodeType::Path(PathProps {
-                points: raw
-                    .points
-                    .iter()
-                    .map(|[x, y]| Point::new(x * factor, y * factor))
-                    .collect(),
-                closed: raw.closed,
+                segments,
                 fill: raw.fill,
                 stroke,
                 head: raw.head.unwrap_or(default_head),
@@ -411,6 +424,70 @@ fn convert_node(
         common,
         kind,
     })
+}
+
+/// Build the resolved segment list (points, scaled by `factor`) from `points`
+/// (straight polyline) followed by `segments`, closing it if asked. Arcs become
+/// cubics here so every backend only sees lines and Béziers. `Err` carries the
+/// reason, naming the 1-based segment at fault.
+fn path_segments(
+    points: &[[f32; 2]],
+    segments: &[RawSegment],
+    closed: bool,
+    factor: f32,
+) -> Result<Vec<PathSegment>, String> {
+    let pt = |[x, y]: [f32; 2]| Point::new(x * factor, y * factor);
+    let mut out = Vec::with_capacity(points.len() + segments.len() + 1);
+    let mut cur = pt(points[0]);
+    out.push(PathSegment::MoveTo(cur));
+    out.extend(points[1..].iter().map(|p| PathSegment::LineTo(pt(*p))));
+    if let Some(last) = points.last() {
+        cur = pt(*last);
+    }
+    for (i, seg) in segments.iter().enumerate() {
+        let bad = |why: &str| format!("segment {}: {why}", i + 1);
+        let finite = |v: &[f32]| v.iter().all(|x| x.is_finite());
+        let given = [seg.quad.is_some(), seg.cubic.is_some(), seg.arc.is_some()];
+        if given.iter().filter(|g| **g).count() > 1 {
+            return Err(bad("give at most one of `quad`, `cubic`, `arc`"));
+        }
+        if seg.arc.is_none() && (seg.large || seg.sweep.is_some() || seg.rotation.is_some()) {
+            return Err(bad("`large`, `sweep` and `rotation` only apply to an `arc`"));
+        }
+        if !finite(&seg.to) {
+            return Err(bad("coordinates must be finite numbers"));
+        }
+        let to = pt(seg.to);
+        if let Some(c) = seg.quad {
+            if !finite(&c) {
+                return Err(bad("coordinates must be finite numbers"));
+            }
+            out.push(PathSegment::QuadTo(pt(c), to));
+        } else if let Some([c1, c2]) = seg.cubic {
+            if !finite(&c1) || !finite(&c2) {
+                return Err(bad("coordinates must be finite numbers"));
+            }
+            out.push(PathSegment::CubicTo(pt(c1), pt(c2), to));
+        } else if let Some(r) = seg.arc {
+            let (rx, ry) = r.radii();
+            if !(rx.is_finite() && ry.is_finite() && rx > 0.0 && ry > 0.0) {
+                return Err(bad("arc radius must be a positive number"));
+            }
+            let rotation = seg.rotation.unwrap_or(0.0);
+            if !rotation.is_finite() {
+                return Err(bad("arc rotation must be a finite number"));
+            }
+            let cw = seg.sweep.unwrap_or_default() == ArcSweep::Cw;
+            out.extend(arc_to_cubics(cur, to, rx * factor, ry * factor, rotation, seg.large, cw));
+        } else {
+            out.push(PathSegment::LineTo(to));
+        }
+        cur = to;
+    }
+    if closed {
+        out.push(PathSegment::Close);
+    }
+    Ok(out)
 }
 
 /// The stroke of a vector shape: `stroke` (or black when `default_black` and

@@ -2,7 +2,7 @@
 //! validation, layout (intrinsic size from points, explicit size, absolute
 //! paint coordinates), Rhai lowering, and PNG rasterization.
 
-use figs_core::geom::{ArrowHead, Color, LineCap, Point, Rect};
+use figs_core::geom::{ArrowHead, Color, LineCap, PathSegment, Point, Rect};
 use figs_core::layout::{ComputedLayout, PaintContent, PathPaint};
 use figs_core::schema::{NodeType, PathProps};
 use figs_core::{layout, render_png, Document, NullMeasurer, RenderOptions};
@@ -84,7 +84,13 @@ fn resolve_defaults_and_unit_conversion() {
     assert_eq!(s.width, 1.0);
     assert_eq!(s.cap, LineCap::Butt);
     assert_eq!(l.head, ArrowHead::None);
-    assert_eq!(l.points, vec![Point::new(0.0, 0.0), Point::new(72.0, 36.0)]);
+    assert_eq!(
+        l.segments,
+        vec![
+            PathSegment::MoveTo(Point::new(0.0, 0.0)),
+            PathSegment::LineTo(Point::new(72.0, 36.0))
+        ]
+    );
 
     // arrow: head at the end, sized 5x the stroke; odd dash list repeated.
     let a = props(&d, "a");
@@ -149,8 +155,11 @@ fn intrinsic_size_comes_from_points() {
     assert_rect(node(&l, "ln").rect, 12.0, 7.0, 30.0, 20.0);
     let p = path_of(&l, "ln");
     assert_eq!(
-        p.points,
-        vec![Point::new(17.0, 7.0), Point::new(42.0, 27.0)]
+        p.segments,
+        vec![
+            PathSegment::MoveTo(Point::new(17.0, 7.0)),
+            PathSegment::LineTo(Point::new(42.0, 27.0))
+        ]
     );
     assert_eq!(p.head, ArrowHead::End);
 }
@@ -185,15 +194,15 @@ fn shapes_flow_in_a_column() {
         height = 5
         "#);
     assert_rect(node(&l, "p").rect, 0.0, 0.0, 42.0, 32.0);
-    assert_eq!(path_of(&l, "p").points[1], Point::new(41.0, 11.0));
-    assert!(path_of(&l, "p").closed);
+    assert_eq!(path_of(&l, "p").segments[1], PathSegment::LineTo(Point::new(41.0, 11.0)));
+    assert!(path_of(&l, "p").is_closed());
     assert_rect(node(&l, "e").rect, 0.0, 32.0, 50.0, 25.0);
     assert!(matches!(
         node(&l, "e").content,
         PaintContent::Ellipse { .. }
     ));
     assert_rect(node(&l, "l").rect, 0.0, 57.0, 60.0, 5.0);
-    assert_eq!(path_of(&l, "l").points[1], Point::new(10.0, 67.0));
+    assert_eq!(path_of(&l, "l").segments[1], PathSegment::LineTo(Point::new(10.0, 67.0)));
 }
 
 #[test]
@@ -212,7 +221,7 @@ fn unpositioned_shape_fills_stack_and_uses_stack_coordinates() {
         points = [[10, 20], [90, 70]]
         "#);
     assert_rect(node(&l, "ln").rect, 0.0, 0.0, 100.0, 80.0);
-    assert_eq!(path_of(&l, "ln").points[0], Point::new(10.0, 20.0));
+    assert_eq!(path_of(&l, "ln").segments[0], PathSegment::MoveTo(Point::new(10.0, 20.0)));
 }
 
 // ---- script ----------------------------------------------------------------

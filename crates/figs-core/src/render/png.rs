@@ -11,11 +11,11 @@ use tiny_skia::{
     Pixmap, PixmapPaint, PremultipliedColorU8, Rect as SkRect, Stroke, StrokeDash, Transform,
 };
 
-use crate::geom::{Color, ImageFit, LineCap, Rect, StrokeStyle};
+use crate::geom::{Color, ImageFit, LineCap, PathSegment, Point, Rect, StrokeStyle};
 use crate::layout::{ComputedLayout, PageGeom, PathPaint, TextBox};
 use crate::text::FontStore;
 
-use super::geometry::{self, PathSeg};
+use super::geometry;
 use super::{paint, RenderOptions, Renderer};
 
 /// Errors from raster rendering.
@@ -130,14 +130,17 @@ impl<'a> TinySkiaRenderer<'a> {
             .stroke_path(path, &paint, &sk_stroke, Transform::identity(), None);
     }
 
-    /// Build a pixel-space tiny-skia path from shared point-space segments.
-    fn sk_path(&self, segs: &[PathSeg]) -> Option<tiny_skia::Path> {
+    /// Build a pixel-space path from IR segments (points).
+    fn sk_path(&self, segments: &[PathSegment]) -> Option<tiny_skia::Path> {
         let mut pb = PathBuilder::new();
-        for seg in segs {
-            match *seg {
-                PathSeg::MoveTo(p) => pb.move_to(self.px(p.x), self.px(p.y)),
-                PathSeg::LineTo(p) => pb.line_to(self.px(p.x), self.px(p.y)),
-                PathSeg::CubicTo(c1, c2, p) => pb.cubic_to(
+        for s in segments {
+            match *s {
+                PathSegment::MoveTo(p) => pb.move_to(self.px(p.x), self.px(p.y)),
+                PathSegment::LineTo(p) => pb.line_to(self.px(p.x), self.px(p.y)),
+                PathSegment::QuadTo(c, p) => {
+                    pb.quad_to(self.px(c.x), self.px(c.y), self.px(p.x), self.px(p.y))
+                }
+                PathSegment::CubicTo(c1, c2, p) => pb.cubic_to(
                     self.px(c1.x),
                     self.px(c1.y),
                     self.px(c2.x),
@@ -145,9 +148,21 @@ impl<'a> TinySkiaRenderer<'a> {
                     self.px(p.x),
                     self.px(p.y),
                 ),
-                PathSeg::Close => pb.close(),
+                PathSegment::Close => pb.close(),
             }
         }
+        pb.finish()
+    }
+
+    /// Build a closed pixel-space polygon through `pts` (points).
+    fn polygon(&self, pts: &[Point]) -> Option<tiny_skia::Path> {
+        let (first, rest) = pts.split_first()?;
+        let mut pb = PathBuilder::new();
+        pb.move_to(self.px(first.x), self.px(first.y));
+        for p in rest {
+            pb.line_to(self.px(p.x), self.px(p.y));
+        }
+        pb.close();
         pb.finish()
     }
 
@@ -381,26 +396,25 @@ impl Renderer for TinySkiaRenderer<'_> {
     }
 
     fn draw_path(&mut self, path: &PathPaint) {
-        if path.points.len() < 2 {
+        if path.segments.len() < 2 {
             return;
         }
         if let Some(fill) = path.fill {
-            if let Some(p) = self.sk_path(&geometry::polyline(&path.points, path.closed)) {
+            if let Some(p) = self.sk_path(&path.segments) {
                 self.fill_shape(&p, fill);
             }
         }
         let Some(stroke) = &path.stroke else {
             return;
         };
-
-        // Stroke the shaft (pulled back into any arrowheads), then fill the
-        // heads in the stroke color. Shared with the vector backends.
-        let arrow = geometry::arrow_geometry(path);
-        if let Some(p) = self.sk_path(&geometry::polyline(&arrow.shaft, path.closed)) {
+        // Shaft pulled back into the heads (so no cap pokes past a tip), then
+        // the heads filled solid in the stroke color.
+        let geo = path.stroke_geometry();
+        if let Some(p) = self.sk_path(&geo.shaft) {
             self.stroke_shape(&p, stroke);
         }
-        for tri in arrow.heads {
-            if let Some(p) = self.sk_path(&geometry::polyline(&tri, true)) {
+        for tri in &geo.heads {
+            if let Some(p) = self.polygon(tri) {
                 self.fill_shape(&p, stroke.color);
             }
         }

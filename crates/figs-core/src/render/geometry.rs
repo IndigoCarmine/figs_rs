@@ -2,158 +2,80 @@
 //!
 //! Everything here works in points with a top-left origin, exactly like the
 //! [`ComputedLayout`](crate::layout::ComputedLayout) IR. Backends only translate
-//! the resulting [`PathSeg`] lists / rects into their own primitives, so
-//! arrowheads, rounded corners, ellipses, text alignment and image fitting are
-//! computed once and come out identical in every output format.
+//! the resulting [`PathSegment`] lists / rects into their own primitives, so
+//! rounded corners, ellipses, text alignment and image fitting are computed
+//! once and come out identical in every output format. (Path/arrowhead
+//! geometry lives in [`crate::path`], via [`PathPaint::stroke_geometry`].)
+//!
+//! [`PathPaint::stroke_geometry`]: crate::layout::PathPaint::stroke_geometry
 
 use std::path::{Path, PathBuf};
 
-use crate::geom::{Color, ImageFit, Point, Rect, TextAlign};
-use crate::layout::{PathPaint, TextBox};
+use crate::geom::{Color, ImageFit, PathSegment, Point, Rect, TextAlign};
+use crate::layout::TextBox;
 use crate::schema::TextProps;
-
-/// One segment of a vector outline. Coordinates are absolute points.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum PathSeg {
-    MoveTo(Point),
-    LineTo(Point),
-    /// Cubic Bézier: two control points, then the end point.
-    CubicTo(Point, Point, Point),
-    Close,
-}
 
 /// Cubic control-point factor for a quarter-circle approximation.
 pub const KAPPA: f32 = 0.552_284_8;
 
-/// Outline of a polyline/polygon through `pts`. This is the single place a
-/// point list becomes path segments, so richer segment kinds (curves) only
-/// need to be taught here.
-pub fn polyline(pts: &[Point], closed: bool) -> Vec<PathSeg> {
+/// Closed polygon through `pts` (e.g. an arrowhead triangle).
+pub fn polygon(pts: &[Point]) -> Vec<PathSegment> {
     let Some((first, rest)) = pts.split_first() else {
         return Vec::new();
     };
     let mut segs = Vec::with_capacity(pts.len() + 1);
-    segs.push(PathSeg::MoveTo(*first));
-    segs.extend(rest.iter().map(|p| PathSeg::LineTo(*p)));
-    if closed {
-        segs.push(PathSeg::Close);
-    }
+    segs.push(PathSegment::MoveTo(*first));
+    segs.extend(rest.iter().map(|p| PathSegment::LineTo(*p)));
+    segs.push(PathSegment::Close);
     segs
 }
 
 /// Outline of `r` with corners rounded by `radius`, clamped to half the
 /// shorter side so corners never overlap. A non-positive radius gives a plain
 /// rectangle.
-pub fn rounded_rect(r: Rect, radius: f32) -> Vec<PathSeg> {
+pub fn rounded_rect(r: Rect, radius: f32) -> Vec<PathSegment> {
     let radius = radius.min(r.w / 2.0).min(r.h / 2.0);
     let (l, t, rt, b) = (r.x, r.y, r.x + r.w, r.y + r.h);
     let p = Point::new;
     if radius <= 0.0 {
         return vec![
-            PathSeg::MoveTo(p(l, t)),
-            PathSeg::LineTo(p(rt, t)),
-            PathSeg::LineTo(p(rt, b)),
-            PathSeg::LineTo(p(l, b)),
-            PathSeg::Close,
+            PathSegment::MoveTo(p(l, t)),
+            PathSegment::LineTo(p(rt, t)),
+            PathSegment::LineTo(p(rt, b)),
+            PathSegment::LineTo(p(l, b)),
+            PathSegment::Close,
         ];
     }
     let k = radius * KAPPA;
     vec![
-        PathSeg::MoveTo(p(l + radius, t)),
-        PathSeg::LineTo(p(rt - radius, t)),
-        PathSeg::CubicTo(p(rt - radius + k, t), p(rt, t + radius - k), p(rt, t + radius)),
-        PathSeg::LineTo(p(rt, b - radius)),
-        PathSeg::CubicTo(p(rt, b - radius + k), p(rt - radius + k, b), p(rt - radius, b)),
-        PathSeg::LineTo(p(l + radius, b)),
-        PathSeg::CubicTo(p(l + radius - k, b), p(l, b - radius + k), p(l, b - radius)),
-        PathSeg::LineTo(p(l, t + radius)),
-        PathSeg::CubicTo(p(l, t + radius - k), p(l + radius - k, t), p(l + radius, t)),
-        PathSeg::Close,
+        PathSegment::MoveTo(p(l + radius, t)),
+        PathSegment::LineTo(p(rt - radius, t)),
+        PathSegment::CubicTo(p(rt - radius + k, t), p(rt, t + radius - k), p(rt, t + radius)),
+        PathSegment::LineTo(p(rt, b - radius)),
+        PathSegment::CubicTo(p(rt, b - radius + k), p(rt - radius + k, b), p(rt - radius, b)),
+        PathSegment::LineTo(p(l + radius, b)),
+        PathSegment::CubicTo(p(l + radius - k, b), p(l, b - radius + k), p(l, b - radius)),
+        PathSegment::LineTo(p(l, t + radius)),
+        PathSegment::CubicTo(p(l, t + radius - k), p(l + radius - k, t), p(l + radius, t)),
+        PathSegment::Close,
     ]
 }
 
 /// Outline of the ellipse inscribed in `r` (four cubic quarter arcs, starting
 /// at the right-most point and running clockwise on screen).
-pub fn ellipse(r: Rect) -> Vec<PathSeg> {
+pub fn ellipse(r: Rect) -> Vec<PathSegment> {
     let (rx, ry) = (r.w / 2.0, r.h / 2.0);
     let (cx, cy) = (r.x + rx, r.y + ry);
     let (kx, ky) = (rx * KAPPA, ry * KAPPA);
     let p = Point::new;
     vec![
-        PathSeg::MoveTo(p(cx + rx, cy)),
-        PathSeg::CubicTo(p(cx + rx, cy + ky), p(cx + kx, cy + ry), p(cx, cy + ry)),
-        PathSeg::CubicTo(p(cx - kx, cy + ry), p(cx - rx, cy + ky), p(cx - rx, cy)),
-        PathSeg::CubicTo(p(cx - rx, cy - ky), p(cx - kx, cy - ry), p(cx, cy - ry)),
-        PathSeg::CubicTo(p(cx + kx, cy - ry), p(cx + rx, cy - ky), p(cx + rx, cy)),
-        PathSeg::Close,
+        PathSegment::MoveTo(p(cx + rx, cy)),
+        PathSegment::CubicTo(p(cx + rx, cy + ky), p(cx + kx, cy + ry), p(cx, cy + ry)),
+        PathSegment::CubicTo(p(cx - kx, cy + ry), p(cx - rx, cy + ky), p(cx - rx, cy)),
+        PathSegment::CubicTo(p(cx - rx, cy - ky), p(cx - kx, cy - ry), p(cx, cy - ry)),
+        PathSegment::CubicTo(p(cx + kx, cy - ry), p(cx + rx, cy - ky), p(cx + rx, cy)),
+        PathSegment::Close,
     ]
-}
-
-/// The stroked shaft of a path plus its filled arrowhead triangles.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ArrowGeometry {
-    /// Points to stroke (the path's points, with arrowed ends pulled back).
-    pub shaft: Vec<Point>,
-    /// Arrowhead triangles, filled with the stroke color.
-    pub heads: Vec<[Point; 3]>,
-}
-
-/// Split a path into its shaft and arrowheads. The shaft is pulled back into
-/// each head (by half its length) so a butt/square/round cap never pokes out
-/// past the tip. Closed paths and `head_size <= 0` have no heads.
-pub fn arrow_geometry(path: &PathPaint) -> ArrowGeometry {
-    let mut shaft = path.points.clone();
-    let mut heads = Vec::new();
-    if !path.closed && path.head_size > 0.0 && shaft.len() >= 2 {
-        let n = shaft.len();
-        if path.head.at_end() {
-            if let Some(h) = arrow_head(&path.points, n - 1, -1, path.head_size) {
-                shaft[n - 1] = h.shaft_end;
-                heads.push(h.triangle);
-            }
-        }
-        if path.head.at_start() {
-            if let Some(h) = arrow_head(&path.points, 0, 1, path.head_size) {
-                shaft[0] = h.shaft_end;
-                heads.push(h.triangle);
-            }
-        }
-    }
-    ArrowGeometry { shaft, heads }
-}
-
-/// An arrowhead triangle plus where the shaft should now end.
-struct Head {
-    triangle: [Point; 3],
-    shaft_end: Point,
-}
-
-/// Arrowhead of length `len` at `pts[tip]`, pointing away from the nearest
-/// distinct neighbour found by walking `step` (+1/-1). Its base is 0.8x `len`
-/// wide. `None` when every other point coincides with the tip.
-fn arrow_head(pts: &[Point], tip: usize, step: isize, len: f32) -> Option<Head> {
-    let t = pts[tip];
-    let mut i = tip as isize + step;
-    let (ux, uy, seg) = loop {
-        let p = *pts.get(usize::try_from(i).ok()?)?;
-        let (dx, dy) = (t.x - p.x, t.y - p.y);
-        let d = (dx * dx + dy * dy).sqrt();
-        if d > 1e-6 {
-            break (dx / d, dy / d, d);
-        }
-        i += step;
-    };
-    let base = Point::new(t.x - ux * len, t.y - uy * len);
-    let half = 0.4 * len;
-    let back = (0.5 * len).min(seg);
-    Some(Head {
-        triangle: [
-            t,
-            Point::new(base.x - uy * half, base.y + ux * half),
-            Point::new(base.x + uy * half, base.y - ux * half),
-        ],
-        shaft_end: Point::new(t.x - ux * back, t.y - uy * back),
-    })
 }
 
 /// Horizontal offset (points) to apply to a line of the given width inside a
@@ -220,47 +142,6 @@ pub const PLACEHOLDER_BORDER: f32 = 1.0;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geom::{ArrowHead, Color, LineCap, StrokeStyle};
-
-    fn arrow(points: Vec<Point>, head: ArrowHead) -> PathPaint {
-        PathPaint {
-            points,
-            closed: false,
-            fill: None,
-            stroke: Some(StrokeStyle {
-                color: Color::BLACK,
-                width: 1.0,
-                dash: vec![],
-                cap: LineCap::Butt,
-            }),
-            head,
-            head_size: 10.0,
-        }
-    }
-
-    #[test]
-    fn end_arrowhead_points_along_the_shaft() {
-        let g = arrow_geometry(&arrow(
-            vec![Point::new(0.0, 0.0), Point::new(100.0, 0.0)],
-            ArrowHead::End,
-        ));
-        assert_eq!(g.heads.len(), 1);
-        let [tip, a, b] = g.heads[0];
-        assert_eq!(tip, Point::new(100.0, 0.0));
-        assert_eq!(a, Point::new(90.0, 4.0));
-        assert_eq!(b, Point::new(90.0, -4.0));
-        assert_eq!(g.shaft[1], Point::new(95.0, 0.0));
-    }
-
-    #[test]
-    fn closed_paths_have_no_heads() {
-        let mut p = arrow(
-            vec![Point::new(0.0, 0.0), Point::new(10.0, 0.0), Point::new(0.0, 10.0)],
-            ArrowHead::Both,
-        );
-        p.closed = true;
-        assert!(arrow_geometry(&p).heads.is_empty());
-    }
 
     #[test]
     fn cover_overflows_and_contain_fits() {
@@ -274,6 +155,13 @@ mod tests {
     #[test]
     fn radius_is_clamped() {
         let segs = rounded_rect(Rect::new(0.0, 0.0, 10.0, 4.0), 100.0);
-        assert_eq!(segs[0], PathSeg::MoveTo(Point::new(2.0, 0.0)));
+        assert_eq!(segs[0], PathSegment::MoveTo(Point::new(2.0, 0.0)));
+    }
+
+    #[test]
+    fn polygon_is_closed() {
+        let segs = polygon(&[Point::new(0.0, 0.0), Point::new(1.0, 0.0), Point::new(0.0, 1.0)]);
+        assert_eq!(segs.len(), 4);
+        assert_eq!(segs[3], PathSegment::Close);
     }
 }

@@ -10,6 +10,7 @@
 
 pub mod geom;
 pub mod layout;
+pub mod path;
 pub mod render;
 pub mod schema;
 #[cfg(feature = "script")]
