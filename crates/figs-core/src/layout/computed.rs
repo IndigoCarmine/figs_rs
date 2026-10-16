@@ -284,6 +284,29 @@ pub struct TextBox {
     /// Glyph outline painted *behind* the fill (paint order stroke → fill, as
     /// SVG `paint-order="stroke"`), so the visible glyph shapes are unchanged
     /// and only the outer half of the stroke shows. It may overhang `rect` by
-    /// `width / 2`; layout ignores it.
+    /// `width / 2`; layout ignores it. Spans may override it (their
+    /// `stroke` / `stroke_width`); [`crate::text::ShapedText::strokes`] has
+    /// the resolved outlines.
     pub stroke: Option<StrokeStyle>,
+    /// Script metrics and synthetic bold/slant.
+    pub typography: crate::schema::TextTypography,
+}
+
+impl TextBox {
+    /// The widest outline any glyph may get (node or span stroke, points) —
+    /// how far painting may overhang the box beyond the glyphs themselves.
+    pub fn max_stroke_width(&self) -> f32 {
+        self.spans
+            .iter()
+            .filter_map(|s| s.style.stroke_width)
+            .chain(self.stroke.as_ref().map(|s| s.width))
+            .fold(
+                if self.spans.iter().any(|s| s.style.stroke.is_some()) {
+                    1.0
+                } else {
+                    0.0
+                },
+                f32::max,
+            )
+    }
 }

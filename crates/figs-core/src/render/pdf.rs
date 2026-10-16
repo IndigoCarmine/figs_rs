@@ -587,10 +587,10 @@ impl Renderer for PdfRenderer<'_, '_> {
         // Outline first (paint order stroke → fill), as a vector path along
         // the glyph outlines rather than stroked text: the text layer keeps
         // the string exactly once (copy/paste, search), and the fill below
-        // covers the inner half of the stroke.
-        if let Some(stroke) = &text.stroke {
-            let segs = self.outlines.text_outline(fonts, &shaped, rect, text.align);
-            self.draw_segs(&segs, None, Some(stroke));
+        // covers the inner half of the stroke. Synthetic bold is the same: a
+        // vector outline in the glyph colour under real (fill-only) text.
+        for (style, segs) in self.outlines.text_strokes(fonts, &shaped, rect, text.align) {
+            self.draw_segs(&segs, None, Some(&style));
         }
 
         self.draw_decorations(&shaped, rect, text.align, DecorationKind::Underline);
@@ -605,7 +605,7 @@ impl Renderer for PdfRenderer<'_, '_> {
                 a.font_id == b.font_id
                     && a.font_size.to_bits() == b.font_size.to_bits()
                     && a.run == b.run
-                    && a.synthetic_italic == b.synthetic_italic
+                    && a.skew.to_bits() == b.skew.to_bits()
             }) {
                 let first = &run[0];
                 let Some(font) = self.font(fonts, first.font_id) else {
@@ -631,8 +631,8 @@ impl Renderer for PdfRenderer<'_, '_> {
                 let origin_x = rect.x + align_off + first.x;
                 // Synthetic italic: shear about the run's (shifted) baseline;
                 // the glyphs stay real text.
-                let slant = first.synthetic_italic.then(|| {
-                    let t = geometry::italic_shear();
+                let slant = (first.skew != 0.0).then(|| {
+                    let t = first.skew;
                     let pivot = baseline - first.y_offset;
                     Transform::from_row(1.0, 0.0, -t, 1.0, t * pivot, 0.0)
                 });

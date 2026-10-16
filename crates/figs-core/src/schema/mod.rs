@@ -17,4 +17,7 @@ pub use resolve::{
     Common, Decoration, Document, EllipseProps, ImageProps, Node, NodeType, PageInfo, PathProps,
     RectProps, ResolveError, TextProps,
 };
-pub use span::{parse_family_list, FontStyle, RawSpan, Script, SpanStyle, TextSpan};
+pub use span::{
+    parse_family_list, FontSpec, FontStyle, FontSynthesis, RawSpan, Script, ScriptMetrics,
+    SpanStyle, TextSpan, TextTypography,
+};

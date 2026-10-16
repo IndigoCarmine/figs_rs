@@ -524,7 +524,9 @@ fn paint_content(kind: &NodeType, common: &Common, rect: Rect) -> PaintContent {
             strike,
             letter_spacing,
             spans,
+            typography,
         }) => PaintContent::Text(TextBox {
+            typography: *typography,
             content: content.clone(),
             spans: spans.clone(),
             font_style: *font_style,

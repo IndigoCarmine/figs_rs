@@ -14,8 +14,8 @@
 //! | `~~text~~` | line-through |
 //! | `_x`, `_{text}` | subscript (one character, or a braced group) |
 //! | `^x`, `^{text}` | superscript |
-//! | `{spec\|text}` | style group, `spec` = space-separated items: `#rrggbb` (colour), `bold`/`b`, `italic`/`i`, `upright`, `underline`/`u`, `strike`/`s`, `sup`, `sub`, `size=12` (pt), `weight=600`, `font=Arial` or `font='Times New Roman'`, `tracking=0.1` (em), `shift=0.3` (em), `color=#hex` |
-//! | `\c` | the character `c` literally (`\*`, `\_`, `\^`, `\{`, `\}`, `\~`, `\\`) |
+//! | `{spec\|text}` | style group, `spec` = space-separated items: `#rrggbb` (colour), `bold`/`b`, `italic`/`i`, `upright`, `underline`/`u`, `strike`/`s`, `sup`, `sub`, `size=12` (pt), `weight=600`, `font=Arial` or `font='Times New Roman'` (any font spec: `font='latin: Arial; cjk: Yu Gothic'`), per-script slots `latin=Arial` `cjk='MS Mincho'` `symbol=…` `fallback=…`, `tracking=0.1` (em), `shift=0.3` (em), `color=#hex`, `stroke=#hex` / `stroke_width=0.05` (glyph outline, page unit) |
+//! | `\c` | `\n` a line break, `\t` a tab; `\` + ASCII punctuation is that character literally (`\*`, `\_`, `\^`, `\{`, `\}`, `\|`, `\~`, `\\` …); any other escape is an error |
 //!
 //! Groups nest freely (`_{*n*}` is an italic subscript). `*`/`**`/`__`/`~~`
 //! follow CommonMark-like flanking: a delimiter opens only when followed by a
@@ -23,11 +23,11 @@
 //! same brace group; otherwise it is literal — so `5 * 3`, `A. Tanaka^{1,*}`
 //! and `*corresponding author` need no escaping. `_`/`^` followed by a space
 //! or the end are literal too. Unbalanced braces, a group without `|`, an
-//! unknown style item and a dangling `\` are errors naming the 1-based
-//! character column.
+//! unknown style item, an unknown escape and a dangling `\` are errors
+//! naming the 1-based character column.
 
 use crate::geom::Color;
-use crate::schema::span::{FontStyle, RawSpan, Script};
+use crate::schema::span::{parse_family_list, FontSpec, FontStyle, RawSpan, Script};
 
 /// A markup syntax error at a 1-based character column.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -51,6 +51,8 @@ struct State {
     font: Option<String>,
     tracking: Option<f32>,
     shift: Option<f32>,
+    stroke: Option<Color>,
+    stroke_width: Option<f32>,
 }
 
 impl State {
@@ -73,8 +75,33 @@ impl State {
             script: self.script,
             baseline_shift: self.shift,
             letter_spacing: self.tracking,
+            stroke: self.stroke,
+            stroke_width: self.stroke_width,
         }
     }
+}
+
+/// The character a `\c` escape stands for: `\n` a line break, `\t` a tab,
+/// any ASCII punctuation itself (`\*`, `\_`, `\{`, `\|`, `\\` …). `None` for
+/// anything else (an error: `\q` is most likely a typo, and a Rhai backtick
+/// string passes `\n` through unprocessed).
+fn escaped(c: char) -> Option<char> {
+    match c {
+        'n' => Some('\n'),
+        't' => Some('\t'),
+        c if c.is_ascii_punctuation() => Some(c),
+        _ => None,
+    }
+}
+
+fn bad_escape<T>(c: char, column: usize) -> Result<T, MarkupError> {
+    error(
+        format!(
+            "unknown escape `\\{c}` (escapes: `\\n` line break, `\\t` tab, `\\` + punctuation; \
+             write `\\\\` for a backslash)"
+        ),
+        column,
+    )
 }
 
 /// What ends the sequence being parsed.
@@ -159,7 +186,10 @@ impl Parser {
                     let Some(n) = self.peek(1) else {
                         return error("dangling `\\` at the end", col);
                     };
-                    buf.push(n);
+                    let Some(ch) = escaped(n) else {
+                        return bad_escape(n, col);
+                    };
+                    buf.push(ch);
                     self.i += 2;
                 }
                 '*' | '_' | '~' if self.closes(until, c) => {
@@ -201,8 +231,11 @@ impl Parser {
                             self.seq(&inner, Until::Brace(col))?;
                         }
                         Some('\\') if self.peek(2).is_some() => {
+                            let n = self.peek(2).expect("checked");
+                            let Some(ch) = escaped(n) else {
+                                return bad_escape(n, col + 1);
+                            };
                             self.flush(&mut buf, st);
-                            let ch = self.peek(2).expect("checked");
                             self.i += 3;
                             self.flush(&mut ch.to_string(), &inner);
                         }
@@ -379,9 +412,39 @@ fn apply_item(st: &mut State, item: &str) -> Result<(), String> {
                 }
                 st.weight = Some(w.round() as u16);
             }
-            "font" => st.font = Some(v.to_string()),
+            "font" => {
+                FontSpec::parse(v).map_err(|e| format!("`{item}`: {e}"))?;
+                st.font = Some(v.to_string());
+            }
+            "latin" | "cjk" | "symbol" | "fallback" => {
+                let mut slot = FontSpec {
+                    scoped: true,
+                    ..Default::default()
+                };
+                let names = parse_family_list(v);
+                match k {
+                    "latin" => slot.latin = Some(names),
+                    "cjk" => slot.cjk = Some(names),
+                    "symbol" => slot.symbol = Some(names),
+                    _ => slot.fallback = names,
+                }
+                let outer = st
+                    .font
+                    .as_deref()
+                    .map(FontSpec::parse_lenient)
+                    .unwrap_or_default();
+                st.font = Some(outer.overlay(&slot).to_string());
+            }
             "tracking" => st.tracking = Some(num(v)?),
             "shift" => st.shift = Some(num(v)?),
+            "stroke" => st.stroke = Some(color(v)?),
+            "stroke_width" => {
+                let w = num(v)?;
+                if w < 0.0 {
+                    return Err(format!("`{item}`: stroke_width must be non-negative"));
+                }
+                st.stroke_width = Some(w);
+            }
             _ => return Err(format!("unknown key `{k}`")),
         }
         return Ok(());
@@ -492,6 +555,44 @@ mod tests {
         assert_eq!(texts(&s), vec![r"*not* _ {x} \ a^b"]);
         let s = parse(r"x_\*").unwrap();
         assert_eq!(texts(&s), vec!["x", "*"]);
+        // `\n` / `\t` are a line break and a tab (a Rhai backtick string
+        // passes them through unprocessed); punctuation stays literal.
+        let s = parse(r"line one\nline\ttwo \| \# \~").unwrap();
+        assert_eq!(texts(&s), vec!["line one\nline\ttwo | # ~"]);
+        let s = parse(r"a^\n").unwrap();
+        assert_eq!(texts(&s), vec!["a", "\n"]);
+        // Anything else is a typo, reported where it is.
+        let e = parse(r"ab\q").unwrap_err();
+        assert_eq!(e.column, 3);
+        assert!(e.message.contains(r"unknown escape `\q`"), "{e}");
+        let e = parse(r"x_\z").unwrap_err();
+        assert_eq!(e.column, 3);
+        assert!(parse(r"\é").is_err());
+    }
+
+    #[test]
+    fn font_slots_and_strokes() {
+        let s = parse("{latin=Arial cjk='MS Mincho'|A字} {font='latin: Arial; cjk: Yu Gothic'|B}")
+            .unwrap();
+        assert_eq!(
+            s[0].font_family.as_deref(),
+            Some("latin: Arial; cjk: MS Mincho")
+        );
+        assert_eq!(
+            s[2].font_family.as_deref(),
+            Some("latin: Arial; cjk: Yu Gothic")
+        );
+        // A slot inside a plain-list group keeps the list as the fallback.
+        let s = parse("{font=Times|{cjk=X|y}}").unwrap();
+        assert_eq!(s[0].font_family.as_deref(), Some("cjk: X; fallback: Times"));
+        let e = parse("{font='latim: Arial'|x}").unwrap_err();
+        assert!(e.message.contains("unknown font slot"), "{e}");
+
+        let s = parse("{stroke=#ffffff stroke_width=0.05|halo} {stroke_width=0|off}").unwrap();
+        assert_eq!(s[0].stroke, Color::parse_hex("#ffffff").ok());
+        assert_eq!(s[0].stroke_width, Some(0.05));
+        assert_eq!(s[2].stroke_width, Some(0.0));
+        assert!(parse("{stroke_width=-1|x}").is_err());
     }
 
     #[test]

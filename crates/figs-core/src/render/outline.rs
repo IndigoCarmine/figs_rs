@@ -2,13 +2,14 @@
 //! cosmic-text shaped with).
 //!
 //! The SVG backend draws every glyph from these outlines; all three backends
-//! stroke a text node's `stroke` along them ([`OutlineCache::text_outline`]),
-//! so a text outline is the same geometry in PNG, PDF and SVG. Outlines are
-//! unhinted, in font units (y up), cached per (face, glyph).
+//! stroke text outlines (node and span `stroke`s) and synthetic bold along
+//! them ([`OutlineCache::text_strokes`]), so they are the same geometry in
+//! PNG, PDF and SVG. Outlines are unhinted, in font units (y up), cached per
+//! (face, glyph).
 
 use std::collections::HashMap;
 
-use crate::geom::{PathSegment, Point, Rect, TextAlign};
+use crate::geom::{Color, LineCap, LineJoin, PathSegment, Point, Rect, StrokeStyle, TextAlign};
 use crate::text::{FontStore, ShapedGlyph, ShapedText};
 
 use super::geometry;
@@ -82,20 +83,74 @@ impl OutlineCache {
         rect: Rect,
         align: TextAlign,
     ) -> Vec<PathSegment> {
+        self.outline_where(fonts, shaped, rect, align, |_| true)
+    }
+
+    /// Everything a text box strokes, in paint order, each as one path: the
+    /// glyph outlines (`stroke`s of the node and its spans, one path per
+    /// distinct [`ShapedText::strokes`] entry), then the synthetic-bold
+    /// outlines (one path per colour × width, round joins, in the glyphs'
+    /// own colour). Backends stroke these before filling the glyphs, so an
+    /// outline never covers a glyph and synthetic bold thickens it evenly.
+    pub fn text_strokes(
+        &mut self,
+        fonts: &FontStore,
+        shaped: &ShapedText,
+        rect: Rect,
+        align: TextAlign,
+    ) -> Vec<(StrokeStyle, Vec<PathSegment>)> {
+        let mut out = Vec::new();
+        for (k, style) in shaped.strokes.iter().enumerate() {
+            let segs =
+                self.outline_where(fonts, shaped, rect, align, |g| g.stroke == Some(k as u16));
+            if !segs.is_empty() {
+                out.push((style.clone(), segs));
+            }
+        }
+        let mut bolds: Vec<(Color, f32)> = Vec::new();
+        for g in shaped.lines.iter().flat_map(|l| &l.glyphs) {
+            if g.embolden > 0.0 && !bolds.contains(&(g.color, g.embolden)) {
+                bolds.push((g.color, g.embolden));
+            }
+        }
+        for (color, width) in bolds {
+            let segs = self.outline_where(fonts, shaped, rect, align, |g| {
+                g.color == color && g.embolden == width
+            });
+            if !segs.is_empty() {
+                let style = StrokeStyle {
+                    color,
+                    width,
+                    dash: Vec::new(),
+                    cap: LineCap::Butt,
+                    join: LineJoin::Round,
+                };
+                out.push((style, segs));
+            }
+        }
+        out
+    }
+
+    /// The outlines of the glyphs of `shaped` for which `keep` holds, placed
+    /// as in [`Self::text_outline`].
+    pub fn outline_where(
+        &mut self,
+        fonts: &FontStore,
+        shaped: &ShapedText,
+        rect: Rect,
+        align: TextAlign,
+        keep: impl Fn(&ShapedGlyph) -> bool,
+    ) -> Vec<PathSegment> {
         let mut out = Vec::new();
         for line in &shaped.lines {
             let align_off = geometry::align_offset(align, line.width, rect.w);
-            for g in &line.glyphs {
+            for g in line.glyphs.iter().filter(|g| keep(g)) {
                 let origin = glyph_origin(rect, align_off, line.baseline, g);
                 let Some(outline) = self.glyph(fonts, g.font_id, g.glyph_id) else {
                     continue;
                 };
                 let k = g.font_size / outline.units_per_em;
-                let shear = if g.synthetic_italic {
-                    geometry::italic_shear()
-                } else {
-                    0.0
-                };
+                let shear = g.skew;
                 let map =
                     |p: Point| Point::new(origin.x + (p.x + shear * p.y) * k, origin.y - p.y * k);
                 out.extend(outline.segments.iter().map(|s| match *s {

@@ -124,6 +124,7 @@ pub fn text_props(text: &TextBox) -> TextProps {
         strike: text.strike,
         letter_spacing: text.letter_spacing,
         spans: text.spans.clone(),
+        typography: text.typography,
     }
 }
 
@@ -154,9 +155,9 @@ pub fn decoration_rects(
         .collect()
 }
 
-/// `tan` of the synthetic-italic slant: a glyph point `h` above the baseline
-/// moves `h × italic_shear()` to the right (every backend uses this one value;
-/// swash's raster fake italic uses the same angle).
+/// `tan` of the default synthetic-italic slant (14°, swash's raster fake
+/// italic). Glyphs carry their own [`crate::text::ShapedGlyph::skew`], which
+/// differs when a page or node sets `synthetic_slant`.
 pub fn italic_shear() -> f32 {
     crate::schema::span::SYNTHETIC_ITALIC_DEG.to_radians().tan()
 }

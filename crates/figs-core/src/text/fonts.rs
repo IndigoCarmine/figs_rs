@@ -9,12 +9,20 @@
 //! ordered list authoritative**: each character goes to the first listed
 //! family that has a glyph for it, and only characters no listed family
 //! covers are left to cosmic-text's fallback (see the README, "Fonts").
+//!
+//! A per-script spec (`latin: Arial; cjk: Yu Gothic`, see
+//! [`crate::schema::FontSpec`]) turns that one list into one per script
+//! class ([`super::classify`]): each character walks [`chain`] for its slot.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use cosmic_text::fontdb::{self, Family, Stretch, Style};
 use cosmic_text::FontSystem;
+
+use crate::schema::FontSpec;
+
+use super::classify::Slot;
 
 /// The face chosen for one family name at a requested weight/style.
 #[derive(Debug, Clone)]
@@ -63,6 +71,7 @@ pub(crate) struct FontCache {
     choices: HashMap<(String, u16, bool), Option<Arc<FaceChoice>>>,
     metrics: HashMap<fontdb::ID, FaceMetrics>,
     coverage: HashMap<(fontdb::ID, char), bool>,
+    weights: HashMap<fontdb::ID, u16>,
 }
 
 /// The name a generic CSS family stands for in `db`, or `name` itself.
@@ -139,6 +148,14 @@ impl FontCache {
                 .get_font(id)
                 .is_some_and(|f| f.as_swash().charmap().map(ch) != 0)
         })
+    }
+
+    /// The weight (100–900) face `id` declares; 400 when unknown.
+    pub fn face_weight(&mut self, system: &FontSystem, id: fontdb::ID) -> u16 {
+        *self
+            .weights
+            .entry(id)
+            .or_insert_with(|| system.db().face(id).map_or(400, |f| f.weight.0))
     }
 
     /// Vertical metrics of face `id` (cached).
@@ -224,6 +241,45 @@ fn choose_face(db: &fontdb::Database, name: &str, weight: u16, italic: bool) -> 
         stretch: face.stretch,
         synthetic_italic: italic && style == Style::Normal,
     })
+}
+
+/// The ordered family names a character in `slot` tries under `spec`: its
+/// own slot's list, then the fallback list (the generic `sans-serif` when
+/// both are empty), then the other slots — so every family the author named
+/// is tried before the system's fallback. A plain list is just its names.
+pub(crate) fn chain(spec: &FontSpec, slot: Slot) -> Vec<&str> {
+    fn add<'a>(out: &mut Vec<&'a str>, names: Option<&'a Vec<String>>) {
+        for n in names.into_iter().flatten() {
+            if !out.iter().any(|o| o.eq_ignore_ascii_case(n)) {
+                out.push(n);
+            }
+        }
+    }
+    type Names<'a> = Option<&'a Vec<String>>;
+    let (latin, cjk, symbol) = (spec.latin.as_ref(), spec.cjk.as_ref(), spec.symbol.as_ref());
+    // (own slots, slots tried after the fallback list)
+    let (first, rest): ([Names; 2], [Names; 3]) = match slot {
+        Slot::Latin => ([latin, None], [cjk, symbol, None]),
+        Slot::Cjk => ([cjk, None], [latin, symbol, None]),
+        Slot::Symbol { cjk: true } => ([symbol, cjk], [latin, None, None]),
+        Slot::Symbol { cjk: false } => ([symbol, latin], [cjk, None, None]),
+        Slot::Other => ([None, None], [latin, cjk, symbol]),
+    };
+    let mut out: Vec<&str> = Vec::new();
+    for s in first {
+        add(&mut out, s);
+    }
+    add(&mut out, Some(&spec.fallback));
+    if out.is_empty() && slot != Slot::Other {
+        out.push("sans-serif");
+    }
+    for s in rest {
+        add(&mut out, s);
+    }
+    if out.is_empty() {
+        out.push("sans-serif");
+    }
+    out
 }
 
 /// Characters that never start a font run of their own: combining marks,

@@ -10,7 +10,10 @@
 //! 1. **Styled runs** — the node style and its spans flattened into
 //!    [`StyledRun`]s with every inherited value resolved ([`styled_runs`]).
 //! 2. **Font runs** — each character goes to the first family of its run's
-//!    ordered list that covers it (see [`super::fonts`]); the result is a
+//!    font spec — for its script slot when the spec is per script — that
+//!    covers it (see [`super::fonts`]); a word joiner keeps attached
+//!    super/subscripts from being broken off (removed after breaking); the
+//!    result is a
 //!    cosmic-text `AttrsList` (family/weight/style per range, the run index
 //!    as `metadata`, the run's size as per-span `Metrics`).
 //! 3. **Shaping** — cosmic-text `ShapeLine` (rustybuzz, bidi, UAX #14 word
@@ -25,11 +28,14 @@ use cosmic_text::{
     Weight, Wrap,
 };
 
-use crate::geom::{Color, Size};
-use crate::schema::span::{parse_family_list, FontStyle, SCRIPT_SCALE};
+use std::sync::Arc;
+
+use crate::geom::{Color, LineCap, LineJoin, Size, StrokeStyle};
+use crate::schema::span::{FontSpec, FontStyle, FontSynthesis};
 use crate::schema::TextProps;
 
-use super::fonts::{attaches_to_previous, FaceChoice, FontCache};
+use super::classify::{self, Slot};
+use super::fonts::{attaches_to_previous, chain, FaceChoice, FontCache};
 
 /// A fully shaped text block, positioned relative to its own top-left origin
 /// (points).
@@ -43,6 +49,10 @@ pub struct ShapedText {
     /// Underline and line-through bars, in paint-independent block
     /// coordinates (see [`Decoration`]).
     pub decorations: Vec<Decoration>,
+    /// The distinct glyph outlines (node `stroke`, span `stroke`s) in order
+    /// of first use; [`ShapedGlyph::stroke`] indexes it. Backends stroke each
+    /// one as a single path behind every fill.
+    pub strokes: Vec<StrokeStyle>,
 }
 
 #[derive(Debug, Clone)]
@@ -75,10 +85,19 @@ pub struct ShapedGlyph {
     pub text_range: std::ops::Range<usize>,
     /// Fill colour of the glyph's run.
     pub color: Color,
-    /// Draw slanted by [`crate::schema::span::SYNTHETIC_ITALIC_DEG`] (italic
-    /// requested, family has no italic face). The shear is about the pen
-    /// position: `x += tan(angle) · height above the baseline`.
+    /// Italic was requested but the family has no italic face: the glyph is
+    /// drawn slanted by [`ShapedGlyph::skew`].
     pub synthetic_italic: bool,
+    /// Horizontal shear of a synthetic italic (`tan` of the node's
+    /// `synthetic_slant`; 0 for upright glyphs), about the pen position:
+    /// `x += skew · height above the baseline`.
+    pub skew: f32,
+    /// Synthetic bold: width (points) of an outline in the glyph's own
+    /// colour, stroked along its contours under the fill (0 = none).
+    pub embolden: f32,
+    /// Index into [`ShapedText::strokes`] of this glyph's outline (`None` =
+    /// no outline).
+    pub stroke: Option<u16>,
     /// Index of the styled run (see [`styled_runs`]) the glyph belongs to.
     /// Consecutive glyphs of one run share colour, size and shift.
     pub run: usize,
@@ -109,8 +128,9 @@ pub struct Decoration {
 /// Fully resolved style of a run of text.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunStyle {
-    /// Ordered family list (never empty: the default is `sans-serif`).
-    pub families: Vec<String>,
+    /// Font spec: page, node and span specs inherited (see
+    /// [`FontSpec::overlay`]). Empty = the generic `sans-serif`.
+    pub fonts: FontSpec,
     /// Glyph size (points), after the script scale.
     pub font_size: f32,
     /// The size line metrics are computed with: `font_size` for ordinary
@@ -126,6 +146,11 @@ pub struct RunStyle {
     pub shift: f32,
     /// Tracking, points, added after every cluster.
     pub tracking: f32,
+    /// A super/subscript or shifted run: it stays on the line of the
+    /// character it follows (no line break right before it).
+    pub attached: bool,
+    /// Glyph outline (node `stroke`, or the span's own), points.
+    pub stroke: Option<StrokeStyle>,
 }
 
 /// A byte range of the content with one resolved style.
@@ -139,17 +164,16 @@ pub struct StyledRun {
 /// `text.content` (in order). `default_family` is the store/page default
 /// used when the node names no family.
 pub fn styled_runs(text: &TextProps, default_family: Option<&str>) -> Vec<StyledRun> {
-    let mut node_families = text
-        .font_family
-        .as_deref()
-        .or(default_family)
-        .map(parse_family_list)
+    let page_fonts = default_family
+        .map(FontSpec::parse_lenient)
         .unwrap_or_default();
-    if node_families.is_empty() {
-        node_families.push("sans-serif".to_string());
-    }
+    let node_fonts = match text.font_family.as_deref() {
+        Some(f) => page_fonts.overlay(&FontSpec::parse_lenient(f)),
+        None => page_fonts,
+    };
+    let metrics = text.typography.script_metrics;
     let node = RunStyle {
-        families: node_families,
+        fonts: node_fonts,
         font_size: text.font_size,
         base_size: text.font_size,
         weight: text.font_weight.unwrap_or(400),
@@ -159,6 +183,8 @@ pub fn styled_runs(text: &TextProps, default_family: Option<&str>) -> Vec<Styled
         strike: text.strike,
         shift: 0.0,
         tracking: text.letter_spacing * text.font_size,
+        attached: false,
+        stroke: text.stroke.clone(),
     };
     let len = text.content.len();
     let mut runs = Vec::with_capacity(text.spans.len() * 2 + 1);
@@ -177,35 +203,38 @@ pub fn styled_runs(text: &TextProps, default_family: Option<&str>) -> Vec<Styled
         let s = &span.style;
         let base_size = s.font_size.unwrap_or(text.font_size);
         let font_size = if s.script.is_some() {
-            base_size * SCRIPT_SCALE
+            base_size * metrics.scale()
         } else {
             base_size
         };
         let shift_em = s
             .baseline_shift
-            .or(s.script.map(|sc| sc.shift()))
+            .or(s.script.map(|sc| metrics.shift(sc)))
             .unwrap_or(0.0);
-        let families = s
+        let fonts = s
             .font_family
             .as_deref()
-            .map(parse_family_list)
+            .map(FontSpec::parse_lenient)
             .filter(|f| !f.is_empty())
-            .unwrap_or_else(|| node.families.clone());
+            .map_or_else(|| node.fonts.clone(), |f| node.fonts.overlay(&f));
+        let color = s.color.unwrap_or(node.color);
         push(
             start..end,
             RunStyle {
-                families,
+                fonts,
                 font_size,
                 base_size,
                 weight: s.font_weight.unwrap_or(node.weight),
                 italic: s
                     .font_style
                     .map_or(node.italic, |st| st == FontStyle::Italic),
-                color: s.color.unwrap_or(node.color),
+                color,
                 underline: s.underline.unwrap_or(node.underline),
                 strike: s.strike.unwrap_or(node.strike),
                 shift: shift_em * base_size,
                 tracking: s.letter_spacing.unwrap_or(text.letter_spacing) * font_size,
+                attached: s.script.is_some() || shift_em != 0.0,
+                stroke: span_stroke(s, node.stroke.as_ref(), color),
             },
         );
         at = end;
@@ -219,6 +248,28 @@ pub fn styled_runs(text: &TextProps, default_family: Option<&str>) -> Vec<Styled
         });
     }
     runs
+}
+
+/// The outline of a span's glyphs: the node's unless the span sets `stroke`
+/// (colour) or `stroke_width` (points; `0` = none). A span outline keeps the
+/// node outline's dash/cap/join; its colour defaults to the node outline's,
+/// else the span's text colour, its width to the node outline's, else 1 pt.
+fn span_stroke(
+    s: &crate::schema::SpanStyle,
+    node: Option<&StrokeStyle>,
+    text_color: Color,
+) -> Option<StrokeStyle> {
+    match (s.stroke, s.stroke_width) {
+        (None, None) => node.cloned(),
+        (_, Some(w)) if w <= 0.0 => None,
+        (color, width) => Some(StrokeStyle {
+            color: color.or(node.map(|n| n.color)).unwrap_or(text_color),
+            width: width.or(node.map(|n| n.width)).unwrap_or(1.0),
+            dash: node.map(|n| n.dash.clone()).unwrap_or_default(),
+            cap: node.map_or(LineCap::default(), |n| n.cap),
+            join: node.map_or(LineJoin::Round, |n| n.join),
+        }),
+    }
 }
 
 /// `content` split into paragraphs at `\n` (a preceding `\r` is dropped),
@@ -260,8 +311,57 @@ fn run_attrs<'a>(
     }
 }
 
+/// The installed faces a run's characters may use, per slot: indices into
+/// `faces` in chain order, plus the face an uncovered character keeps (the
+/// first installed one of its chain, else the generic sans-serif).
+struct SlotFaces {
+    faces: Vec<Arc<FaceChoice>>,
+    chains: Vec<(Slot, Vec<usize>, Option<usize>)>,
+}
+
+impl SlotFaces {
+    fn chain(
+        &mut self,
+        system: &FontSystem,
+        cache: &mut FontCache,
+        st: &RunStyle,
+        slot: Slot,
+    ) -> usize {
+        if let Some(k) = self.chains.iter().position(|c| c.0 == slot) {
+            return k;
+        }
+        let mut idx = Vec::new();
+        for name in chain(&st.fonts, slot) {
+            if let Some(c) = cache.choose(system, name, st.weight, st.italic) {
+                idx.push(self.face(c));
+            }
+        }
+        idx.dedup();
+        // No listed family installed: the generic sans-serif face, so weight
+        // and italic still resolve to a real (or synthetic) face.
+        let keep = idx.first().copied().or_else(|| {
+            cache
+                .choose(system, "sans-serif", st.weight, st.italic)
+                .map(|c| self.face(c))
+        });
+        self.chains.push((slot, idx, keep));
+        self.chains.len() - 1
+    }
+
+    fn face(&mut self, c: Arc<FaceChoice>) -> usize {
+        match self.faces.iter().position(|f| f.id == c.id) {
+            Some(i) => i,
+            None => {
+                self.faces.push(c);
+                self.faces.len() - 1
+            }
+        }
+    }
+}
+
 /// Assign every character of `para` (at byte offset `base` in the content) a
-/// face: the first family of its run's list covering it.
+/// face: the first family of its run's font spec, for the character's script
+/// slot ([`classify::slots`]), that covers it.
 fn attrs_list(
     system: &mut FontSystem,
     cache: &mut FontCache,
@@ -278,9 +378,8 @@ fn attrs_list(
         .min(runs.len().saturating_sub(1));
     let default_choice = runs.get(first).and_then(|r| {
         let st = &r.style;
-        st.families
-            .iter()
-            .map(String::as_str)
+        chain(&st.fonts, Slot::Latin)
+            .into_iter()
             .chain(["sans-serif"])
             .find_map(|f| cache.choose(system, f, st.weight, st.italic))
     });
@@ -288,41 +387,49 @@ fn attrs_list(
         Some(r) => run_attrs(default_choice.as_deref(), &r.style, first, line_height),
         None => Attrs::new(),
     });
+    // Byte offset (in `para`) and script slot of every character.
+    let slots: Vec<(usize, Slot)> = para
+        .char_indices()
+        .map(|(i, _)| i)
+        .zip(classify::slots(para))
+        .collect();
     for (ri, run) in runs.iter().enumerate() {
         let (s, e) = (run.range.start.max(base), run.range.end.min(end));
         if s >= e {
             continue;
         }
         let st = &run.style;
-        let choices: Vec<_> = st
-            .families
-            .iter()
-            .filter_map(|f| cache.choose(system, f, st.weight, st.italic))
-            .collect();
-        // No listed family installed: the generic sans-serif face, so weight
-        // and italic still resolve to a real (or synthetic) face.
-        let fallback = choices
-            .first()
-            .cloned()
-            .or_else(|| cache.choose(system, "sans-serif", st.weight, st.italic));
-        // (byte start relative to `para`, chosen face index) per font run.
+        let mut sf = SlotFaces {
+            faces: Vec::new(),
+            chains: Vec::new(),
+        };
+        // (byte start relative to `para`, face index) per font run.
         let mut segs: Vec<(usize, Option<usize>)> = Vec::new();
         let mut prev: Option<Option<usize>> = None;
-        for (i, ch) in para[s - base..e - base].char_indices() {
+        let from = slots.partition_point(|(i, _)| *i < s - base);
+        for &(i, slot) in slots[from..].iter().take_while(|(i, _)| *i < e - base) {
+            let ch = para[i..].chars().next().expect("char boundary");
             let pick = match prev {
                 Some(p) if attaches_to_previous(ch) => p,
-                _ => choices.iter().position(|c| cache.covers(system, c.id, ch)),
+                _ => {
+                    let k = sf.chain(system, cache, st, slot);
+                    let (_, idx, keep) = &sf.chains[k];
+                    // Uncovered characters keep their chain's first face;
+                    // cosmic-text's fallback then finds them a glyph.
+                    idx.iter()
+                        .copied()
+                        .find(|&f| cache.covers(system, sf.faces[f].id, ch))
+                        .or(*keep)
+                }
             };
             if prev != Some(pick) {
-                segs.push((s - base + i, pick));
+                segs.push((i, pick));
                 prev = Some(pick);
             }
         }
         for (k, &(start, pick)) in segs.iter().enumerate() {
             let stop = segs.get(k + 1).map_or(e - base, |n| n.0);
-            // Uncovered characters stay in the first family; cosmic-text's
-            // fallback then finds them a face.
-            let choice = pick.map(|i| choices[i].clone()).or(fallback.clone());
+            let choice = pick.map(|i| sf.faces[i].clone());
             list.add_span(
                 start..stop,
                 run_attrs(choice.as_deref(), st, ri, line_height),
@@ -373,6 +480,21 @@ pub(crate) fn shape(
     let width = (max_width.is_finite() && max_width > 0.0).then_some(max_width);
     let node_line = (text.font_size * text.line_height).max(1.0);
     let mut scratch = ShapeBuffer::default();
+    let typo = text.typography;
+    let skew = typo.shear();
+    // The distinct outlines, and each run's index into them.
+    let mut strokes: Vec<StrokeStyle> = Vec::new();
+    let run_stroke: Vec<Option<u16>> = runs
+        .iter()
+        .map(|r| {
+            let s = r.style.stroke.as_ref()?;
+            let k = strokes.iter().position(|x| x == s).unwrap_or_else(|| {
+                strokes.push(s.clone());
+                strokes.len() - 1
+            });
+            Some(k as u16)
+        })
+        .collect();
 
     let mut lines: Vec<ShapedLine> = Vec::new();
     let mut decorations = Vec::new();
@@ -383,9 +505,32 @@ pub(crate) fn shape(
     let mut layout = Vec::new();
 
     for (base, para) in paragraphs(&text.content) {
-        let attrs = attrs_list(system, cache, para, base, &runs, text.line_height);
-        let mut shaped =
-            ShapeLine::new_in_buffer(&mut scratch, system, para, &attrs, Shaping::Advanced, 8);
+        // A word joiner before every super/subscript glued to the previous
+        // character, so UAX #14 offers no break there (removed again below).
+        let joins = join_points(para, base, &runs);
+        let (joined, joined_runs);
+        let (shape_para, shape_runs): (&str, &[StyledRun]) = if joins.is_empty() {
+            (para, &runs)
+        } else {
+            (joined, joined_runs) = with_joiners(para, base, &runs, &joins);
+            (&joined, &joined_runs)
+        };
+        let attrs = attrs_list(
+            system,
+            cache,
+            shape_para,
+            base,
+            shape_runs,
+            text.line_height,
+        );
+        let mut shaped = ShapeLine::new_in_buffer(
+            &mut scratch,
+            system,
+            shape_para,
+            &attrs,
+            Shaping::Advanced,
+            8,
+        );
         apply_tracking(&mut shaped, &runs, text.font_size);
         layout.clear();
         shaped.layout_to_buffer(
@@ -397,6 +542,10 @@ pub(crate) fn shape(
             &mut layout,
             None,
         );
+        if !joins.is_empty() {
+            strip_joiners(&mut layout, &joins);
+        }
+        keep_scripts_attached(&mut layout, para, &runs);
         kinsoku(&mut layout, para);
 
         for ll in &layout {
@@ -439,26 +588,38 @@ pub(crate) fn shape(
                 baseline,
             );
 
-            let glyphs = ll
-                .glyphs
-                .iter()
-                .map(|g| {
-                    let st = style_of(g);
-                    ShapedGlyph {
-                        font_id: g.font_id,
-                        glyph_id: g.glyph_id,
-                        font_size: g.font_size,
-                        x: g.x,
-                        advance: g.w,
-                        x_offset: g.x_offset * g.font_size,
-                        y_offset: g.y_offset * g.font_size + st.shift,
-                        text_range: base + g.start..base + g.end,
-                        color: st.color,
-                        synthetic_italic: g.cache_key_flags.contains(CacheKeyFlags::FAKE_ITALIC),
-                        run: g.metadata,
+            let mut glyphs = Vec::with_capacity(ll.glyphs.len());
+            for g in &ll.glyphs {
+                let st = style_of(g);
+                let synthetic_italic = g.cache_key_flags.contains(CacheKeyFlags::FAKE_ITALIC);
+                let bold = match typo.font_synthesis {
+                    FontSynthesis::None => false,
+                    FontSynthesis::Bold => true,
+                    FontSynthesis::Auto => {
+                        st.weight >= 600 && cache.face_weight(system, g.font_id) < 600
                     }
-                })
-                .collect();
+                };
+                glyphs.push(ShapedGlyph {
+                    font_id: g.font_id,
+                    glyph_id: g.glyph_id,
+                    font_size: g.font_size,
+                    x: g.x,
+                    advance: g.w,
+                    x_offset: g.x_offset * g.font_size,
+                    y_offset: g.y_offset * g.font_size + st.shift,
+                    text_range: base + g.start..base + g.end,
+                    color: st.color,
+                    synthetic_italic,
+                    skew: if synthetic_italic { skew } else { 0.0 },
+                    embolden: if bold {
+                        typo.synthetic_bold_width * g.font_size
+                    } else {
+                        0.0
+                    },
+                    stroke: run_stroke[g.metadata.min(runs.len() - 1)],
+                    run: g.metadata,
+                });
+            }
             lines.push(ShapedLine {
                 baseline,
                 width: line_w,
@@ -484,7 +645,138 @@ pub(crate) fn shape(
         size: Size::new(max_w, height),
         lines,
         decorations,
+        strokes,
     }
+}
+
+/// U+2060 WORD JOINER: UAX #14 never breaks on either side of it.
+const JOINER: &str = "\u{2060}";
+
+/// Byte offsets (in `para`, at content offset `base`) where a super/subscript
+/// (or shifted) run starts right after a non-space character: no line break
+/// may fall there.
+fn join_points(para: &str, base: usize, runs: &[StyledRun]) -> Vec<usize> {
+    let end = base + para.len();
+    let mut out: Vec<usize> = runs
+        .iter()
+        .filter(|r| r.style.attached && r.range.start > base && r.range.start < end)
+        .map(|r| r.range.start - base)
+        .filter(|&p| {
+            para.is_char_boundary(p)
+                && para[..p]
+                    .chars()
+                    .next_back()
+                    .is_some_and(|c| !c.is_whitespace())
+        })
+        .collect();
+    out.dedup();
+    out
+}
+
+/// `para` with a [`JOINER`] inserted at each of `joins`, and `runs` with
+/// their ranges moved to match (a joiner belongs to the run before it).
+fn with_joiners(
+    para: &str,
+    base: usize,
+    runs: &[StyledRun],
+    joins: &[usize],
+) -> (String, Vec<StyledRun>) {
+    let mut s = String::with_capacity(para.len() + joins.len() * JOINER.len());
+    let mut at = 0;
+    for &p in joins {
+        s.push_str(&para[at..p]);
+        s.push_str(JOINER);
+        at = p;
+    }
+    s.push_str(&para[at..]);
+    let map = |x: usize| x + JOINER.len() * joins.iter().filter(|&&p| base + p <= x).count();
+    let runs = runs
+        .iter()
+        .map(|r| StyledRun {
+            // A run ending at a join point takes the joiner; one starting
+            // there starts after it.
+            range: map(r.range.start)..map(r.range.end),
+            style: r.style.clone(),
+        })
+        .collect();
+    (s, runs)
+}
+
+/// Undo [`with_joiners`] on laid-out lines: drop the joiner glyphs (closing
+/// any advance they had) and map glyph byte ranges back to the paragraph
+/// without joiners.
+fn strip_joiners(lines: &mut Vec<cosmic_text::LayoutLine>, joins: &[usize]) {
+    let n = JOINER.len();
+    // Joiner k sits at [q_k, q_k + n) in the joined paragraph.
+    let q: Vec<usize> = joins.iter().enumerate().map(|(k, p)| p + k * n).collect();
+    let back = |x: usize| x - n * q.iter().filter(|&&qk| qk < x).count();
+    for line in lines.iter_mut() {
+        let mut shift = 0.0;
+        line.glyphs.retain_mut(|g| {
+            let is_joiner = q.iter().any(|&qk| g.start == qk && g.end == qk + n);
+            if is_joiner {
+                shift += g.w;
+                return false;
+            }
+            g.x -= shift;
+            g.start = back(g.start);
+            g.end = back(g.end);
+            true
+        });
+        line.w -= shift;
+    }
+    lines.retain(|l| !l.glyphs.is_empty());
+}
+
+/// Keep a super/subscript (or any shifted run) on the line of the character
+/// it is attached to. Word joiners already keep UAX #14 from breaking there;
+/// this repairs the remaining case, a "word" wider than the box broken
+/// between arbitrary glyphs: when a line starts with an attached run right
+/// after a non-space character that ended the previous line, the attached
+/// glyphs move up to the end of that line (they may overhang the box, as a
+/// hanging punctuation mark does).
+fn keep_scripts_attached(lines: &mut Vec<cosmic_text::LayoutLine>, para: &str, runs: &[StyledRun]) {
+    let attached =
+        |g: &cosmic_text::LayoutGlyph| runs.get(g.metadata).is_some_and(|r| r.style.attached);
+    let ltr = |l: &cosmic_text::LayoutLine| l.glyphs.iter().all(|g| !g.level.is_rtl());
+    if lines.len() < 2 || !lines.iter().all(ltr) {
+        return;
+    }
+    for i in 0..lines.len() - 1 {
+        let (Some(next), Some(last)) = (lines[i + 1].glyphs.first(), lines[i].glyphs.last()) else {
+            continue;
+        };
+        let glued = attached(next)
+            && last.end == next.start
+            && para
+                .get(last.start..last.end)
+                .and_then(|s| s.chars().next())
+                .is_some_and(|c| !c.is_whitespace());
+        if !glued {
+            continue;
+        }
+        let last_end = last.x + last.w;
+        let count = lines[i + 1]
+            .glyphs
+            .iter()
+            .take_while(|g| attached(g))
+            .count();
+        let moved: Vec<_> = lines[i + 1].glyphs.drain(..count).collect();
+        let w: f32 = moved.iter().map(|g| g.w).sum();
+        let next = &mut lines[i + 1];
+        for g in &mut next.glyphs {
+            g.x -= w;
+        }
+        next.w -= w;
+        let prev = &mut lines[i];
+        let x0 = last_end - moved[0].x;
+        prev.glyphs.extend(moved.into_iter().map(|mut g| {
+            g.x += x0;
+            g
+        }));
+        prev.w += w;
+    }
+    lines.retain(|l| !l.glyphs.is_empty());
 }
 
 /// Closing punctuation that must not start a line (Japanese 行頭禁則).
@@ -637,7 +929,8 @@ mod tests {
         assert_eq!(runs[0].range, 0..3);
         assert_eq!(runs[2].range, 7..text.content.len());
         let sup = &runs[1].style;
-        assert_eq!(sup.families, vec!["Arial", "Yu Gothic"]);
+        assert_eq!(sup.fonts.fallback, vec!["Arial", "Yu Gothic"]);
+        assert!(sup.attached && !runs[0].style.attached);
         assert!((sup.font_size - 6.5).abs() < 1e-5);
         assert_eq!(sup.base_size, 10.0);
         assert!((sup.shift - SUPER_SHIFT * 10.0).abs() < 1e-5);

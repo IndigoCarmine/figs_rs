@@ -641,23 +641,17 @@ impl Renderer for SvgRenderer<'_> {
             return;
         };
         let shaped = fonts.shape(&geometry::text_props(text), rect.w);
-        // Outline first: one stroked path under the whole glyph group.
-        if let Some(stroke) = &text.stroke {
-            let segs = self.outlines.text_outline(fonts, &shaped, rect, text.align);
-            if !segs.is_empty() {
-                let mut el = format!("<path d=\"{}\"", path_d(&segs));
-                push_paint(&mut el, None, Some(stroke));
-                el.push_str(
-                    " aria-hidden=\"true\"/>
-",
-                );
-                self.body.push_str(&el);
-            }
+        // Outlines first: one stroked path per outline style (node / span
+        // strokes, then synthetic bold) under the whole glyph group.
+        for (style, segs) in self.outlines.text_strokes(fonts, &shaped, rect, text.align) {
+            let mut el = format!("<path d=\"{}\"", path_d(&segs));
+            push_paint(&mut el, None, Some(&style));
+            el.push_str(" aria-hidden=\"true\"/>\n");
+            self.body.push_str(&el);
         }
         self.decorations(&shaped, rect, text.align, DecorationKind::Underline);
         // (fill colour, `<use>` element) per drawn glyph.
         let mut uses: Vec<(Color, String)> = Vec::new();
-        let shear = geometry::italic_shear();
         for line in &shaped.lines {
             let align_off = geometry::align_offset(text.align, line.width, rect.w);
             let baseline = rect.y + line.baseline;
@@ -669,8 +663,8 @@ impl Renderer for SvgRenderer<'_> {
                 // a synthetic italic adds the shear `x += t·y`.
                 let k = g.font_size / upem;
                 let s = fmt_decimals(k, 7);
-                let c = if g.synthetic_italic {
-                    fmt_decimals(k * shear, 7)
+                let c = if g.skew != 0.0 {
+                    fmt_decimals(k * g.skew, 7)
                 } else {
                     "0".to_string()
                 };
