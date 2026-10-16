@@ -1630,6 +1630,190 @@ fn plot_typography_hooks() {
     approx(p.text("0.0").x + 3.0 * CHAR_W, area.x - tl - 0.5 * cm);
 }
 
+/// A plot of x 0..10 (ticks 0, 5, 10), y 0..1, with `pre` before the page
+/// and `opt` appended to the plot options.
+fn pad_plot(pre: &str, opt: &str) -> String {
+    format!(
+        r#"{pre}
+        page(12, 9, plot(#{{ x: [0, 10], y: [0, 1], xticks: [0, 5, 10], xlabel: "Time",
+                ylabel: "Signal"{opt} }}, [line_plot([0, 10], [0, 1])]).flex(1)).unit("cm")"#
+    )
+}
+
+/// The first baseline of an 8 pt label without fonts (the measurer's
+/// fallback): half-leading of the 1.2 line plus 0.8 em.
+const BASE8: f32 = 8.0 * 0.1 + 8.0 * 0.8;
+
+#[test]
+fn tick_label_pads_per_axis() {
+    let cm = 72.0 / 2.54;
+    let gap = 8.0 * 0.012 * cm; // the default pads
+    for (pre, opt) in [
+        (
+            "style(#{ xtick_label_pad: 0.5, ytick_label_pad: 0.2 });",
+            "",
+        ),
+        ("", ", xtick_label_pad: 0.5, ytick_label_pad: 0.2"),
+    ] {
+        let p = Plotted::new(&pad_plot(pre, opt));
+        let area = p.area();
+        let tl = hook_pt("tick_length");
+        let five = p.text("5");
+        approx(five.y, area.y + area.h + tl + 0.5 * cm);
+        approx(p.text("0.0").x + 3.0 * CHAR_W, area.x - tl - 0.2 * cm);
+        // The axis labels keep their default gaps.
+        approx(p.text("Time").y, five.y + LINE_H + gap);
+    }
+    // Each defaults to `tick_label_pad()`: spelling the defaults out changes
+    // nothing.
+    let a = eval_script(&pad_plot("", "")).unwrap();
+    let b = eval_script(&pad_plot(
+        "",
+        r#", xtick_label_pad: tick_label_pad(), ytick_label_pad: tick_label_pad(),
+           tick_label_pad_mode: "box", xlabel_pad: axis_label_pad(),
+           ylabel_pad: axis_label_pad() * 2, xlabel_offset: (), ylabel_offset: ()"#,
+    ))
+    .unwrap();
+    let sorted = |d: &RawDocument| -> std::collections::BTreeMap<String, String> {
+        d.nodes
+            .iter()
+            .map(|(k, v)| (k.clone(), format!("{v:?}")))
+            .collect()
+    };
+    assert_eq!(sorted(&a), sorted(&b));
+    // A negative pad pulls the label box onto the tick, but not past the axis.
+    let p = Plotted::new(&pad_plot("", ", xtick_label_pad: -0.05"));
+    let area = p.area();
+    approx(
+        p.text("5").y,
+        area.y + area.h + hook_pt("tick_length") - 0.05 * cm,
+    );
+    for (opt, want) in [
+        (
+            ", xtick_label_pad: -1",
+            "xtick_label_pad -1.0 would put the x tick labels across the axis",
+        ),
+        (
+            ", ytick_label_pad: \"a\"",
+            "ytick_label_pad must be a length",
+        ),
+        (
+            ", tick_label_pad_mode: \"ink\"",
+            "tick_label_pad_mode must be \"box\" or \"baseline\"",
+        ),
+        (
+            ", xtick_direction: \"in\", xtick_label_pad: -0.01",
+            "across the axis",
+        ),
+    ] {
+        let e = eval_script(&pad_plot("", opt)).unwrap_err();
+        assert!(e.message.contains(want), "{opt}: {}", e.message);
+    }
+    let e = eval_script(&pad_plot("style(#{ ytick_label_pad: -1 });", "")).unwrap_err();
+    assert!(e.message.contains("ytick_label_pad: -1"), "{}", e.message);
+}
+
+#[test]
+fn baseline_tick_label_pads() {
+    // "baseline": the x tick labels' first baseline `xtick_label_pad` below
+    // the tick end; the x label still clears their box bottom.
+    let cm = 72.0 / 2.54;
+    let gap = 8.0 * 0.012 * cm;
+    let tl = hook_pt("tick_length");
+    for pre in [
+        "style(#{ tick_label_pad_mode: \"baseline\", xtick_label_pad: 0.4 });",
+        "",
+    ] {
+        let opt = if pre.is_empty() {
+            ", tick_label_pad_mode: \"baseline\", xtick_label_pad: 0.4"
+        } else {
+            ""
+        };
+        let p = Plotted::new(&pad_plot(pre, opt));
+        let area = p.area();
+        for s in ["0", "5", "10"] {
+            approx(p.text(s).y + BASE8, area.y + area.h + tl + 0.4 * cm);
+        }
+        let five = p.text("5");
+        approx(five.x + five.w / 2.0, area.x + area.w / 2.0);
+        approx(p.text("Time").y, five.y + LINE_H + gap);
+        // The y tick labels are unchanged (box to box).
+        approx(p.text("0.0").x + 3.0 * CHAR_W, area.x - tl - gap);
+    }
+    // Inward ticks: from the axis itself.
+    let p = Plotted::new(&pad_plot(
+        "",
+        ", tick_label_pad_mode: \"baseline\", xtick_label_pad: 0.3, xtick_direction: \"in\"",
+    ));
+    let area = p.area();
+    approx(p.text("5").y + BASE8, area.y + area.h + 0.3 * cm);
+}
+
+#[test]
+fn axis_label_pads_and_offsets() {
+    let cm = 72.0 / 2.54;
+    let tl = hook_pt("tick_length");
+    let gap = 8.0 * 0.012 * cm;
+    let signal = |p: &Plotted| {
+        p.l.nodes
+            .iter()
+            .find(|n| p.raw.nodes[&n.id].content.as_deref() == Some("Signal"))
+            .unwrap()
+            .bounds()
+    };
+    // Pads per axis, box to box.
+    let p = Plotted::new(&pad_plot("", ", xlabel_pad: 0.5, ylabel_pad: 0.3"));
+    approx(p.text("Time").y, p.text("5").y + LINE_H + 0.5 * cm);
+    let yl = signal(&p);
+    approx(p.text("0.0").x - (yl.x + yl.w), 0.3 * cm);
+    let p = Plotted::new(&pad_plot(
+        "style(#{ xlabel_pad: 0.5, ylabel_pad: 0.3 });",
+        "",
+    ));
+    approx(p.text("Time").y, p.text("5").y + LINE_H + 0.5 * cm);
+
+    // Offsets: the baselines exactly that far from the axes, whatever the
+    // tick labels measure.
+    let p = Plotted::new(&pad_plot("", ", xlabel_offset: 1.2, ylabel_offset: 1.5"));
+    let area = p.area();
+    approx(p.text("Time").y + BASE8, area.y + area.h + 1.2 * cm);
+    let t = p.text("Time");
+    approx(t.x + t.w / 2.0, area.x + area.w / 2.0);
+    let yl = signal(&p);
+    // Turned -90°: its baseline runs down the footprint, BASE8 from its left.
+    approx(yl.x + BASE8, area.x - 1.5 * cm);
+    approx(yl.w, LINE_H);
+    approx(yl.y + yl.h / 2.0, area.y + area.h / 2.0);
+    // The tick labels didn't move.
+    approx(p.text("5").y, area.y + area.h + tl + gap);
+    // Contained: everything still fits the panel.
+    let panel = rect_of(&p.l, "root");
+    assert!(yl.x >= panel.x - 1e-3, "{yl:?}");
+    // An unrotated y label: its baseline that far above the axis top.
+    let p = Plotted::new(&pad_plot(
+        "fn ylabel_rotated() { false }",
+        ", ylabel_offset: 0.6",
+    ));
+    let area = p.area();
+    let yl = p.text("Signal");
+    approx(yl.y + BASE8, area.y - 0.6 * cm);
+    approx(yl.x, area.x);
+
+    // Negative pads are an error that points at the offsets; so are bad
+    // offsets.
+    for (pre, opt, want) in [
+        ("", ", xlabel_pad: -0.075", "xlabel_pad must be >= 0 cm (got -0.075); to bring the label closer, place its baseline with xlabel_offset"),
+        ("style(#{ ylabel_pad: -0.1 });", "", "ylabel_pad: must be >= 0 cm"),
+        ("style(#{ axis_label_pad: -0.1 });", "", "must be a length >= 0 cm"),
+        ("", ", xlabel_offset: 0", "xlabel_offset must be a length > 0 cm"),
+        ("", ", ylabel_offset: -1", "ylabel_offset must be a length > 0 cm"),
+        ("", ", ylabel_offset: \"1cm\"", "ylabel_offset must be"),
+    ] {
+        let e = eval_script(&pad_plot(pre, opt)).unwrap_err();
+        assert!(e.message.contains(want), "{pre}{opt}: {}", e.message);
+    }
+}
+
 #[test]
 fn per_axis_minor_ticks_and_directions() {
     let p = Plotted::new(

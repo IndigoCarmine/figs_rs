@@ -870,13 +870,14 @@ clockwise on the page (as `rotate`); lengths in page units.
 | Function | Result |
 |---|---|
 | `block_arrow(x1, y1, x2, y2, shaft_w, head_w, head_len)` / `(…, #{ both: true })` | A straight block arrow to its tip (x2, y2): 7 corners, or 10 with a head at both ends (⇔). |
-| `equilibrium(x1, y1, x2, y2)` / `(…, gap)` / `(…, opts)` | ⇌: two arrows `gap` apart (default 4 × the width) in `fg()`, `annotation_width()` wide. Options `gap`, `width`, `barb` — `"straight"` (core half-barb harpoons; `head_size`, `head_width` as on any arrow) or `"hook"` (plain shafts, each with a curved barb leaving the tip along the shaft and bending outwards, 1.5 × the width with round caps — the PowerPoint ⇌; `head_size` = its length back along the shaft, default 0.4 × the chord up to 20 × the width; `head_width` = how far out, a length or `"3x"`, default 0.4 × `head_size`). |
+| `equilibrium(x1, y1, x2, y2)` / `(…, gap)` / `(…, opts)` | ⇌: two arrows `gap` apart (default 4 × the width) in `fg()`, `annotation_width()` wide. Options `gap`, `width`; `head` — the head on each tip: `"barb"` (core half-barb harpoon), `"triangle"` (a full head) or `"none"`, sized by `head_size` / `head_width` as on any arrow; `barb` — `"straight"` (no barb beyond the head) or `"hook"` (a curved barb leaving the shaft and bending outwards, 1.5 × the width with round caps — the PowerPoint ⇌), sized by `hook_size` (its length back along the shaft, default 0.4 × the chord up to 20 × the width), `hook_width` (how far out, a length or `"3x"`, default 0.4 × `hook_size`) and `hook_start` (how far behind the tip it leaves the shaft: 0 without a head, 0.6 × the head's length behind one). `head` defaults to `"barb"`, or `"none"` with `barb: "hook"`; any head goes with either barb. Deprecated: with no head, `head_size` / `head_width` size the hook (the old meaning). |
 | `arc_arrow(cx, cy, r, a0, a1, w)` / `(…, opts)` | A circular block arrow: a band `w` wide on the circle of radius `r`, from angle `a0` to its tip at `a1` (`a1 < a0` runs anticlockwise; less than a full turn). Outer and inner edges are true arcs. Options `head_width` (default 2 × w), `head_len` (along the circle, default w), `both`. |
 | `block_arrow_along(points, w)` / `(…, opts)` | A bent block arrow following a centre line: `[x, y]` entries are straight runs, `[cx, cy, x, y]` quadratic and `[c1x, c1y, c2x, c2y, x, y]` cubic curves (the arguments of `.quad` / `.cubic`). The outline is the centre line (curves flattened) offset by w / 2 each side, with mitred joins bevelled past a miter of 4 (keep curves wider than the band). Options `radius` (round every corner between straight runs), `head_width` (default 2 × w), `head_len` (default w), `both`. |
 
 ```rhai
 block_arrow(1, 3.5, 7, 3.5, 0.6, 1.4, 1.0, #{ both: true })
 equilibrium(9, 3.5, 13, 3.5, #{ barb: "hook", width: 0.06 })
+equilibrium(9, 5, 13, 5, #{ barb: "hook", head: "triangle", hook_size: 1.1, hook_width: 0.4 })
 arc_arrow(4, 9, 2.5, 200, 340, 0.6)                          // over the top
 block_arrow_along([[14, 6], [14, 10], [19, 10]], 0.8, #{ radius: 1.2 })
 ```
@@ -1062,7 +1063,7 @@ Components (lengths in cm, font sizes in pt):
 | `circle(r)` / `circle(cx, cy, r)` | A square `ellipse` of radius `r`; the 3-argument form is centered on (`cx`, `cy`) of the enclosing `stack` (via `.at`). |
 | `curve` / `curved_arrow` / `brace` / `bracket` `(x1, y1, x2, y2, bend_or_depth)` | Curved annotations built on the core curve builders — see [Curves](#curves). |
 | `block_arrow(x1, y1, x2, y2, shaft_w, head_w, head_len)` | A thick block arrow with its tip at (`x2`, `y2`): a shaft `shaft_w` wide and a triangular head `head_w` across, `head_len` long — one closed 7-corner `path` filled with `accent()`, so `.fill(linear(0, [...]))` gives a gradient and `.shadow(..)` depth. |
-| `equilibrium(x1, y1, x2, y2)` / `(…, gap)` | The equilibrium arrows ⇌: two `arrow`s with `head_style("barb_left")` harpoon heads, `gap` apart (default 4 × `annotation_width()`) either side of the chord — one towards (`x2`, `y2`), one back — barbs outside; in `fg()`, `annotation_width()` wide, in a `stack`. |
+| `equilibrium(x1, y1, x2, y2)` / `(…, gap)` / `(…, opts)` | The equilibrium arrows ⇌: two `arrow`s with `head_style("barb_left")` harpoon heads, `gap` apart (default 4 × `annotation_width()`) either side of the chord — one towards (`x2`, `y2`), one back — barbs outside; in `fg()`, `annotation_width()` wide, in a `stack`. Options `head` / `barb` (triangle heads, hooks, both) — see [Arrow shapes](#arrow-shapes). |
 | `annotate(item, marks)` | `stack([item, ..marks])`: overlays annotation nodes (an array, or one node) on a panel; coordinates inside are cm from the panel's top-left. Composes with labels: `panels([annotate(..), ..])`, `labeled(annotate(..), "(a)")`. |
 | `scalebar(len, s)` | A `len` cm bar (white, `scalebar_thickness()` thick) with label `s` centered above it (`""` for none), `scalebar_inset()` in from `scalebar_corner()` (default bottom-right). |
 | `scalebar(len, field, s)` | The same bar in image/physical units: `len` out of a field `field` wide (same unit), so exactly `len / field` of the panel width whatever the layout — `scalebar(5, 50, "5 μm")` for a 50 μm field, `scalebar(80, 1024, "1 μm")` for 80 px of a 1024 px image. |
@@ -1177,7 +1178,7 @@ page("double", grid(2, panels([image("a.png"), image("b.png")])))
 | `"science"` | Arial | 7 pt | `A`, 8 pt bold uppercase | 5.7 / 18.3 cm |
 | `"acs"` | Arial | 7 pt | `(a)`, 8 pt bold | 8.25 / 17.78 cm (3.25 / 7 in) |
 | `"rsc"` | Arial | 7 pt | `(a)`, 8 pt bold | 8.3 / 17.1 cm |
-| `"poster"` | renderer default sans | 24 pt (60 pt titles, 1 cm gaps) | `(a)`, 30 pt bold | 8.5 / 17.5 cm |
+| `"poster"` | renderer default sans (marks: a Japanese gothic, `poster_symbol_font`) | 24 pt (60 pt titles, 1 cm gaps) | `(a)`, 30 pt bold | 8.5 / 17.5 cm |
 | `"dark"` | renderer default sans | 8 pt, white (`fg`) | `(a)`, white with a black halo | 8.5 / 17.5 cm |
 | `"poster-dark"` | renderer default sans | `"poster"` sizes + the `"dark"` theme | `(a)`, 30 pt, white | 8.5 / 17.5 cm |
 
@@ -1361,7 +1362,9 @@ applies log axes) and may equally go in the series array. Per axis:
 `2` gives `0.00, 0.25, …` with a real minus — or a function of the value
 returning the label, `|v| `${v.to_int()}%``; log axes pass the value itself),
 `xtick_direction` / `ytick_direction` (`"out"` / `"in"`, overriding
-`tick_direction()`). `frame_box: true` makes the node's box the data frame
+`tick_direction()`), `xtick_label_pad` / `ytick_label_pad` and
+`tick_label_pad_mode`, `xlabel_pad` / `ylabel_pad`, `xlabel_offset` /
+`ylabel_offset` (see *Label placement* below). `frame_box: true` makes the node's box the data frame
 (below), and `style: #{ … }` applies style keys to **this plot only** — pushed
 over the current style while the plot is built, then the registry is restored
 exactly, so nothing leaks into later plots (defaults the series builders left
@@ -1384,6 +1387,32 @@ let p = plot(#{ frame_box: true, x: [0, 10], y: [0, 1], ytick_format: 2, yminor:
                 xlabel: markup("*t* [min]"), ylabel: "fraction" }, series);
 page(30, 13, stack([p.at(3, 2.5).width(11).height(7.5)])).unit("cm")  // frame at (3, 2.5)
 ```
+
+**Label placement: pads, baselines, offsets.** By default every label gap is measured **box to box** — from a tick's end
+(the axis, for inward ticks) to the tick label's line box, and from the tick
+labels to the axis label — with one `tick_label_pad()` / `axis_label_pad()`
+for both axes. To match a drawn original, each axis has its own knob (hooks,
+style keys and plot options of the same names; the defaults reproduce the
+shared values, so output is unchanged until you set one):
+
+| Setting | Measures (cm) | Default |
+|---|---|---|
+| `xtick_label_pad` / `ytick_label_pad` | tick end → x labels below / y labels left of the axis. Negative moves the label box onto the tick; tick room + pad < 0 (the box across the axis) is an error | `tick_label_pad()` |
+| `tick_label_pad_mode` | what the x pad reaches to: `"box"` — the top of the labels' line box (half-leading and the font's ascent above the digits included); `"baseline"` — their first baseline, placed with the core [baseline anchor](#baselines) on the shaped text, so it is font-exact. The digits' ink starts their height above it (≈ 0.716 em in Arial / Helvetica): ink gap = pad − 0.716 × size. The y labels are always measured to their box's right edge (the end of the advance) and centred on the tick; category names (which wrap in their slots) by box | `"box"` |
+| `xlabel_pad` / `ylabel_pad` | x tick labels' box → x label's box / y tick labels → the turned y label, **≥ 0** (a negative pad is an error naming the offset to use instead, so a title can never slide into its tick labels) | `axis_label_pad()` / twice that |
+| `xlabel_offset` / `ylabel_offset` | **exact placement**, `> 0` or `()`: the axis → the x label's first baseline (below) / the turned y label's baseline (left of the axis; an unrotated y label: its baseline above the top of the axis, left-aligned). Independent of the tick labels — nothing moves out of the way, so a small offset overlaps them by design | `()`: follow the tick labels by the pads |
+
+```rhai
+plot(#{ xlabel: "width [nm]", ylabel: "height [nm]",
+        tick_label_pad_mode: "baseline", xtick_label_pad: 0.6, ytick_label_pad: 0.2,
+        xlabel_offset: 1.6, ylabel_offset: 1.5 }, series)
+```
+
+Offsets and baseline pads are built from plain core nodes: a stack whose
+viewbox is in cm across the gap and in fractions along the axis, holding the
+label with `.anchor(0.5, "baseline")` (x) or `.anchor("baseline", 0.5)` (the
+`-90°` y label). In a contained plot the labels' measured overhang still
+shrinks the area, so they stay inside the panel.
 
 **Panel-label room.** A plot reserves `plot_label_room()` (the label inset
 plus one label line) at its top only when it is **labelled**: it notes the room
@@ -1463,6 +1492,10 @@ fn tick_label_pad() { 0.05 }    // tick end (or axis, ticks "in") -> tick label,
 fn axis_label_size() { 9 }      // xlabel / ylabel, pt (default base_size())
 fn axis_label_font() { "Arial" }  // default plot_font()
 fn axis_label_pad() { 0.1 }     // tick labels -> axis label, cm; the turned y label sits twice that (default base_size() * 0.012)
+fn xtick_label_pad() { 0.0 }    // per axis (default tick_label_pad()); also ytick_label_pad
+fn tick_label_pad_mode() { "baseline" }  // x pad to the labels' baseline (default "box")
+fn xlabel_pad() { 0.05 }        // x tick labels -> x label, >= 0 (default axis_label_pad()); ylabel_pad: twice that
+fn xlabel_offset() { 1.3 }      // axis -> x label baseline, cm (default (): follow the pads); also ylabel_offset
 fn legend_size() { 7 }          // legend labels, pt (default base_size())
 fn legend_font() { "Arial" }    // default plot_font()
 fn plot_title_font() { "Arial" }  // the `title` option (default plot_font())
@@ -1527,13 +1560,13 @@ poster(#{
 | `poster_header(#{ title, authors, affiliations, logos, number })` | Logos (`poster_logo_height()` tall) on the left; the title (`poster_title_size()`, bold) and the author line centred right of them; the poster number bold in the top-right corner; a `poster_header_rule()` under it all. |
 | `author_line(authors, affiliations)` | Authors are names (strings or rich text: `markup("**A. Author**")`) or `#{ name, aff: [1, 2], presenter: true }`; affiliations are strings or rich text too. With `affiliation_position()` `"before"` (default, the Japanese convention): `（Univ. A¹・Univ. B²）○A. Author¹・B. Author¹,²` on one line; `"below"`: the authors, then the numbered affiliations. The line is one text node of rich-text spans — affiliation numbers are superscript spans — so it wraps like any text; a single affiliation is not numbered. |
 | `section(title, content)` / `section(number, title, content)` | A bar (`section_bar_height()`, `section_bar_fill()`, `section_bar_border()`, square unless `section_bar_radius()`) with the title centred on it, over `content` (an array of items `section_gap()` apart, or one node) padded `section_pad()`. Numbered `section_label_style()` (`"1."` → "1. Title") in the order sections are built; an integer `number` restarts the count from it, a string is used as is (`""` for none). The title is a string, rich text, or a text node used as is (the number goes before it in the bar's title style; `section_title(s)` gives that style to chain setters on). Effects: `section_title_glow()`, `section_title_shadow()`, `section_bar_shadow()`. |
-| `columns(items)` / `columns(items, widths)` / `columns(items, widths, opts)` | Side by side, `poster_gutter()` apart, with a dashed `vsep` in each gutter (`separators()`), starting `separator_inset()` down (the middle of the bars). Widths: flex weights, `"12cm"` lengths, `"auto"`. Options (also as the second argument): `gutter` — one length or one per gutter (so each row of a poster can have its own); `separators` — `true` / `false`, or one per gutter: `true`, `false`, a number (a separator ending that many cm below the top of the row) or `#{ start, end }` (cm from the top of the row; `start` defaults to the bar middle, `end` to the bottom). |
+| `columns(items)` / `columns(items, widths)` / `columns(items, widths, opts)` | Side by side, `poster_gutter()` apart, with a dashed `vsep` in each gutter (`separators()`), starting `separator_inset()` down (the middle of the bars). Widths: flex weights, `"12cm"` lengths, `"auto"`. Options (also as the second argument): `gutter` — one length or one per gutter (so each row of a poster can have its own); `separators` — `true` / `false`, or one per gutter: `true`, `false`, a number (a separator ending that many cm below the top of the row) or `#{ start, end, offset }` (cm from the top of the row; `start` defaults to the bar middle, `end` to the bottom; `offset` cm right of the gutter centre, negative left, default `separator_offset()` = 0). |
 | `rows(items)` / `rows(items, heights)` / `rows(items, heights, opts)` | Down the page, `poster_row_gap()` apart (dashed `hsep`s with `row_separators()`); same sizes as `columns`. Options: `gaps` (one or one per gap), `separators` (`true` / `false`, or one per gap). |
 | `vsep()` / `vsep(w)`, `hsep()` / `hsep(h)` | The dashed separators (`separator_color()`, `separator_width()`, `separator_dash()`) on their own: vertical in a gutter `w` wide / horizontal across the parent in a band `h` tall. |
 | `frame(content)` / `dashed_frame(content)` | A thin rounded border box (`frame_color()`, `frame_width()`, `frame_radius()`, `frame_pad()`; `frame_dash()`). Square grey boxes are core setters: `frame(..).radius(0).stroke("#7f7f7f")`. |
 | `note(s)` / `ref(s)` / `subheading(s)` | The highlighted take-home sentence (centred, `note_color()`) / a reference line (`ref_size()`, centred) / `"■ " + s` (`subheading_mark()`, `subheading_size()`; the mark bold on its own with `subheading_mark_bold()`, sized with `subheading_mark_size()`). |
 | `bullets(items)` | A list with a hanging indent: each item in a cell `bullet_indent()` right of its `bullet_mark()`, so wrapped lines align; an array item is a nested list. The mark has its own size, `bullet_mark_size()`, kept on the first line's baseline. |
-| `table(rows)` / `table(rows, opts)` | Rows of cells (strings, numbers, spans, nodes; `colspan(n, x)` spans n columns); the first row a bold header above a `table_header_rule_width()` rule. Options `header` (false: none), `widths`, `align` (one or per column), `rules` (`"grid"`, `"rows"`, `"booktabs"`, `"none"`), `pad` / `pad_x` / `pad_y`. Rules are filled rects between the cells, so the grid is exact (a spanning cell covers the rules between its columns); cells are padded `table_pad_x()` left and right, `table_pad_y()` top and bottom (both default `table_pad()`), filled `table_fill()` / `table_header_fill()`. |
+| `table(rows)` / `table(rows, opts)` | Rows of cells (strings, numbers, spans, nodes; `colspan(n, x)` spans n columns); the first row a bold header above a `table_header_rule_width()` rule. Options `header` (false: none), `widths`, `align` (one or per column), `rules` (`"grid"`, `"rows"`, `"booktabs"`, `"none"`), `pad` / `pad_x` / `pad_y`, `font` (every text cell: a family, fallback list or per-script map; default `table_font()`, the header `table_header_font()`), `header_font` (the header row; default `font`), `fonts` (one per column, `""` for the table's; over `font`). Node cells keep their own font; string and span cells keep the bold header. Rules are filled rects between the cells, so the grid is exact (a spanning cell covers the rules between its columns); cells are padded `table_pad_x()` left and right, `table_pad_y()` top and bottom (both default `table_pad()`), filled `table_fill()` / `table_header_fill()`. |
 
 All sizes derive from `base_size()`, so `style("poster")` (24 pt body) on A0
 gives the proportions of a typical PowerPoint poster: 53.5 pt titles on 2.3 cm
@@ -1554,6 +1587,9 @@ as well:
 fn section_bar_radius() { 0.3 }        // rounded bars (default 0: square)
 fn section_label_style() { "" }        // no numbers (default "1.")
 fn separators() { false }              // plain gutters (default true)
+fn separator_offset() { -0.05 }        // separators 0.5 mm left of the gutter centre (default 0)
+fn section_title_baseline() { 1.6 }    // bar title baseline 1.6 cm below the bar top (default (): centred)
+fn table_font() { "Yu Gothic" }       // table cells (default "": page font); table_header_font() follows it
 style(#{ note_color: "#ff6b5a", poster_gutter: 1.0, table_rules: "booktabs" });
 style(#{ section_title_glow: #{ blur: 0.15, color: "#000000c0" }, section_bar_shadow: false });
 ```
@@ -1574,9 +1610,27 @@ Hooks: `poster_size`, `poster_bg`, `poster_margin`, `poster_gutter`,
 `table_rule_width`, `table_header_rule_width`, `table_rules`, `table_pad`,
 `table_fill`, `table_header_fill`, `section_title_glow`,
 `section_title_shadow`, `section_bar_shadow`, `table_pad_x`, `table_pad_y`,
-`subheading_mark_bold`, `subheading_mark_size`, `bullet_mark_size`. Lengths are cm; the section counter is
+`subheading_mark_bold`, `subheading_mark_size`, `bullet_mark_size`,
+`table_font`, `table_header_font`, `separator_offset`,
+`section_title_baseline`, `poster_symbol_font`. Lengths are cm; the section counter is
 fresh for every evaluation. A section title is anchored on the bar's centre,
-so it stays centred even when a CJK font's line box is taller than the bar.
+so it stays centred even when a CJK font's line box is taller than the bar —
+or, with `section_title_baseline()` set (cm from the bar top), its first
+baseline is placed there with the core baseline anchor (font-exact, still
+centred across; default `()` = centred by box). A node title (or a numbered
+one, a row) has no baseline and stays centred.
+
+**Marks in a deliberate font.** ■ ● ○ • – — are "ambiguous" characters that
+[follow their neighbours](#fonts-fallback-lists-per-script-families-weights-italic),
+so "■ Samples" and "■ 試料" would get different squares. `poster_symbol_font()`
+(a family or list; default `""`: none) is given to the poster's marks — the
+subheading mark, the bullet mark, the presenter mark ○ — as their `symbol`
+font slot only (`.font(#{ symbol: … })`), so those symbols use it while
+letters, digits and the text keep the page font. The `"poster"` /
+`"poster-dark"` presets set it to a Japanese gothic (`["Yu Gothic",
+"Hiragino Sans", "Noto Sans CJK JP"]`, the first installed one), as
+PowerPoint sets marks typed in Japanese; set `poster_symbol_font: ""` for the
+neighbour rule.
 For Japanese posters set a font list once — `style("poster-dark", #{
 font_family: "Arial, Yu Gothic" })` puts Latin in Arial and Japanese in Yu
 Gothic, as PowerPoint does. Every text argument (titles, section titles,

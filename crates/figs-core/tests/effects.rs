@@ -822,6 +822,93 @@ fn equilibrium_options_and_hook_barbs() {
 }
 
 #[test]
+fn equilibrium_heads_are_independent_of_the_barb() {
+    use figs_core::schema::NodeKind;
+    // Triangle heads with hook barbs (the PowerPoint ⇌): two triangle-headed
+    // arrows, and hooks sized by hook_size / hook_width, leaving the shafts
+    // hook_start behind the tips.
+    let d = eval(
+        r#"page(10, 10, equilibrium(0, 3, 4, 3, #{ barb: "hook", head: "triangle", width: 0.1, gap: 0.4,
+                head_size: 0.3, head_width: 0.3, hook_size: 1, hook_width: 0.5, hook_start: 0.2 })).unit("cm")"#,
+    );
+    let arrows = nodes_of(&d, NodeKind::Arrow);
+    assert_eq!(arrows.len(), 2);
+    assert!(nodes_of(&d, NodeKind::Line).is_empty());
+    assert_pts(&arrows[0].points, &[[0.0, 2.8], [4.0, 2.8]]);
+    assert_pts(&arrows[1].points, &[[4.0, 3.2], [0.0, 3.2]]);
+    for a in &arrows {
+        assert_eq!(a.head_style, Some(HeadStyle::Triangle));
+        assert_eq!(a.head_size, Some(0.3));
+        assert_eq!(a.head_width, Some(HeadWidth::Abs(0.3)));
+    }
+    let hooks = nodes_of(&d, NodeKind::Path);
+    assert_eq!(hooks.len(), 2);
+    for (h, start, end) in [
+        (hooks[0], [3.8, 2.8], [2.8, 2.8 - 0.5]),
+        (hooks[1], [0.2, 3.2], [1.2, 3.2 + 0.5]),
+    ] {
+        assert_pts(&h.points, &[start]);
+        assert_pts(&[h.segments[0].to], &[end]);
+    }
+    // hook_start defaults to 0.6 × the head's length behind a head (core
+    // default head 5 × width), 0 without one.
+    let d = eval(
+        r#"page(10, 10, equilibrium(0, 3, 4, 3, #{ barb: "hook", head: "triangle", width: 0.1, gap: 0.4 })).unit("cm")"#,
+    );
+    assert_pts(&nodes_of(&d, NodeKind::Path)[0].points, &[[4.0 - 0.3, 2.8]]);
+    assert!(nodes_of(&d, NodeKind::Arrow)
+        .iter()
+        .all(|a| a.head_size.is_none()));
+
+    // The old hook sizing (head_size / head_width without a head) is the
+    // same as hook_size / hook_width.
+    let old = eval(
+        r#"page(10, 10, equilibrium(0, 3, 4, 3, #{ barb: "hook", head_size: 1, head_width: "5x" })).unit("cm")"#,
+    );
+    let new = eval(
+        r#"page(10, 10, equilibrium(0, 3, 4, 3, #{ barb: "hook", hook_size: 1, hook_width: "5x" })).unit("cm")"#,
+    );
+    let geom = |d: &figs_core::schema::RawDocument| {
+        let mut v: Vec<String> = Vec::new();
+        for k in [NodeKind::Line, NodeKind::Arrow, NodeKind::Path] {
+            for n in nodes_of(d, k) {
+                v.push(format!(
+                    "{:?} {:?} {:?} {:?}",
+                    n.kind, n.points, n.segments, n.stroke_width
+                ));
+            }
+        }
+        v
+    };
+    assert_eq!(geom(&old), geom(&new));
+    assert_eq!(geom(&old).len(), 4);
+    // ... and the explicit head "none" too; the defaults are unchanged
+    // (straight: barb heads; hook: plain shafts).
+    let none = eval(
+        r#"page(10, 10, equilibrium(0, 3, 4, 3, #{ barb: "hook", head: "none", head_size: 1, head_width: "5x" })).unit("cm")"#,
+    );
+    assert_eq!(geom(&old), geom(&none));
+    let d = eval(r#"page(10, 10, equilibrium(0, 3, 4, 3, #{ head: "triangle" })).unit("cm")"#);
+    let arrows = nodes_of(&d, NodeKind::Arrow);
+    assert!(arrows
+        .iter()
+        .all(|a| a.head_style == Some(HeadStyle::Triangle)));
+    assert!(nodes_of(&d, NodeKind::Path).is_empty());
+    // Harpoon heads plus hooks.
+    let d = eval(
+        r#"page(10, 10, equilibrium(0, 3, 4, 3, #{ barb: "hook", head: "barb" })).unit("cm")"#,
+    );
+    assert!(nodes_of(&d, NodeKind::Arrow)
+        .iter()
+        .all(|a| a.head_style == Some(HeadStyle::BarbLeft)));
+    assert_eq!(nodes_of(&d, NodeKind::Path).len(), 2);
+    assert!(
+        eval_err(r#"page(1, 1, equilibrium(0, 0, 1, 0, #{ head: "round" }))"#)
+            .contains("unknown head \"round\"")
+    );
+}
+
+#[test]
 fn arc_arrow_outline() {
     use figs_core::geom::ArcSweep;
     use figs_core::schema::parse::ArcRadius;

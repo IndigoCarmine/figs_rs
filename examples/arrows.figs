@@ -3,7 +3,8 @@
 // and `.opacity(..)` chain on it like on any shape.
 //
 //   block_arrow(x1, y1, x2, y2, shaft_w, head_w, head_len[, #{ both }])
-//   equilibrium(x1, y1, x2, y2[, #{ gap, width, barb, head_size, head_width }])
+//   equilibrium(x1, y1, x2, y2[, #{ gap, width, head, head_size, head_width,
+//                                   barb, hook_size, hook_width, hook_start }])
 //   arc_arrow(cx, cy, r, a0, a1, w[, #{ head_width, head_len, both }])
 //   block_arrow_along(points, w[, #{ radius, head_width, head_len, both }])
 //
@@ -22,6 +23,9 @@ page(20, 14, stack([
     equilibrium(9, 1.5, 13, 1.5),
     equilibrium(9, 3.5, 13, 3.5, #{ barb: "hook", width: 0.06, gap: 0.25 }),
     equilibrium(14.5, 1.5, 18.5, 1.5, #{ head_size: 0.4, head_width: "4x" }),
+    // Full triangle heads with the hooks (the head and the barb are separate).
+    equilibrium(14.5, 3.5, 18.5, 3.5, #{ barb: "hook", head: "triangle", width: 0.06, gap: 0.25,
+                                         hook_size: 1.2, hook_width: 0.4 }),
     label("equilibrium", 9, 4.4),
 
     // Circular block arrows: a cycle, and a double-headed arc.

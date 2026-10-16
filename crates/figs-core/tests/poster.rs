@@ -541,8 +541,20 @@ fn frames_notes_refs_and_subheadings() {
     approx(r.font_size.unwrap(), 24.0 * 0.835);
     assert_eq!(r.color, None);
     let s = kids[4].1;
-    assert_eq!(s.content.as_deref(), Some("■ S"));
+    // The poster presets set `poster_symbol_font()`: the mark is a span of
+    // its own with that `symbol` slot, the text keeps the page font.
+    assert_eq!(
+        spans(s),
+        [("■ ".to_string(), false), ("S".to_string(), false)]
+    );
+    let f = s.spans[0].font_family.as_deref().unwrap_or_default();
+    assert!(f.contains("symbol") && f.contains("Yu Gothic"), "{f}");
+    assert!(!f.contains("latin") && !f.contains("cjk"), "{f}");
+    assert_eq!(s.spans[1].font_family, None);
     approx(s.font_size.unwrap(), 24.0 * 1.335);
+    // Without the slot (the default style): one plain string.
+    let d0 = raw(r#"page(1, 1, subheading("S"))"#);
+    assert_eq!(d0.nodes["root"].content.as_deref(), Some("■ S"));
 
     // The dark theme: white frames, amber notes, white refs.
     let d = raw(r#"style("poster-dark"); page(30, 30, col([frame(rect()), note("N"), ref("R")]))"#);
@@ -1145,4 +1157,186 @@ fn author_line_takes_rich_names_and_affiliations() {
     let d =
         raw(r#"page(80, 10, poster_header(#{ authors: [markup("**A**")], affiliations: ["U"] }))"#);
     assert!(texts(&d).iter().any(|s| s == "（U）A"));
+}
+
+// ---- separator offsets, title baselines, table fonts, mark fonts ---------------
+
+#[test]
+fn separators_shift_off_the_gutter_centre() {
+    let src = |pre: &str, seps: &str| {
+        format!(
+            r#"{pre} fn separator_inset() {{ 5 }}
+               page(170, 50, columns([rect(), rect(), rect()], #{{ gutter: 10{seps} }})).unit("pt")"#
+        )
+    };
+    // (170 - 20) / 3 = 50 per column: gutter centres at 55 and 115.
+    let xs = |l: &ComputedLayout| -> Vec<f32> { separators(l).iter().map(|s| s.0[0]).collect() };
+    let l = lay_fixed(&src("", ""));
+    assert_eq!(xs(&l), [55.0, 115.0]);
+    // The hook shifts every separator; a map entry one gutter.
+    let l = lay_fixed(&src("fn separator_offset() { 3 }", ""));
+    for (x, want) in xs(&l).iter().zip([58.0, 118.0]) {
+        approx(*x, want);
+    }
+    let l = lay_fixed(&src(
+        "style(#{ separator_offset: 3 });",
+        ", separators: [#{ offset: -2 }, true]",
+    ));
+    let got = xs(&l);
+    approx(got[0], 53.0);
+    approx(got[1], 118.0);
+    // The rest of the separator is unchanged: from the inset to the bottom.
+    let (a, b, dash) = &separators(&l)[0];
+    assert_eq!((a[1], b[1]), (5.0, 50.0));
+    assert_eq!(dash.len(), 2);
+    // A plain `vsep(w)` follows the hook too.
+    let l = lay_fixed(
+        r#"fn separator_offset() { -1 } page(10, 50, row([vsep(10)]).stretch()).unit("pt")"#,
+    );
+    approx(separators(&l)[0].0[0], 4.0);
+    let e = fail(
+        r#"page(1, 1, columns([rect(), rect()], #{ gutter: 0, separators: [#{ offset: 1 }] }))"#,
+    );
+    assert!(e.contains("needs a gutter wider than 0"), "{e}");
+    assert!(fail(&src("", r#", separators: [#{ offset: "x" }, true]"#))
+        .contains("separator offset is a length"));
+}
+
+#[test]
+fn section_title_on_a_baseline() {
+    // Without fonts a 17.84 pt title's first baseline is 0.1 + 0.8 em below
+    // its box top (half-leading of the 1.2 line, then the fallback ascent).
+    let base = 8.0 * 2.23 * 0.9;
+    let src = |pre: &str, title: &str| {
+        format!(
+            r#"{pre} fn section_bar_height() {{ 30 }}
+               page(200, 100, section({title}, rect())).unit("pt")"#
+        )
+    };
+    for pre in [
+        "fn section_title_baseline() { 22 }",
+        "style(#{ section_title_baseline: 22 });",
+    ] {
+        let l = lay_fixed(&src(pre, "\"A\""));
+        let t = text_rect(&l, "1. A");
+        approx(t.y + base, 22.0);
+        approx(t.x + t.w / 2.0, 100.0);
+        let d = raw(&src(pre, "\"A\""));
+        let bar = children(&d, "root")[0].1;
+        assert_eq!(bar.viewbox, Some([0.0, 0.0, 1.0, 30.0]));
+        approx(bar.height.unwrap(), 30.0);
+    }
+    // The default centres the box, as before.
+    let l = lay_fixed(&src("", "\"A\""));
+    let t = text_rect(&l, "1. A");
+    approx(t.y + t.h / 2.0, 15.0);
+    // Rich titles have a baseline too; node titles (a row) stay centred.
+    let l = lay_fixed(&src(
+        "fn section_title_baseline() { 22 }",
+        "markup(\"*A*\")",
+    ));
+    let t = text_rect(&l, "1. A");
+    approx(t.y + base, 22.0);
+    let l = lay_fixed(&src(
+        "fn section_title_baseline() { 22 }",
+        "\"\", text(\"N\").size(10)",
+    ));
+    let t = text_rect(&l, "N");
+    approx(t.y + t.h / 2.0, 15.0);
+    assert!(
+        fail(&src(r#"fn section_title_baseline() { "x" }"#, "\"A\""))
+            .contains("section_title_baseline")
+    );
+}
+
+#[test]
+fn table_fonts() {
+    let font = |d: &RawDocument, s: &str| text_node(d, s).1.font_family.clone();
+    // Default: no font (the page font).
+    let d = raw(r#"page(10, 10, table([["H", "K"], ["a", "b"]]))"#);
+    for s in ["H", "K", "a", "b"] {
+        assert_eq!(font(&d, s), None, "{s}");
+    }
+    // Hooks: the cells' font, the header's following it unless set.
+    let d = raw(
+        r#"style(#{ table_font: "Body Sans" }); page(10, 10, table([["H", "K"], ["a", "b"]]))"#,
+    );
+    assert_eq!(font(&d, "a").as_deref(), Some("Body Sans"));
+    assert_eq!(font(&d, "H").as_deref(), Some("Body Sans"));
+    assert_eq!(
+        text_node(&d, "H").1.font_weight,
+        Some(700),
+        "the header stays bold"
+    );
+    let d = raw(
+        r#"style(#{ table_font: "Body Sans", table_header_font: "Head Serif" });
+           page(10, 10, table([["H", "K"], ["a", "b"]]))"#,
+    );
+    assert_eq!(font(&d, "H").as_deref(), Some("Head Serif"));
+    assert_eq!(font(&d, "b").as_deref(), Some("Body Sans"));
+    // Options: `font` for every cell (header included), `header_font`, and
+    // `fonts` per column ("" keeps the table's); node cells keep their own.
+    let d = raw(
+        r#"page(10, 10, table([["H", "K", "L"], ["a", "b", text("n").font("Own")]],
+              #{ font: ["T A", "T B"], fonts: ["", "Col Two", ""] }))"#,
+    );
+    assert_eq!(font(&d, "H").as_deref(), Some("T A, T B"));
+    assert_eq!(font(&d, "a").as_deref(), Some("T A, T B"));
+    assert_eq!(font(&d, "K").as_deref(), Some("Col Two"));
+    assert_eq!(font(&d, "b").as_deref(), Some("Col Two"));
+    assert_eq!(font(&d, "n").as_deref(), Some("Own"));
+    let d = raw(r#"page(10, 10, table([["H", "K"], ["a", "b"]],
+              #{ font: #{ latin: "Arial", cjk: "Yu Gothic" }, header_font: "Head", fonts: ["X", ""] }))"#);
+    assert_eq!(font(&d, "H").as_deref(), Some("Head"));
+    assert_eq!(font(&d, "K").as_deref(), Some("Head"));
+    assert_eq!(font(&d, "a").as_deref(), Some("X"));
+    let b = font(&d, "b").unwrap();
+    assert!(b.contains("latin") && b.contains("Yu Gothic"), "{b}");
+    assert!(
+        fail(r#"page(1, 1, table([["a", "b"]], #{ fonts: ["X"] }))"#)
+            .contains("fonts must be one font per column (2")
+    );
+}
+
+fn span_font(s: &figs_core::schema::span::RawSpan) -> String {
+    s.font_family.clone().unwrap_or_default()
+}
+
+#[test]
+fn poster_marks_get_the_symbol_slot() {
+    let slot = |n: &RawNode| n.font_family.clone().unwrap_or_default();
+    // Bullet marks: a `symbol` slot only, so letters keep the page font.
+    let d = raw(r#"style("poster"); page(10, 10, bullets(["one"]))"#);
+    let m = slot(text_node(&d, "•").1);
+    assert!(m.contains("symbol") && m.contains("Yu Gothic"), "{m}");
+    assert!(!m.contains("latin") && !m.contains("cjk"), "{m}");
+    assert_eq!(text_node(&d, "one").1.font_family, None);
+    // The dark poster too; the default style and an "" hook set none.
+    let d = raw(r#"style("poster-dark"); page(10, 10, bullets(["one"]))"#);
+    assert!(slot(text_node(&d, "•").1).contains("symbol"));
+    for pre in ["", r#"style("poster", #{ poster_symbol_font: "" });"#] {
+        let d = raw(&format!(r#"{pre} page(10, 10, bullets(["one"]))"#));
+        assert_eq!(text_node(&d, "•").1.font_family, None, "{pre}");
+    }
+    // A family of your own.
+    let d =
+        raw(r#"style(#{ poster_symbol_font: "Segoe UI Symbol" }); page(10, 10, subheading("S"))"#);
+    let root = &d.nodes["root"];
+    assert_eq!(root.spans[0].text, "■ ");
+    assert!(span_font(&root.spans[0]).contains("Segoe UI Symbol"));
+    // The presenter mark: a span of its own in the author line.
+    let d = raw(
+        r#"style("poster"); page(80, 10, author_line([#{ name: "A", presenter: true }, "B"], ["U"]))"#,
+    );
+    let root = &d.nodes["root"];
+    let i = root
+        .spans
+        .iter()
+        .position(|s| s.text == "○")
+        .expect("a ○ span");
+    assert!(span_font(&root.spans[i]).contains("symbol"));
+    assert_eq!(plain(root), "（U）○A・B");
+    // Without the slot the line is unchanged (one merged run).
+    let d = raw(r#"page(80, 10, author_line([#{ name: "A", presenter: true }], ["U"]))"#);
+    assert_eq!(spans(&d.nodes["root"]), [("（U）○A".to_string(), false)]);
 }

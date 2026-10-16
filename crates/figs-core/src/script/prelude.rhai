@@ -148,7 +148,12 @@ fn scalebar_frac_inset() { style_get("scalebar_frac_inset", 0.025) }
 // Preset name -> style map ("default" is the built-in hook defaults).
 fn style_presets() {
     let journal = #{ font_family: "Arial", base_size: 7, label_size: 8 };
-    let poster = #{ base_size: 24, title_size: 60, gap: 1.0 };
+    // Marks (■ ● ○ • – —) in a deliberate face: a Japanese gothic, as
+    // PowerPoint sets marks typed in Japanese (see `poster_symbol_font()`).
+    let poster = #{
+        base_size: 24, title_size: 60, gap: 1.0,
+        poster_symbol_font: ["Yu Gothic", "Hiragino Sans", "Noto Sans CJK JP"],
+    };
     let dark = #{
         fg: "#ffffff", palette: dark_palette(), page_bg: "#0f1a2e",
         label_halo: "#000000", marker_ring: "#0f1a2e",
@@ -191,7 +196,8 @@ fn style_keys() {
         "plot_aspect", "plot_label_room", "plot_pad", "ylabel_rotated", "plot_title_size",
         "plot_frame_box", "plot_font", "tick_label_size", "tick_label_font", "tick_label_pad",
         "axis_label_size", "axis_label_font", "axis_label_pad", "legend_size", "legend_font",
-        "plot_title_font",
+        "plot_title_font", "xtick_label_pad", "ytick_label_pad", "tick_label_pad_mode",
+        "xlabel_pad", "ylabel_pad", "xlabel_offset", "ylabel_offset",
         // colours (theme)
         "fg", "plot_fg", "plot_bg", "page_bg",
         // posters
@@ -211,6 +217,8 @@ fn style_keys() {
         "table_pad", "table_fill", "table_header_fill",
         "section_title_glow", "section_title_shadow", "section_bar_shadow", "table_pad_x",
         "table_pad_y", "subheading_mark_bold", "subheading_mark_size", "bullet_mark_size",
+        "table_font", "table_header_font", "separator_offset", "section_title_baseline",
+        "poster_symbol_font",
     ]
 }
 
@@ -357,11 +365,45 @@ fn tick_label_size() { style_get("tick_label_size", base_size()) }
 fn tick_label_font() { style_get("tick_label_font", plot_font()) }
 fn tick_label_pad() { style_get("tick_label_pad", base_size() * 0.012) }
 
+// The same gap per axis (cm; plot options of the same names override them):
+// x tick labels below the axis, y tick labels left of it. Both follow
+// `tick_label_pad()`. A negative pad moves the label box onto the tick (the
+// tick room plus the pad can't be negative: the box never crosses the axis).
+fn xtick_label_pad() { style_get("xtick_label_pad", tick_label_pad()) }
+fn ytick_label_pad() { style_get("ytick_label_pad", tick_label_pad()) }
+
+// What `xtick_label_pad` reaches to: "box" (default) — the top of the x tick
+// labels' line box (half-leading and the font's ascent above the digits
+// included); "baseline" — their first baseline, measured on the shaped text
+// with the core baseline anchors, so the pad is font-exact: the digits' ink
+// starts their height above it (~0.716 em in Arial / Helvetica), i.e. ink
+// gap = pad − 0.716 × size. The y tick labels are always measured to the
+// right edge of their box (the end of the label's advance) and centred on
+// their tick by box; category names (which wrap in their slots) by box.
+fn tick_label_pad_mode() { style_get("tick_label_pad_mode", "box") }
+
 // Axis labels (`xlabel` / `ylabel`): size (pt), font, and their gap to the
 // tick labels (cm; the turned y label sits twice that away).
 fn axis_label_size() { style_get("axis_label_size", base_size()) }
 fn axis_label_font() { style_get("axis_label_font", plot_font()) }
 fn axis_label_pad() { style_get("axis_label_pad", base_size() * 0.012) }
+
+// The axis-label gaps per axis, box to box (cm, >= 0): the x label below
+// the x tick labels (default `axis_label_pad()`), the turned y label left of
+// the y tick labels (default twice that). Negative pads are an error — to
+// bring a label closer than its box allows, place it by its baseline with
+// the offsets below.
+fn xlabel_pad() { style_get("xlabel_pad", axis_label_pad()) }
+fn ylabel_pad() { style_get("ylabel_pad", axis_label_pad() * 2) }
+
+// Exact axis-label placement (cm > 0, or () — the default — to follow the
+// tick labels by the pads above): the x label's first baseline this far
+// below the x axis; the turned y label's baseline this far left of the y
+// axis (an unrotated y label: its baseline this far above the top of the
+// axis, left-aligned to it). Independent of the tick labels, so nothing
+// moves out of the way: a small offset overlaps them.
+fn xlabel_offset() { style_get("xlabel_offset", ()) }
+fn ylabel_offset() { style_get("ylabel_offset", ()) }
 
 // Legend labels: size (pt) and font.
 fn legend_size() { style_get("legend_size", base_size()) }
@@ -575,23 +617,42 @@ fn shape_len(who, v, w) {
 // `equilibrium(x1, y1, x2, y2, gap)` or `(.., opts)`, a map of
 //   gap         between the two arrows (default 4 × the width)
 //   width       stroke width (default `annotation_width()`)
-//   barb        "straight" (default): harpoons, the core half-barb heads
-//               (`head_style("barb_left")`); "hook": plain shafts, each with
-//               a curved barb that leaves the tip along the shaft and bends
-//               outwards (the PowerPoint ⇌), 1.5 × the width, round caps
-//   head_size   barb length along the shaft (straight: the core default
-//               5 × width; hook: 0.4 × the chord, at most 20 × width)
-//   head_width  how far the barb reaches out, a length or "3x" of the
-//               width (straight: core default; hook: 0.4 × head_size)
+//   head        the head on each tip: "barb" (a half head on the outer
+//               side, the core `head_style("barb_left")` — the harpoon),
+//               "triangle" (a full filled head) or "none"; default "barb",
+//               or "none" with barb "hook"
+//   head_size   the head's length along the shaft (core default 5 × width)
+//   head_width  its width across, a length or "3x" of the width (core
+//               default 0.8 × head_size)
+//   barb        "straight" (default): no barb beyond the head; "hook": a
+//               curved barb leaving the shaft and bending outwards (the
+//               PowerPoint ⇌), 1.5 × the width with round caps — on plain
+//               shafts by default, or behind a `head`
+//   hook_size   the hook's length back along the shaft from where it starts
+//               (default 0.4 × the chord, at most 20 × width)
+//   hook_width  how far out it reaches, a length or "3x" of the width
+//               (default 0.4 × hook_size)
+//   hook_start  how far behind the tip it leaves the shaft (default 0, or
+//               0.6 × the head's length behind a head)
+// Deprecated: with no head (barb "hook" and head "none"), head_size /
+// head_width size the hook, as before hook_size / hook_width existed.
 // A `stack` of the arrows (and hooks): core setters chain on it.
 fn equilibrium(x1, y1, x2, y2) { equilibrium(x1, y1, x2, y2, #{}) }
 
 fn equilibrium(x1, y1, x2, y2, opts) {
     if type_of(opts) != "map" { opts = #{ gap: opts }; }
-    shape_opts("equilibrium", opts, ["gap", "width", "barb", "head_size", "head_width"]);
+    shape_opts("equilibrium", opts, ["gap", "width", "barb", "head", "head_size", "head_width",
+                                     "hook_size", "hook_width", "hook_start"]);
     let w = plot_opt(opts, "width", annotation_width()).to_float();
     let gap = plot_opt(opts, "gap", w * 4.0);
     let barb = plot_opt(opts, "barb", "straight");
+    if barb != "straight" && barb != "hook" {
+        throw `equilibrium(): unknown barb "${barb}" (straight, hook)`;
+    }
+    let head = plot_opt(opts, "head", if barb == "hook" { "none" } else { "barb" });
+    if !["none", "triangle", "barb"].contains(head) {
+        throw `equilibrium(): unknown head "${head}" (none, triangle, barb)`;
+    }
     let f = chord_frame("equilibrium", x1, y1, x2, y2);
     let nx = f[0];
     let ny = f[1];
@@ -599,36 +660,45 @@ fn equilibrium(x1, y1, x2, y2, opts) {
     let oy = ny * gap / 2.0;
     let c = fg();
     let parts = [];
-    if barb == "straight" {
-        for a in [arrow(x1 + ox, y1 + oy, x2 + ox, y2 + oy), arrow(x2 - ox, y2 - oy, x1 - ox, y1 - oy)] {
-            a = a.head_style("barb_left").stroke_width(w);
-            if opts.contains("head_size") { a = a.head_size(opts.head_size); }
-            if opts.contains("head_width") { a = a.head_width(opts.head_width); }
-            parts.push(a);
+    // The two shafts: the upper one to (x2, y2), the lower one back.
+    for s in [[x1 + ox, y1 + oy, x2 + ox, y2 + oy], [x2 - ox, y2 - oy, x1 - ox, y1 - oy]] {
+        if head == "none" {
+            parts.push(line(s[0], s[1], s[2], s[3]).stroke_width(w));
+            continue;
         }
-    } else if barb == "hook" {
-        let hs = plot_opt(opts, "head_size", if f[2] * 0.4 < w * 20.0 { f[2] * 0.4 } else { w * 20.0 }).to_float();
-        let hw = if opts.contains("head_width") {
-            shape_len("equilibrium", opts.head_width, w)
-        } else { hs * 0.4 };
-        // Each tip, the unit back along its shaft, and outwards.
+        let a = arrow(s[0], s[1], s[2], s[3]).stroke_width(w)
+            .head_style(if head == "barb" { "barb_left" } else { "triangle" });
+        if opts.contains("head_size") { a = a.head_size(opts.head_size); }
+        if opts.contains("head_width") { a = a.head_width(opts.head_width); }
+        parts.push(a);
+    }
+    if barb == "hook" {
+        // Without a head, head_size / head_width are the hook's (deprecated).
+        let alias = head == "none";
+        let hs = if opts.contains("hook_size") { opts.hook_size }
+                 else if alias && opts.contains("head_size") { opts.head_size }
+                 else if f[2] * 0.4 < w * 20.0 { f[2] * 0.4 } else { w * 20.0 };
+        hs = hs.to_float();
+        let hw = if opts.contains("hook_width") { shape_len("equilibrium", opts.hook_width, w) }
+                 else if alias && opts.contains("head_width") { shape_len("equilibrium", opts.head_width, w) }
+                 else { hs * 0.4 };
+        let hl = if opts.contains("head_size") { opts.head_size.to_float() } else { w * 5.0 };
+        let h0 = plot_opt(opts, "hook_start", if alias { 0.0 } else { hl * 0.6 }).to_float();
+        // Where each hook leaves its shaft, the unit back along the shaft,
+        // and outwards.
         let ends = [
-            [x2 + ox, y2 + oy, ny, -nx, nx, ny],
-            [x1 - ox, y1 - oy, -ny, nx, -nx, -ny],
+            [x2 + ox + ny * h0, y2 + oy - nx * h0, ny, -nx, nx, ny],
+            [x1 - ox - ny * h0, y1 - oy + nx * h0, -ny, nx, -nx, -ny],
         ];
-        parts.push(line(x1 + ox, y1 + oy, x2 + ox, y2 + oy).stroke_width(w));
-        parts.push(line(x2 - ox, y2 - oy, x1 - ox, y1 - oy).stroke_width(w));
         for e in ends {
-            // Local [back, out] -> page: tangent to the shaft at the tip,
-            // curling out to (head_size, head_width).
+            // Local [back, out] -> page: tangent to the shaft where it
+            // starts, curling out to (hook_size, hook_width).
             let c1 = hook_pt(e, hs * 0.57, 0.0);
             let c2 = hook_pt(e, hs * 1.01, hw * 0.41);
             let q = hook_pt(e, hs, hw);
             parts.push(path([[e[0], e[1]]]).cubic(c1[0], c1[1], c2[0], c2[1], q[0], q[1])
                 .stroke_width(w * 1.5).cap("round"));
         }
-    } else {
-        throw `equilibrium(): unknown barb "${barb}" (straight, hook)`;
     }
     if c != "" {
         let out = [];
@@ -1904,6 +1974,13 @@ fn plot_norm(x0, x1, y0, y1, p) { [(p[0] - x0) / (x1 - x0), (p[1] - y0) / (y1 - 
 //                  "out" or "in" for that axis (default tick_direction())
 //   frame_box      true: the node's box is the data frame and labels hang
 //                  outside it (default plot_frame_box())
+//   xtick_label_pad, ytick_label_pad, tick_label_pad_mode
+//                  tick -> tick label gaps per axis (cm) and what the x one
+//                  reaches to, "box" or "baseline" (default the hooks)
+//   xlabel_pad, ylabel_pad
+//                  tick labels -> axis label, box to box (cm, >= 0)
+//   xlabel_offset, ylabel_offset
+//                  axis -> axis label baseline (cm > 0): exact placement
 //   style          a map of style keys in force for this plot only
 //                  (`#{ base_size: 10, tick_label_size: 9 }`)
 // Labels (`xlabel`, `ylabel`, `title`) take markup spans too:
@@ -1920,7 +1997,9 @@ fn plot(opts, series) {
     if type_of(opts) != "map" { throw `plot(): options must be a map (got ${type_of(opts)})`; }
     let known = ["x", "y", "xlabel", "ylabel", "xscale", "yscale", "xticks", "yticks",
                  "legend", "frame", "marks", "title", "xminor", "yminor", "xtick_format",
-                 "ytick_format", "xtick_direction", "ytick_direction", "frame_box", "style"];
+                 "ytick_format", "xtick_direction", "ytick_direction", "frame_box", "style",
+                 "xtick_label_pad", "ytick_label_pad", "tick_label_pad_mode", "xlabel_pad",
+                 "ylabel_pad", "xlabel_offset", "ylabel_offset"];
     for k in opts.keys() {
         if !known.contains(k) {
             throw `plot(): unknown option "${k}" (${list_names(known)})`;
@@ -2182,18 +2261,46 @@ fn plot_build(opts, series) {
     // box, so each margin is exactly what its labels measure — the widest y
     // tick label, the tallest x tick label, the half labels overhanging the
     // axis ends — and nothing spills past the panel.
-    let pad = tick_label_pad();                    // tick -> label (cm)
-    let apad = axis_label_pad();                   // tick labels -> axis label
+    let xpad = plot_len(opts, "xtick_label_pad", xtick_label_pad());   // tick -> label (cm)
+    let ypad = plot_len(opts, "ytick_label_pad", ytick_label_pad());
+    let mode = plot_opt(opts, "tick_label_pad_mode", tick_label_pad_mode());
+    if mode != "box" && mode != "baseline" {
+        throw plot_who(opts, "tick_label_pad_mode") + ` must be "box" or "baseline" (got "${mode}")`;
+    }
+    let apad = axis_label_pad();                   // title <-> unrotated y label
+    if !plot_finite(apad) || apad < 0 {
+        throw `axis_label_pad(): must be a length >= 0 cm (got ${apad}); place a label closer with xlabel_offset / ylabel_offset`;
+    }
+    let xlpad = plot_label_pad(opts, "xlabel_pad", xlabel_pad(), "xlabel_offset");
+    let ylpad = plot_label_pad(opts, "ylabel_pad", ylabel_pad(), "ylabel_offset");
+    let xoff = plot_label_offset(opts, "xlabel_offset", xlabel_offset());
+    let yoff = plot_label_offset(opts, "ylabel_offset", ylabel_offset());
     let tsize = tick_label_size();
     let tfont = tick_label_font();
     let asize = axis_label_size();
     let afont = axis_label_font();
     let xtl = if xin { 0.0 } else { tl };          // room the ticks take outside
     let ytl = if yin { 0.0 } else { tl };
+    // The label box (or baseline) may move onto the tick, not past the axis.
+    for a in [["x", xtl, xpad], ["y", ytl, ypad]] {
+        if a[1] + a[2] < -1e-12 {
+            throw plot_who(opts, `${a[0]}tick_label_pad`) +
+                ` ${a[2]} would put the ${a[0]} tick labels across the axis (tick room ${a[1]} cm + pad must be >= 0)`;
+        }
+    }
+    let baseline = mode == "baseline";
     let xl = [];
     for i in 0..xa.ticks.len() {
         if xa.ticks[i] >= x0 - 1e-9 && xa.ticks[i] <= x1 + 1e-9 {
-            xl.push(plot_label(xa.labels[i], tsize, tfont).center().at(xa.ticks[i], 0).anchor(0.5, 0));
+            let t = plot_label(xa.labels[i], tsize, tfont).center();
+            xl.push(if baseline {
+                // Its first baseline `xtl + xpad` below the axis, in a plain
+                // stack that measures down to the label's box bottom (so
+                // what follows clears it), centred on the tick.
+                stack([t.at(0, xtl + xpad).anchor(0, "baseline")]).at(xa.ticks[i], 0).anchor(0.5, 0)
+            } else {
+                t.at(xa.ticks[i], 0).anchor(0.5, 0)
+            });
         }
     }
     let yl = [];
@@ -2213,12 +2320,20 @@ fn plot_build(opts, series) {
     if rotated {
         // Unwrapped: a label longer than the axis overflows (with a layout
         // warning) instead of wrapping mid-word.
-        let t = plot_label(ylabel, asize, afont).center().nowrap();
-        yband.push(t.rotate(-90));
-        yband.push(rect().width(apad * 2));
+        let t = plot_label(ylabel, asize, afont).center().nowrap().rotate(-90);
+        if type_of(yoff) == "()" {
+            yband.push(t);
+            yband.push(rect().width(ylpad));
+        } else {
+            // Its baseline `yoff` left of the axis: a stack that wide, in cm
+            // from its right edge (on the axis) across, fractions of the
+            // axis along; the label's ascent hangs out to the left.
+            parts.push(stack([t.at(-yoff, 0.5).anchor("baseline", 0.5)])
+                .viewbox(-yoff, 0, 0, 1).width(yoff).x(x0).anchor(1, 0));
+        }
     }
     yband.push(stack(yl).viewbox(0, y1, 1, y0));
-    yband.push(rect().width(ytl + pad));
+    yband.push(rect().width(ytl + ypad));
     parts.push(row(yband).stretch().x(x0).anchor(1, 0));
     // Bottom band, as wide as the area: room for the ticks, the x tick labels
     // (a viewbox stack spanning the axis), then the x label centred under it.
@@ -2226,15 +2341,27 @@ fn plot_build(opts, series) {
     // of a row instead, one per slot: long names wrap to the slot width rather
     // than run into each other.
     let xband = if cats.len() > 0 {
-        let g = pad * 0.5;
+        let g = if xpad > 0.0 { xpad * 0.5 } else { 0.0 };
         let cells = [];
         for c in cats { cells.push(col([plot_label(c, tsize, tfont).center()]).stretch().pad(g).flex(1)); }
-        [rect().height(xtl + pad - g), row(cells)]
+        [rect().height(xtl + xpad - g), row(cells)]
+    } else if baseline {
+        [stack(xl).viewbox(x0, 0, x1, 1)]
     } else {
-        [rect().height(xtl + pad), stack(xl).viewbox(x0, 0, x1, 1)]
+        [rect().height(xtl + xpad), stack(xl).viewbox(x0, 0, x1, 1)]
     };
     let xlabel = plot_opt(opts, "xlabel", "");
-    if plot_has_label(xlabel) { xband += [rect().height(apad), plot_label(xlabel, asize, afont).center()]; }
+    if plot_has_label(xlabel) {
+        let t = plot_label(xlabel, asize, afont).center();
+        if type_of(xoff) == "()" {
+            xband += [rect().height(xlpad), t];
+        } else {
+            // Its first baseline `xoff` below the axis (a stack that tall,
+            // in cm down, fractions across); the descent hangs below it.
+            parts.push(stack([t.at(0.5, xoff).anchor(0.5, "baseline")])
+                .viewbox(0, 0, 1, xoff).height(xoff).y(y0));
+        }
+    }
     parts.push(col(xband).stretch().y(y0));
     // An unrotated y label sits above the axis, its bottom edge half its own
     // height up: clear of the top tick label's overhang (same text size).
@@ -2249,7 +2376,11 @@ fn plot_build(opts, series) {
         top.push(plot_label(ptitle, plot_title_size(), plot_title_font()).center());
     }
     if plot_has_label(ylabel) && !rotated {
-        if top.len() == 0 {
+        if type_of(yoff) != "()" {
+            // Its baseline `yoff` above the top of the axis, left-aligned.
+            parts.push(stack([plot_label(ylabel, asize, afont).at(0, 0).anchor(0, "baseline")])
+                .viewbox(0, 0, 1, yoff).height(yoff).y(y1).anchor(0, 1));
+        } else if top.len() == 0 {
             parts.push(plot_label(ylabel, asize, afont).at(x0, y1).anchor(0, 1.5));
         } else {
             top.push(plot_label(ylabel, asize, afont));
@@ -2312,6 +2443,39 @@ fn plot_tick_inward(opts, opt, dir) {
     let d = plot_opt(opts, opt, dir);
     if d != "out" && d != "in" { throw `plot(): ${opt} must be "out" or "in" (got "${d}")`; }
     d == "in"
+}
+
+// Who set plot setting `key`: "plot(): key" when the option is given, else
+// the hook "key()" — for errors.
+fn plot_who(opts, key) { if opts.contains(key) { `plot(): ${key}` } else { `${key}():` } }
+
+// Plot length `key` (cm): the option when given, else the hook value `v`,
+// as a float; anything but a finite number is an error.
+fn plot_len(opts, key, v) {
+    let x = plot_opt(opts, key, v);
+    if !plot_finite(x) { throw plot_who(opts, key) + ` must be a length in cm (got ${x})`; }
+    x.to_float()
+}
+
+// An axis-label pad (cm, box to box): `plot_len`, and >= 0 — a label closer
+// than its box allows is placed by its baseline with `offset` instead.
+fn plot_label_pad(opts, key, v, offset) {
+    let x = plot_len(opts, key, v);
+    if x < 0.0 {
+        throw plot_who(opts, key) + ` must be >= 0 cm (got ${x}); to bring the label closer, place its baseline with ${offset}`;
+    }
+    x
+}
+
+// An axis-label offset: () (follow the tick labels), or a length > 0 (cm
+// from the axis to the label's baseline).
+fn plot_label_offset(opts, key, v) {
+    let x = plot_opt(opts, key, v);
+    if type_of(x) == "()" { return x; }
+    if !plot_finite(x) || !(x > 0) {
+        throw plot_who(opts, key) + ` must be a length > 0 cm from the axis to the label's baseline, or () (got ${x})`;
+    }
+    x.to_float()
 }
 
 // Axis `ax` with its tick labels made by `fmt` (an `xtick_format` /
@@ -2424,6 +2588,13 @@ fn section_title_font() { style_get("section_title_font", "") }
 // Bar height (cm): 2.3 cm for the 53.5 pt title.
 fn section_bar_height() { style_get("section_bar_height", section_title_size() * 0.043) }
 
+// Where the bar title sits: () (default) — its box centred on the bar (both
+// ways), or a length — its first baseline that many cm below the bar top
+// (placed with the core baseline anchor, so it is font-exact; still
+// centred across). A node title (`section(text(..), ..)`, or a numbered one,
+// a row) has no baseline and stays centred by its box.
+fn section_title_baseline() { style_get("section_title_baseline", ()) }
+
 // Bar fill (colour or gradient), border colour ("" for none), border width
 // (cm, 0.25 pt at 24 pt) and corner radius (cm; square by default).
 fn section_bar_fill() {
@@ -2470,6 +2641,10 @@ fn separator_dash() {
 // of the section bars, so it hangs from them.
 fn separator_inset() { style_get("separator_inset", section_bar_height() * 0.5) }
 
+// How far a column separator sits right of its gutter's centre (cm; negative
+// = left; default 0, centred). Per gutter: `separators: [#{ offset: .. }]`.
+fn separator_offset() { style_get("separator_offset", 0) }
+
 // `frame`: border colour, width (cm), corner radius (cm), padding (cm) and
 // the dash of `dashed_frame`.
 fn frame_color() {
@@ -2511,6 +2686,23 @@ fn subheading_size() { style_get("subheading_size", base_size() * 1.335) }
 fn subheading_mark_bold() { style_get("subheading_mark_bold", false) }
 fn subheading_mark_size() { style_get("subheading_mark_size", subheading_size()) }
 
+// The `symbol` font slot of the poster's marks — the subheading mark, the
+// bullet mark, the presenter mark: ■ ● ○ • – — and the other "ambiguous"
+// symbols in them are set in this family (a name or fallback list) instead
+// of following their neighbours (which makes "■ Samples" take the Latin
+// face and "■ 試料" the Japanese one). Only those characters of the marks:
+// letters, digits and the text keep the page font. "" (default) sets no slot;
+// the "poster" presets pick a Japanese gothic, as PowerPoint does for marks
+// typed in Japanese (a family that isn't installed is skipped).
+fn poster_symbol_font() { style_get("poster_symbol_font", "") }
+
+// `x` (a text node or a span) with `poster_symbol_font()` as its `symbol`
+// slot, when one is set.
+fn poster_mark_font(x) {
+    let f = poster_symbol_font();
+    if table_no_font(f) { x } else { x.font(#{ symbol: f }) }
+}
+
 // `table`: text size (pt), rule colour, rule width (cm; 1 pt at 24 pt), the
 // header rule (3x), rules ("grid", "rows": horizontal only, "booktabs": top,
 // header and bottom, "none"), cell padding (cm), cell fill and header fill
@@ -2530,6 +2722,17 @@ fn table_pad_x() { style_get("table_pad_x", table_pad()) }
 fn table_pad_y() { style_get("table_pad_y", table_pad()) }
 fn table_fill() { style_get("table_fill", "") }
 fn table_header_fill() { style_get("table_header_fill", "") }
+
+// Font of the text cells (a family, fallback list or per-script map; "" =
+// the page font) and of the header row (default the cells').
+fn table_font() { style_get("table_font", "") }
+fn table_header_font() { style_get("table_header_font", table_font()) }
+
+// Is font spec `f` unset ("" / [] / ())?
+fn table_no_font(f) {
+    let k = type_of(f);
+    k == "()" || (k == "string" && f == "") || (k == "array" && f.len() == 0)
+}
 
 // --- helpers ---
 
@@ -2591,13 +2794,22 @@ fn poster_weights(who, n, ws) {
 // `poster_gutter()`): centred in it, from `separator_inset()` below the top
 // to the bottom.
 fn vsep() { vsep(poster_gutter()) }
-fn vsep(w) { poster_vsep(w, separator_inset(), ()) }
+fn vsep(w) { poster_vsep(w, separator_inset(), (), separator_offset()) }
 
 // `vsep` from `y0` cm below the top down to `y1` cm below it (() for
-// the bottom).
-fn poster_vsep(w, y0, y1) {
-    let l = line(0.5, 0, 0.5, 1).viewbox(0, 0, 1, 1).stroke(separator_color())
-        .stroke_width(separator_width()).dash(separator_dash());
+// the bottom), `off` cm right of the gutter's centre.
+fn poster_vsep(w, y0, y1) { poster_vsep(w, y0, y1, separator_offset()) }
+fn poster_vsep(w, y0, y1, off) {
+    if !plot_finite(off) { throw `columns(): a separator offset is a length in cm (got ${off})`; }
+    let l = if off == 0 {
+        line(0.5, 0, 0.5, 1).viewbox(0, 0, 1, 1)
+    } else {
+        // Across in cm from the gutter's left edge, so the offset is exact.
+        if !(w > 0) { throw `columns(): an offset separator needs a gutter wider than 0 (got ${w})`; }
+        let x = w / 2.0 + off;
+        line(x, 0, x, 1).viewbox(0, 0, w, 1)
+    };
+    l = l.stroke(separator_color()).stroke_width(separator_width()).dash(separator_dash());
     if type_of(y1) == "()" {
         l = l.flex(1);
     } else {
@@ -2627,10 +2839,11 @@ fn hsep(h) {
 //   separators  true / false for all gutters (default `separators()`), or one
 //               per gutter: true, false, a number — a partial separator
 //               ending that many cm below the top of the row — or
-//               #{ start, end } (cm below the top of the row; `start`
+//               #{ start, end, offset } (cm below the top of the row; `start`
 //               defaults to `separator_inset()`, the middle of the section
-//               bars, `end` to the bottom). ("from" / "until", quoted, are
-//               aliases: `until` is a Rhai keyword.)
+//               bars, `end` to the bottom; `offset` cm right of the gutter
+//               centre, default `separator_offset()`). ("from" / "until",
+//               quoted, are aliases: `until` is a Rhai keyword.)
 fn columns(items) { columns(items, (), #{}) }
 fn columns(items, widths) {
     if type_of(widths) == "map" { return columns(items, (), widths); }
@@ -2658,14 +2871,15 @@ fn columns(items, widths, opts) {
                 poster_vsep(g, separator_inset(), s)
             } else if t == "map" {
                 for k in s.keys() {
-                    if !["start", "end", "from", "until"].contains(k) {
-                        throw `columns(): unknown separator key "${k}" (start, end)`;
+                    if !["start", "end", "offset", "from", "until"].contains(k) {
+                        throw `columns(): unknown separator key "${k}" (start, end, offset)`;
                     }
                 }
                 let y0 = plot_opt(s, "start", plot_opt(s, "from", separator_inset()));
-                poster_vsep(g, y0, plot_opt(s, "end", plot_opt(s, "until", ())))
+                poster_vsep(g, y0, plot_opt(s, "end", plot_opt(s, "until", ())),
+                            plot_opt(s, "offset", separator_offset()))
             } else {
-                throw `columns(): a separator is true, false, an end (cm) or #{ start, end } (got ${t})`;
+                throw `columns(): a separator is true, false, an end (cm) or #{ start, end, offset } (got ${t})`;
             });
         }
         out.push(poster_sized("columns", as_node(items[i]), ws[i], false));
@@ -2761,8 +2975,19 @@ fn section_bar(s) {
     let t = if type_of(s) == "Node" { row([s]) } else { section_title(s) };
     t = poster_effect("section_title_glow", t, "glow", section_title_glow(), section_title_glow_look());
     t = poster_effect("section_title_shadow", t, "shadow", section_title_shadow(), section_title_shadow_look());
-    let bar = stack([t.at(0.5, 0.5).anchor(0.5, 0.5)]).viewbox(0, 0, 1, 1)
-        .height(section_bar_height());
+    let h = section_bar_height();
+    let b = section_title_baseline();
+    let bar = if type_of(b) == "()" || type_of(s) == "Node" {
+        stack([t.at(0.5, 0.5).anchor(0.5, 0.5)]).viewbox(0, 0, 1, 1)
+    } else {
+        // The title's first baseline `b` cm below the bar top (cm down,
+        // fractions across), centred across.
+        if !plot_finite(b) || !(h > 0) {
+            throw `section_title_baseline(): must be a length in cm below the bar top, or () (got ${b})`;
+        }
+        stack([t.at(0.5, b).anchor(0.5, "baseline")]).viewbox(0, 0, 1, h)
+    };
+    bar = bar.height(h);
     let fill = section_bar_fill();
     if poster_has_paint(fill) { bar = bar.fill(fill); }
     let b = section_bar_border();
@@ -2884,8 +3109,9 @@ fn subheading(s) {
     if m == "" { return fg_text(s).size(size); }
     let bold = subheading_mark_bold();
     let ms = subheading_mark_size();
-    if !bold && ms == size { return fg_text(poster_prefix(`${m} `, s)).size(size); }
-    let mark = span(`${m} `);
+    let sym = !table_no_font(poster_symbol_font());
+    if !bold && ms == size && !sym { return fg_text(poster_prefix(`${m} `, s)).size(size); }
+    let mark = poster_mark_font(span(`${m} `));
     if bold { mark = mark.bold(); }
     if ms != size { mark = mark.size(ms); }
     fg_text([mark] + (if type_of(s) == "string" { [span(s)] } else { s })).size(size)
@@ -2913,7 +3139,7 @@ fn bullets(items) {
             continue;
         }
         let item = if type_of(x) == "string" || poster_is_rich(x) { fg_text(x).size(size) } else { x };
-        let mark = fg_text(bullet_mark()).size(ms).width(ind);
+        let mark = poster_mark_font(fg_text(bullet_mark()).size(ms)).width(ind);
         if dy > 0 {
             mark = col([rect().height(dy), mark]).width(ind);
         } else if dy < 0 {
@@ -2934,12 +3160,17 @@ fn bullets(items) {
 //   rules   "grid", "rows", "booktabs" or "none" (default `table_rules()`)
 //   pad     cell padding, cm (default `table_pad()`); pad_x / pad_y for
 //           left-right / top-bottom (default `table_pad_x()` / `table_pad_y()`)
+//   font    the font of every text cell (a family, a fallback list or a
+//           per-script map; default `table_font()`, header `table_header_font()`)
+//   header_font  the header row's font (default `font`, else `table_header_font()`)
+//   fonts   one font per column ("" / () for the table's), over `font`
 // The rules are filled rects between the cells (`table_rule()`,
 // `table_rule_width()`), so the grid is exact at any size; cells are filled
-// `table_fill()` / `table_header_fill()`.
+// `table_fill()` / `table_header_fill()`. Node cells keep their own font.
 fn table(rows) { table(rows, #{}) }
 fn table(rows, opts) {
-    poster_check_opts("table", opts, ["header", "widths", "align", "rules", "pad", "pad_x", "pad_y"]);
+    poster_check_opts("table", opts, ["header", "widths", "align", "rules", "pad", "pad_x", "pad_y",
+                                      "font", "header_font", "fonts"]);
     if type_of(rows) != "array" || rows.len() == 0 { throw "table(): expected a non-empty array of rows"; }
     let nc = 0;
     for r in rows {
@@ -2963,6 +3194,13 @@ fn table(rows, opts) {
     let pad = plot_opt(opts, "pad", ());
     let px = plot_opt(opts, "pad_x", if type_of(pad) == "()" { table_pad_x() } else { pad });
     let py = plot_opt(opts, "pad_y", if type_of(pad) == "()" { table_pad_y() } else { pad });
+    // Fonts: per column, then the table's `font`, then the hooks.
+    let cf = plot_opt(opts, "fonts", ());
+    if type_of(cf) != "()" && (type_of(cf) != "array" || cf.len() != nc) {
+        throw `table(): fonts must be one font per column (${nc}; "" for the table font)`;
+    }
+    let body_font = plot_opt(opts, "font", table_font());
+    let head_font = plot_opt(opts, "header_font", plot_opt(opts, "font", table_header_font()));
     let rules = plot_opt(opts, "rules", table_rules());
     if !["grid", "rows", "booktabs", "none"].contains(rules) {
         throw `table(): unknown rules "${rules}" (grid, rows, booktabs, none)`;
@@ -2987,7 +3225,11 @@ fn table(rows, opts) {
         for x in rows[i] {
             let k = table_span(x);
             let content = if type_of(x) == "map" { x.content } else { x };
-            let cell = table_cell(content, head, al[j], px, py);
+            let font = if head { head_font } else { body_font };
+            if type_of(cf) != "()" && !table_no_font(cf[j]) && !(head && opts.contains("header_font")) {
+                font = cf[j];
+            }
+            let cell = table_cell(content, head, al[j], px, py, font);
             if k == 1 {
                 cells.push(poster_sized("table", cell, ws[j], false));
             } else {
@@ -3061,9 +3303,13 @@ fn table_cell_fill(head) {
 // `table_fill()`.
 fn table_cell(x, head, align) { table_cell(x, head, align, table_pad_x(), table_pad_y()) }
 fn table_cell(x, head, align, px, py) {
+    table_cell(x, head, align, px, py, if head { table_header_font() } else { table_font() })
+}
+fn table_cell(x, head, align, px, py, font) {
     let t = type_of(x);
     let n = if t == "string" || t == "i64" || t == "f64" || poster_is_rich(x) {
         let s = fg_text(if poster_is_rich(x) { x } else { `${x}` }).size(table_size()).align(align);
+        s = plot_font_on(s, font);
         if head { s.bold() } else { s }
     } else { x };
     // One padding on all sides; the larger axis gets the rest as spacers.
@@ -3099,7 +3345,12 @@ fn author_runs(authors, affiliations) {
         if type_of(a) != "map" || !a.contains("name") {
             throw `poster_header(): an author is a name or #{ name, aff, presenter } (got ${type_of(a)})`;
         }
-        if plot_opt(a, "presenter", false) { runs = runs_push(runs, presenter_mark(), false); }
+        if plot_opt(a, "presenter", false) {
+            let m = presenter_mark();
+            // A mark of its own (a span in `poster_symbol_font()`) when set.
+            runs = runs_push(runs, if m == "" || table_no_font(poster_symbol_font()) { m }
+                                   else { [poster_mark_font(span(m))] }, false);
+        }
         runs = runs_push(runs, a.name, false);
         let aff = plot_opt(a, "aff", []);
         if type_of(aff) != "array" { aff = [aff]; }
