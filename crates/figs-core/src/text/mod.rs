@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use cosmic_text::FontSystem;
 
 use crate::geom::Size;
-use crate::layout::LeafMeasure;
+use crate::layout::{LeafMeasure, TextBaselines};
 use crate::schema::{ImageProps, TextProps};
 
 /// Owns the font database and shaping engine. Load once and share across layout
@@ -137,6 +137,16 @@ impl Default for FontStore {
 impl LeafMeasure for FontStore {
     fn measure_text(&self, text: &TextProps, max_width: f32) -> Size {
         self.shape(text, max_width).size
+    }
+
+    /// The first and last line's baseline from the shaped block (the same
+    /// shaping the backends draw).
+    fn text_baselines(&self, text: &TextProps, max_width: f32) -> Option<TextBaselines> {
+        let shaped = self.shape(text, max_width);
+        Some(TextBaselines {
+            first: shaped.lines.first()?.baseline,
+            last: shaped.lines.last()?.baseline,
+        })
     }
 
     /// Images contribute no intrinsic size; their shape comes from explicit

@@ -43,8 +43,9 @@ use std::path::Path;
 use rhai::{Array, Dynamic, Engine, EvalAltResult, Map, NativeCallContext, Position};
 
 use crate::geom::{
-    ArcSweep, ArrowHead, Color, CrossAxisAlign, Edges, HeadStyle, HeadWidth, ImageFit, LineCap,
-    LineJoin, LinearDir, MainAxisAlign, Paint, TextAlign,
+    AnchorValue, ArcSweep, ArrowHead, BaselineKind, Color, CrossAxisAlign, EdgeSides, Edges,
+    HeadStyle, HeadWidth, ImageFit, LineCap, LineJoin, LinearDir, MainAxisAlign, Paint,
+    StrokeAlign, TextAlign,
 };
 use crate::schema::{
     ArcRadius, NodeKind, PageHeight, RawDocument, RawGlow, RawNode, RawPage, RawSegment, RawShadow,
@@ -67,6 +68,10 @@ pub struct ScriptNode {
     /// lowered: how framework components tell each other about a node (a plot
     /// asks `labeled` for panel-label room). See `prelude::register_meta`.
     meta: Map,
+    /// Set by `.at_baseline(x, y)`: the offset is the pen origin of the
+    /// first line (left end of its baseline). The `anchor` that says so
+    /// depends on the final `rotate`, so it is filled in at lowering.
+    baseline_origin: bool,
 }
 
 /// The whole document a script returns: a page plus its root node.
@@ -161,6 +166,7 @@ fn parse_cross_axis(s: &str) -> Option<CrossAxisAlign> {
         "center" => CrossAxisAlign::Center,
         "end" => CrossAxisAlign::End,
         "stretch" => CrossAxisAlign::Stretch,
+        "baseline" => CrossAxisAlign::Baseline,
         _ => return None,
     })
 }
@@ -266,12 +272,14 @@ fn blank_node(kind: NodeKind) -> RawNode {
         color: None,
         align: None,
         line_height: None,
+        wrap: None,
         src: None,
         fit: None,
         smooth: None,
         fill: None,
         stroke: None,
         stroke_width: None,
+        stroke_align: None,
         corner_radius: None,
         points: Vec::new(),
         segments: Vec::new(),
@@ -292,6 +300,7 @@ fn leaf(kind: NodeKind) -> ScriptNode {
         children: Vec::new(),
         sites: Default::default(),
         meta: Map::new(),
+        baseline_origin: false,
     }
 }
 
@@ -325,6 +334,7 @@ fn make_container(kind: NodeKind, children: Array) -> Result<ScriptNode, Box<Eva
         children: cast_children(children)?,
         sites: Default::default(),
         meta: Map::new(),
+        baseline_origin: false,
     })
 }
 
@@ -529,6 +539,79 @@ fn cast_xy(name: &str, v: Array) -> Result<[f32; 2], Box<EvalAltResult>> {
     }
 }
 
+/// Insets for `.pad` / `.margin`: a number (all sides), an array of 1–4
+/// numbers in CSS order (`[v, h]`, `[t, r, b, l]`, …), or a map with any of
+/// `top` / `right` / `bottom` / `left` and the shorthands `x` (left + right)
+/// and `y` (top + bottom); a named side overrides a shorthand. Same rules as
+/// the TOML `padding` / `margin` (see [`Edges`]).
+fn cast_edges(name: &str, v: Dynamic) -> Result<Edges, Box<EvalAltResult>> {
+    if let Some(x) = dyn_to_f32(&v) {
+        return Ok(Edges::all(x));
+    }
+    let bad = || {
+        err(format!(
+            "`{name}` expects a number, [v, h] / [t, r, b, l], or #{{ top, right, bottom, left, x, y }}"
+        ))
+    };
+    if v.is_array() {
+        let a = v.cast::<Array>();
+        let nums = a
+            .iter()
+            .map(|d| dyn_to_f32(d).ok_or_else(bad))
+            .collect::<Result<Vec<_>, _>>()?;
+        return Edges::from_css(&nums).ok_or_else(bad);
+    }
+    if v.is_map() {
+        let mut sides = EdgeSides::default();
+        for (k, val) in v.cast::<Map>() {
+            let slot = sides.slot(k.as_str()).ok_or_else(|| {
+                err(format!(
+                    "`{name}`: unknown side `{k}` (top, right, bottom, left, x, y)"
+                ))
+            })?;
+            *slot = Some(
+                dyn_to_f32(&val).ok_or_else(|| err(format!("`{name}`: `{k}` must be a number")))?,
+            );
+        }
+        return Ok(Edges::from_sides(sides));
+    }
+    Err(bad())
+}
+
+/// One `anchor` component: a fraction, or `"baseline"` / `"last_baseline"`.
+fn cast_anchor(v: Dynamic) -> Result<AnchorValue, Box<EvalAltResult>> {
+    if let Some(f) = dyn_to_f32(&v) {
+        return Ok(AnchorValue::Frac(f));
+    }
+    v.into_string()
+        .ok()
+        .and_then(|s| BaselineKind::parse(&s))
+        .map(AnchorValue::Baseline)
+        .ok_or_else(|| {
+            err(r#"`anchor` expects numbers (ax, ay); on text, "baseline" / "last_baseline" too"#)
+        })
+}
+
+/// The anchor that puts the pen origin of a text's first line (the left end
+/// of its baseline, in its own frame) at its offset, for a text turned by
+/// `rotate` degrees. Anchors act on the footprint in the parent's frame, so
+/// the baseline goes in the slot across it and the text's start edge in
+/// the other.
+fn baseline_origin_anchor(rotate: f32) -> [AnchorValue; 2] {
+    let b = AnchorValue::Baseline(BaselineKind::First);
+    let f = AnchorValue::Frac;
+    match crate::geom::quarter_turns(rotate) {
+        // Reading downwards: the start is at the top.
+        Some(1) => [b, f(0.0)],
+        // Upside down: the start is at the right.
+        Some(2) => [f(1.0), b],
+        // Reading upwards: the start is at the bottom.
+        Some(3) => [b, f(1.0)],
+        // Upright, or a paint-only angle (the unrotated box counts).
+        _ => [f(0.0), b],
+    }
+}
+
 /// Validate a built gradient, reporting under the builder's name.
 fn checked_paint(name: &str, p: Paint) -> Result<Paint, Box<EvalAltResult>> {
     p.validate().map_err(|e| err(format!("`{name}`: {e}")))?;
@@ -660,6 +743,9 @@ fn assign(mut sn: ScriptNode, id: String, counter: &mut usize, out: &mut Lowered
         assign(child, cid, counter, out);
     }
     sn.node.children = child_ids;
+    if sn.baseline_origin {
+        sn.node.anchor = Some(baseline_origin_anchor(sn.node.rotate.unwrap_or(0.0)));
+    }
     let classify =
         |s: Option<sites::RawSite>| s.and_then(|s| s.classify(out.src, prelude::source()));
     let found = OffsetSites {
@@ -749,8 +835,16 @@ fn build_engine(base_dir: Option<&Path>) -> Engine {
     reg_num(&mut engine, "stroke_width", |r, x| r.stroke_width = Some(x));
     reg_num(&mut engine, "radius", |r, x| r.corner_radius = Some(x));
     reg_num(&mut engine, "head_size", |r, x| r.head_size = Some(x));
-    reg_num(&mut engine, "margin", |r, x| r.margin = Edges::all(x));
-    reg_num(&mut engine, "pad", |r, x| r.padding = Edges::all(x));
+    // Insets: a number, `[v, h]` / `[t, r, b, l]` (CSS order), or a map
+    // `#{ top, right, bottom, left, x, y }`.
+    engine.register_fn("margin", |n: ScriptNode, v: Dynamic| -> NodeResult {
+        let e = cast_edges("margin", v)?;
+        Ok(set_node(n, |r| r.margin = e))
+    });
+    engine.register_fn("pad", |n: ScriptNode, v: Dynamic| -> NodeResult {
+        let e = cast_edges("pad", v)?;
+        Ok(set_node(n, |r| r.padding = e))
+    });
     // Absolute offset inside a `stack` parent (ignored under col/row). Each
     // records its call site, so the editor can write a drag back.
     engine.register_fn(
@@ -786,12 +880,33 @@ fn build_engine(base_dir: Option<&Path>) -> Engine {
             }))
         },
     );
-    // Which point of the node sits at its offset, as fractions of its size.
+    // Which point of the node sits at its offset, as fractions of its size
+    // (or, on text, "baseline" / "last_baseline" across the baseline).
     engine.register_fn(
         "anchor",
-        |n: ScriptNode, ax: Dynamic, ay: Dynamic| -> NodeResult {
-            let [ax, ay] = nums("anchor", "ax, ay", [ax, ay])?;
-            Ok(set_node(n, |r| r.anchor = Some([ax, ay])))
+        |mut n: ScriptNode, ax: Dynamic, ay: Dynamic| -> NodeResult {
+            let a = [cast_anchor(ax)?, cast_anchor(ay)?];
+            n.baseline_origin = false;
+            Ok(set_node(n, |r| r.anchor = Some(a)))
+        },
+    );
+    // Place a text by the left end of its first baseline (its pen origin),
+    // whatever its rotation.
+    engine.register_fn(
+        "at_baseline",
+        |ctx: NativeCallContext, mut n: ScriptNode, x: Dynamic, y: Dynamic| -> NodeResult {
+            if n.node.kind != NodeKind::Text {
+                return Err(err("`at_baseline` applies to a text node"));
+            }
+            let [x, y] = nums("at_baseline", "x, y", [x, y])?;
+            let site = sites::RawSite::here(&ctx, "at_baseline");
+            n.sites.x = Some(site);
+            n.sites.y = Some(site);
+            n.baseline_origin = true;
+            Ok(set_node(n, |r| {
+                r.x = Some(x);
+                r.y = Some(y);
+            }))
         },
     );
     // User coordinates over the content box: a stack's child offsets, or a
@@ -939,6 +1054,23 @@ fn build_engine(base_dir: Option<&Path>) -> Engine {
         r.cross_axis_alignment = Some(v)
     });
     reg_enum(&mut engine, "fit", parse_fit, |r, v| r.fit = Some(v));
+    // Where a closed outline's stroke lies: "inside" / "center" / "outside".
+    reg_enum(&mut engine, "stroke_align", StrokeAlign::parse, |r, v| {
+        r.stroke_align = Some(v)
+    });
+    // Text wrapping: `.nowrap()` keeps each paragraph on one line.
+    engine.register_fn("nowrap", |n: ScriptNode| -> NodeResult {
+        if n.node.kind != NodeKind::Text {
+            return Err(err("`nowrap` applies to a text node"));
+        }
+        Ok(set_node(n, |r| r.wrap = Some(false)))
+    });
+    engine.register_fn("wrap", |n: ScriptNode, on: bool| -> NodeResult {
+        if n.node.kind != NodeKind::Text {
+            return Err(err("`wrap` applies to a text node"));
+        }
+        Ok(set_node(n, |r| r.wrap = Some(on)))
+    });
     reg_enum(&mut engine, "cap", parse_cap, |r, v| r.cap = Some(v));
     // Outline corner join (shapes and text strokes).
     reg_enum(&mut engine, "join", parse_join, |r, v| r.join = Some(v));

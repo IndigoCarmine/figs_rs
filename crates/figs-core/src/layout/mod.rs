@@ -34,6 +34,7 @@
 //!   a 4:3 (width × 3/4) height with a warning; layout never panics.
 
 pub mod arrange;
+mod baseline;
 pub mod computed;
 pub mod measure;
 
@@ -42,7 +43,7 @@ pub use computed::{
     TextBox,
 };
 
-use crate::geom::{Axis, Size};
+use crate::geom::{Axis, BaselineKind, Size};
 use crate::schema::{Document, ImageProps, TextProps};
 
 /// Box constraints handed down during measurement: a min/max range per axis.
@@ -113,6 +114,37 @@ impl Constraints {
 /// `aspect_ratio` and no explicit height. 4:3 matches the classic figure panel.
 pub const FALLBACK_IMAGE_ASPECT: f32 = 4.0 / 3.0;
 
+/// Where a shaped text block's baselines lie: distances (points) from the
+/// top of the block — the top of the text node's box, where backends draw
+/// it — to the first and the last line's baseline.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextBaselines {
+    pub first: f32,
+    pub last: f32,
+}
+
+impl TextBaselines {
+    /// Baselines for a measurer that can't shape: CSS-like half-leading with
+    /// an ascent of 0.8 em and a descent of 0.2 em, the first line at the
+    /// top of a block `height` tall and the last line at its bottom.
+    pub fn synthetic(text: &TextProps, height: f32) -> Self {
+        let size = text.font_size;
+        let half_leading = (size * text.line_height - size) / 2.0;
+        TextBaselines {
+            first: half_leading + 0.8 * size,
+            last: height - half_leading - 0.2 * size,
+        }
+    }
+
+    /// The first or the last baseline.
+    pub fn get(&self, kind: BaselineKind) -> f32 {
+        match kind {
+            BaselineKind::First => self.first,
+            BaselineKind::Last => self.last,
+        }
+    }
+}
+
 /// Provides intrinsic sizes for leaf content the schema can't size on its own.
 ///
 /// Implemented by the text backend (cosmic-text) and the image module. The
@@ -120,6 +152,13 @@ pub const FALLBACK_IMAGE_ASPECT: f32 = 4.0 / 3.0;
 pub trait LeafMeasure {
     /// Wrap-content size of a text block given the available width (points).
     fn measure_text(&self, text: &TextProps, max_width: f32) -> Size;
+    /// Baselines of the text block shaped at `max_width` (as
+    /// [`LeafMeasure::measure_text`] / the backends shape it), for baseline
+    /// anchors and baseline alignment. `None` (the default) makes layout use
+    /// [`TextBaselines::synthetic`].
+    fn text_baselines(&self, _text: &TextProps, _max_width: f32) -> Option<TextBaselines> {
+        None
+    }
     /// Intrinsic size of an image (points), before aspect/flex constraints.
     fn measure_image(&self, image: &ImageProps) -> Size;
     /// Natural aspect ratio (width / height) of an image, if known (e.g. read

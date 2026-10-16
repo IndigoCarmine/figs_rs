@@ -66,7 +66,9 @@ pub use svg::{render_svg, SvgRenderer};
 
 use std::path::Path;
 
-use crate::geom::{Affine, Brush, Color, ImageFit, PathSegment, Rect, Shadow, StrokeStyle};
+use crate::geom::{
+    Affine, Brush, Color, ImageFit, PathSegment, Rect, Shadow, StrokeAlign, StrokeStyle,
+};
 use crate::layout::{
     ClipRegion, ComputedLayout, ComputedNode, FramePaint, PageGeom, PaintContent, PathPaint,
     TextBox,
@@ -249,19 +251,49 @@ fn paint_node<R: Renderer>(r: &mut R, node: &ComputedNode) {
             stroke,
             stroke_width,
             corner_radius,
-        } => r.fill_rect(
+            stroke_align,
+        } => draw_rect(
+            r,
             node.rect,
             fill.as_ref(),
-            *stroke,
+            stroke.filter(|_| *stroke_width > 0.0),
             *stroke_width,
             *corner_radius,
+            *stroke_align,
         ),
         PaintContent::Text(tb) => r.draw_text(node.rect, tb),
         PaintContent::Image { src, fit, smooth } => r.draw_image(node.rect, src, *fit, *smooth),
-        PaintContent::Path(path) => r.draw_path(path),
-        PaintContent::Ellipse { fill, stroke } => {
-            r.draw_ellipse(node.rect, fill.as_ref(), stroke.as_ref())
-        }
+        PaintContent::Path(path) => match path.aligned_stroke_outline() {
+            // Inside/outside stroke on a closed outline: fill the outline,
+            // then stroke its offset centre line (closed: no arrowheads).
+            Some(line) => {
+                if path.fill.is_some() {
+                    r.draw_path(&PathPaint {
+                        stroke: None,
+                        ..path.clone()
+                    });
+                }
+                r.draw_shape(&line, None, path.stroke.as_ref());
+            }
+            None => r.draw_path(path),
+        },
+        PaintContent::Ellipse {
+            fill,
+            stroke,
+            stroke_align,
+        } => match stroke {
+            Some(s) if *stroke_align != StrokeAlign::Center => {
+                if fill.is_some() {
+                    r.draw_ellipse(node.rect, fill.as_ref(), None);
+                }
+                if let Some((line, _)) =
+                    geometry::aligned_rect(node.rect, 0.0, *stroke_align, s.width)
+                {
+                    r.draw_ellipse(line, None, Some(s));
+                }
+            }
+            _ => r.draw_ellipse(node.rect, fill.as_ref(), stroke.as_ref()),
+        },
     }
     if xf.is_some() {
         r.pop_transform();
@@ -276,6 +308,31 @@ pub(crate) fn open_head_stroke(shaft: &StrokeStyle) -> StrokeStyle {
         cap: crate::geom::LineCap::Butt,
         join: crate::geom::LineJoin::Miter,
         ..shaft.clone()
+    }
+}
+
+/// A `rect` node: a centred stroke is one [`Renderer::fill_rect`] call; an
+/// inside/outside one fills the rect, then strokes the offset box from
+/// [`geometry::aligned_rect`] (same corner treatment as the frame border).
+#[allow(clippy::too_many_arguments)]
+fn draw_rect<R: Renderer>(
+    r: &mut R,
+    rect: Rect,
+    fill: Option<&Brush>,
+    stroke: Option<Color>,
+    width: f32,
+    radius: f32,
+    align: StrokeAlign,
+) {
+    if stroke.is_none() || align == StrokeAlign::Center {
+        r.fill_rect(rect, fill, stroke, width, radius);
+        return;
+    }
+    if fill.is_some() {
+        r.fill_rect(rect, fill, None, 0.0, radius);
+    }
+    if let Some((line, line_radius)) = geometry::aligned_rect(rect, radius, align, width) {
+        r.fill_rect(line, None, stroke, width, line_radius);
     }
 }
 

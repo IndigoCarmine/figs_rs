@@ -1,0 +1,67 @@
+// Baselines, stroke alignment, inset maps and unwrapped labels.
+//
+// - `.at_baseline(x, y)` places a text by the left end of its first baseline
+//   (TOML: `anchor = [0, "baseline"]`), so labels of any font and size line
+//   up on a ruled line — rotated ones too.
+// - `.cross("baseline")` lines up the texts of a row on one baseline.
+// - `.stroke_align("inside" | "center" | "outside")` puts a closed outline's
+//   stroke inside, on, or outside its edge (frames default to inside, shapes
+//   to center).
+// - `.pad(#{ x: .., top: .. })` / `.pad([v, h])` set per-side insets.
+// - `.nowrap()` keeps a label on one line: a vertical axis label longer than
+//   its axis overflows both ends instead of breaking inside a word.
+let ink = "#1d2b44";
+let accent = "#e0635a";
+let guide = "#9fb3d1";
+
+// A ruled line at y with labels of mixed sizes sitting on it.
+fn ruled(y, ink, guide) {
+    [
+        line(0.5, y, 15.5, y).stroke(guide).stroke_width(0.02).dash([0.1, 0.08]),
+        text("Baseline").size(30).bold().color(ink).at_baseline(0.5, y),
+        text("small print").size(11).color(ink).at_baseline(6.2, y),
+        text("Mid 18").size(18).italic().color(ink).at_baseline(9.4, y),
+        text("up").size(14).color(ink).rotate(-90).at_baseline(15.2, y),
+    ]
+}
+
+// Three 2.4 cm squares with a 0.3 cm stroke, one per alignment, over a guide
+// box showing the nominal edge.
+fn swatch(x, align, accent, guide) {
+    [
+        rect().fill("#ffffff").stroke(accent).stroke_width(0.3).stroke_align(align)
+            .at(x, 4.6).width(2.4).height(2.4),
+        rect().stroke(guide).stroke_width(0.02).at(x, 4.6).width(2.4).height(2.4),
+        text(align).size(10).color("#555555").center().at(x + 1.2, 7.7).anchor(0.5, 0),
+    ]
+}
+
+page(16, 12,
+    stack([
+        stack(ruled(2.2, ink, guide)),
+        stack(swatch(1.0, "inside", accent, guide)),
+        stack(swatch(4.6, "center", accent, guide)),
+        stack(swatch(8.2, "outside", accent, guide)),
+        // An outside-aligned dashed ellipse around a closed blob path.
+        ellipse().stroke(ink).stroke_width(0.12).dash([0.2, 0.1]).stroke_align("outside")
+            .at(12.0, 4.6).width(2.8).height(2.4),
+        path([[0.4, 0.4], [2.4, 0.2], [2.0, 2.2], [0.6, 1.8]]).closed()
+            .fill("#f3d9d6").stroke(accent).stroke_width(0.16).stroke_align("inside")
+            .at(12.2, 4.7),
+        // A baseline row framed by a container border drawn outside its box,
+        // with per-side padding from a map.
+        row([
+            text("Fig. 3").size(20).bold().color(ink),
+            text("a fictional caption in a smaller face").size(11).color(ink),
+            text("(n = 12)").size(14).color(accent),
+        ]).cross("baseline").spacing(0.3).pad(#{ x: 0.4, top: 0.2, bottom: 0.25 })
+            .stroke(guide).stroke_width(0.08).stroke_align("outside").radius(0.2)
+            .at(0.6, 8.6),
+        // An unwrapped vertical label centred on a short axis (a longer one
+        // would overflow both ends, with a warning, instead of breaking).
+        row([
+            text("signal [a.u.]").size(11).color(ink).center().rotate(-90).nowrap(),
+            rect().fill("#e9eef6").flex(1),
+        ]).cross("stretch").spacing(0.15).at(11.6, 8.4).width(3.8).height(2.6),
+    ])
+).unit("cm").background("#ffffff")

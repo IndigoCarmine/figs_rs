@@ -354,7 +354,7 @@ fn apply_tracking(line: &mut ShapeLine, runs: &[StyledRun], default_size: f32) {
 }
 
 /// Shape `text` under `max_width` (points). A non-finite or non-positive width
-/// means unconstrained (no wrapping).
+/// means unconstrained (no wrapping), as does `text.wrap == false`.
 ///
 /// **Line metrics.** Each line box is `base_size × line_height` tall for the
 /// largest run on the line, and its baseline sits where the largest ascent +
@@ -370,7 +370,7 @@ pub(crate) fn shape(
     default_family: Option<&str>,
 ) -> ShapedText {
     let runs = styled_runs(text, default_family);
-    let width = (max_width.is_finite() && max_width > 0.0).then_some(max_width);
+    let width = (text.wrap && max_width.is_finite() && max_width > 0.0).then_some(max_width);
     let node_line = (text.font_size * text.line_height).max(1.0);
     let mut scratch = ShapeBuffer::default();
 

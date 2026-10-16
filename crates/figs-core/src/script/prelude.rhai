@@ -2211,9 +2211,9 @@ fn plot_build(opts, series) {
     let rotated = plot_has_label(ylabel) && ylabel_rotated();
     let yband = [];
     if rotated {
-        // TODO: chain the core `.nowrap()` here once it exists, so a label
-        // longer than the axis overflows instead of wrapping mid-word.
-        let t = plot_label(ylabel, asize, afont).center();
+        // Unwrapped: a label longer than the axis overflows (with a layout
+        // warning) instead of wrapping mid-word.
+        let t = plot_label(ylabel, asize, afont).center().nowrap();
         yband.push(t.rotate(-90));
         yband.push(rect().width(apad * 2));
     }

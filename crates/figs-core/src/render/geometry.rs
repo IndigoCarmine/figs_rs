@@ -11,7 +11,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::geom::{Color, ImageFit, PathSegment, Point, Rect, TextAlign};
+use crate::geom::{Color, ImageFit, PathSegment, Point, Rect, StrokeAlign, TextAlign};
 use crate::layout::TextBox;
 use crate::schema::TextProps;
 use crate::text::{DecorationKind, ShapedText};
@@ -81,6 +81,189 @@ pub fn rounded_rect(r: Rect, radius: f32) -> Vec<PathSegment> {
     ]
 }
 
+/// The centre line of a `width`-wide stroke on the (rounded) box `rect`
+/// with corner `radius`, placed per `align`: the box grown by
+/// [`StrokeAlign::centre_offset`] (shrunk for `inside`), with a rounded
+/// radius grown/shrunk by the same amount (a square corner stays square, as
+/// the miter of its offset). `None` when an inside stroke is wider than the
+/// box. Also the box to stroke for an ellipse (ignore the radius).
+pub fn aligned_rect(
+    rect: Rect,
+    radius: f32,
+    align: StrokeAlign,
+    width: f32,
+) -> Option<(Rect, f32)> {
+    let d = align.centre_offset(width);
+    let line = Rect::new(rect.x - d, rect.y - d, rect.w + 2.0 * d, rect.h + 2.0 * d);
+    if line.w < 0.0 || line.h < 0.0 {
+        return None;
+    }
+    let radius = if radius > 0.0 {
+        (radius + d).max(0.0)
+    } else {
+        0.0
+    };
+    Some((line, radius))
+}
+
+/// Largest miter scale [`offset_outline`] uses at a sharp corner (the
+/// stroke's own miter limit, as in SVG): beyond it the corner point moves
+/// along the bisector only this far, in units of the offset.
+const OFFSET_MITER_LIMIT: f32 = 4.0;
+
+/// A closed outline (`MoveTo`, lines / quadratic / cubic Béziers, `Close`)
+/// offset by `d` points **outwards** (negative: inwards), with mitered
+/// corners — the centre line of an inside/outside-aligned stroke.
+///
+/// Every on-curve point moves along the miter of the outline's tangents
+/// there (its plain normal where the outline is smooth), which is exact for
+/// straight edges and their corners. A curve keeps its tangent directions
+/// and has its handles scaled by `1 + d·κ` (κ the curvature at that end,
+/// positive where it bends inwards), which is exact for circular arcs and
+/// close for gentle curves; quadratics are raised to cubics first.
+/// "Outwards" is decided by the winding, so both orientations work. Open
+/// and degenerate outlines come back unchanged.
+pub fn offset_outline(segs: &[PathSegment], d: f32) -> Vec<PathSegment> {
+    let closed = matches!(segs.last(), Some(PathSegment::Close));
+    if !closed || d == 0.0 || !d.is_finite() {
+        return segs.to_vec();
+    }
+    // Quadratics as (exact) cubics, so every curve is a cubic.
+    let mut cur = Point::default();
+    let segs: Vec<PathSegment> = segs
+        .iter()
+        .map(|s| match *s {
+            PathSegment::QuadTo(c, p) => {
+                let toward = |a: Point| {
+                    Point::new(a.x + (c.x - a.x) * 2.0 / 3.0, a.y + (c.y - a.y) * 2.0 / 3.0)
+                };
+                let cubic = PathSegment::CubicTo(toward(cur), toward(p), p);
+                cur = p;
+                cubic
+            }
+            PathSegment::MoveTo(p) | PathSegment::LineTo(p) | PathSegment::CubicTo(_, _, p) => {
+                cur = p;
+                *s
+            }
+            PathSegment::Close => *s,
+        })
+        .collect();
+    // The control polygon, in order.
+    let mut pts: Vec<Point> = Vec::with_capacity(segs.len() * 3);
+    for s in &segs {
+        match *s {
+            PathSegment::MoveTo(p) | PathSegment::LineTo(p) => pts.push(p),
+            PathSegment::QuadTo(c, p) => pts.extend([c, p]),
+            PathSegment::CubicTo(c1, c2, p) => pts.extend([c1, c2, p]),
+            PathSegment::Close => {}
+        }
+    }
+    let n = pts.len();
+    if n < 3 {
+        return segs;
+    }
+    // Shoelace: positive = clockwise on the page (y down), where the
+    // right-hand normal (dy, -dx) of a direction points outwards.
+    let area: f32 = (0..n)
+        .map(|i| {
+            let (a, b) = (pts[i], pts[(i + 1) % n]);
+            a.x * b.y - b.x * a.y
+        })
+        .sum();
+    if area.abs() < 1e-9 {
+        return segs;
+    }
+    let sign = area.signum();
+    let outward = |dx: f32, dy: f32| -> Option<(f32, f32)> {
+        let len = (dx * dx + dy * dy).sqrt();
+        (len > 1e-6).then(|| (sign * dy / len, -sign * dx / len))
+    };
+    // Outward unit normal of control leg i (pts[i] -> pts[i + 1]); None if
+    // degenerate.
+    let normals: Vec<Option<(f32, f32)>> = (0..n)
+        .map(|i| {
+            let (a, b) = (pts[i], pts[(i + 1) % n]);
+            outward(b.x - a.x, b.y - a.y)
+        })
+        .collect();
+    if normals.iter().all(Option::is_none) {
+        return segs;
+    }
+    // The nearest non-degenerate legs ending at / starting from point i are
+    // the outline's tangents there; on-curve point i moves along their miter.
+    let incoming = |i: usize| (1..=n).find_map(|k| normals[(i + n - k) % n]);
+    let outgoing = |i: usize| (0..n).find_map(|k| normals[(i + k) % n]);
+    let miter = |i: usize| -> Point {
+        let (a, b) = (
+            incoming(i).unwrap_or_default(),
+            outgoing(i).unwrap_or_default(),
+        );
+        let dot = a.0 * b.0 + a.1 * b.1;
+        let (mut mx, mut my) = if 1.0 + dot > 1e-4 {
+            ((a.0 + b.0) / (1.0 + dot), (a.1 + b.1) / (1.0 + dot))
+        } else {
+            b // a U-turn: no miter, move along the outgoing leg's normal
+        };
+        let scale = (mx * mx + my * my).sqrt();
+        if scale > OFFSET_MITER_LIMIT {
+            mx *= OFFSET_MITER_LIMIT / scale;
+            my *= OFFSET_MITER_LIMIT / scale;
+        }
+        Point::new(pts[i].x + d * mx, pts[i].y + d * my)
+    };
+    // Handle-length factor 1 + d·κ at a curve end with forward tangent
+    // `t` (= B'/3) and second derivative `dd` (= B''): κ = -(B''·n) / |B'|²
+    // along the outward normal n (positive where the curve bends inwards).
+    let scale = |t: (f32, f32), dd: (f32, f32)| -> f32 {
+        let Some(nrm) = outward(t.0, t.1) else {
+            return 1.0;
+        };
+        let k = -(dd.0 * nrm.0 + dd.1 * nrm.1) / (9.0 * (t.0 * t.0 + t.1 * t.1));
+        (1.0 + d * k).max(0.0)
+    };
+    let mut out = Vec::with_capacity(segs.len());
+    let mut i = 0usize; // index in `pts` of the current on-curve point
+    let mut prev = (pts[0], miter(0)); // that point: original, moved
+    for s in &segs {
+        match *s {
+            PathSegment::MoveTo(_) => out.push(PathSegment::MoveTo(prev.1)),
+            PathSegment::LineTo(p) => {
+                i += 1;
+                let q = miter(i);
+                out.push(PathSegment::LineTo(q));
+                prev = (p, q);
+            }
+            PathSegment::CubicTo(c1, c2, p3) => {
+                i += 3;
+                let (p0, q0) = prev;
+                let q3 = miter(i);
+                let s0 = scale(
+                    (c1.x - p0.x, c1.y - p0.y),
+                    (
+                        6.0 * (c2.x - 2.0 * c1.x + p0.x),
+                        6.0 * (c2.y - 2.0 * c1.y + p0.y),
+                    ),
+                );
+                let s3 = scale(
+                    (p3.x - c2.x, p3.y - c2.y),
+                    (
+                        6.0 * (p3.x - 2.0 * c2.x + c1.x),
+                        6.0 * (p3.y - 2.0 * c2.y + c1.y),
+                    ),
+                );
+                let q1 = Point::new(q0.x + (c1.x - p0.x) * s0, q0.y + (c1.y - p0.y) * s0);
+                let q2 = Point::new(q3.x + (c2.x - p3.x) * s3, q3.y + (c2.y - p3.y) * s3);
+                out.push(PathSegment::CubicTo(q1, q2, q3));
+                prev = (p3, q3);
+            }
+            // Raised to cubics above.
+            PathSegment::QuadTo(..) => {}
+            PathSegment::Close => out.push(PathSegment::Close),
+        }
+    }
+    out
+}
+
 /// Outline of the ellipse inscribed in `r` (four cubic quarter arcs, starting
 /// at the right-most point and running clockwise on screen).
 pub fn ellipse(r: Rect) -> Vec<PathSegment> {
@@ -99,12 +282,15 @@ pub fn ellipse(r: Rect) -> Vec<PathSegment> {
 }
 
 /// Horizontal offset (points) to apply to a line of the given width inside a
-/// box of width `box_w`, per the text alignment.
+/// box of width `box_w`, per the text alignment. A line wider than the box
+/// (unwrapped text, `wrap = false`) overflows it on the side(s) its
+/// alignment points away from: both sides equally when centred, the left
+/// when right-aligned, the right otherwise.
 pub fn align_offset(align: TextAlign, line_w: f32, box_w: f32) -> f32 {
     match align {
         TextAlign::Left | TextAlign::Justify => 0.0,
-        TextAlign::Center => ((box_w - line_w) / 2.0).max(0.0),
-        TextAlign::Right => (box_w - line_w).max(0.0),
+        TextAlign::Center => (box_w - line_w) / 2.0,
+        TextAlign::Right => box_w - line_w,
     }
 }
 
@@ -124,6 +310,7 @@ pub fn text_props(text: &TextBox) -> TextProps {
         strike: text.strike,
         letter_spacing: text.letter_spacing,
         spans: text.spans.clone(),
+        wrap: text.wrap,
     }
 }
 
