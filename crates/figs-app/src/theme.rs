@@ -134,6 +134,9 @@ pub fn kind_badge(kind: NodeKind) -> (Color32, &'static str) {
         NodeKind::Text => (hex("#6ea8fe"), "T"),
         NodeKind::Rect => (hex("#3ddc97"), "R"),
         NodeKind::Image => (hex("#ffb454"), "I"),
+        NodeKind::Line | NodeKind::Arrow | NodeKind::Ellipse | NodeKind::Path => {
+            (hex("#f07aa8"), "V")
+        }
     }
 }
 

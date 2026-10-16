@@ -9,7 +9,9 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::geom::{Color, CrossAxisAlign, Edges, ImageFit, MainAxisAlign, TextAlign};
+use crate::geom::{
+    ArrowHead, Color, CrossAxisAlign, Edges, ImageFit, LineCap, MainAxisAlign, TextAlign,
+};
 use crate::units::Unit;
 
 /// `skip_serializing_if` helper for `f32` fields whose clean default is zero.
@@ -64,6 +66,14 @@ pub enum NodeKind {
     Image,
     Text,
     Rect,
+    /// A straight stroke between two `points` (in the node's own box).
+    Line,
+    /// A [`NodeKind::Line`] with an arrowhead (at the end by default).
+    Arrow,
+    /// Fills/strokes the ellipse inscribed in its box (a circle when square).
+    Ellipse,
+    /// A polyline (or polygon when `closed`) through `points`.
+    Path,
 }
 
 /// A single node as written in TOML. All type-specific fields are optional;
@@ -148,6 +158,29 @@ pub struct RawNode {
     /// Corner radius in the page unit.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub corner_radius: Option<f32>,
+
+    // ---- vector shapes (line / arrow / ellipse / path; `fill`/`stroke`/
+    //      `stroke_width` above are shared) ----
+    /// `[x, y]` vertices in the page unit, relative to the node's content-box
+    /// origin. `line`/`arrow` take exactly two, `path` two or more.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub points: Vec<[f32; 2]>,
+    /// Close a `path` into a polygon (last point joins the first).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub closed: bool,
+    /// Dash pattern: alternating on/off lengths in the page unit (an odd list
+    /// is repeated, as in SVG). Empty = solid.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dash: Vec<f32>,
+    /// Line cap for open ends (`butt` / `round` / `square`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cap: Option<LineCap>,
+    /// Arrowhead placement (`none` / `start` / `end` / `both`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub head: Option<ArrowHead>,
+    /// Arrowhead length in the page unit (default: proportional to the stroke width).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub head_size: Option<f32>,
 }
 
 /// Error from the raw TOML parsing stage.

@@ -1,0 +1,24 @@
+// Annotating an image with the core vector primitives, overlaid via `stack`.
+//
+// Shape coordinates are page units (cm here) inside the shape's own box. A shape
+// with no offset fills the stack, so its points are plain stack coordinates; one
+// placed with `.at(x, y)` gets a box starting at (x, y) sized to its points, so
+// its points read as offsets from that anchor.
+let accent = "#e0635a";
+
+page(12, 8,
+    stack([
+        image("sample.png").fit("cover"),               // base layer (fills the stack)
+
+        // Dashed highlight around the feature at (8, 3), radius 1.2. `circle` is
+        // prelude sugar for `ellipse().width(2.4).height(2.4).at(6.8, 1.8)`.
+        circle(8, 3, 1.2).stroke(accent).stroke_width(0.05).dash([0.2, 0.1]),
+
+        // Label plus an arrow from it to the highlight (stack coordinates).
+        text("feature").size(14).bold().color(accent).at(1.0, 5.6),
+        arrow(3.5, 5.85, 6.85, 3.65).stroke(accent).stroke_width(0.06),
+
+        // 2 cm scale bar pinned near the bottom-right corner.
+        line(0, 0, 2, 0).stroke("#ffffff").stroke_width(0.12).at(9.5, 7.3),
+    ]),
+).unit("cm").background("#ffffff")

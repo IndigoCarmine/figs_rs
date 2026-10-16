@@ -19,7 +19,19 @@ pub(crate) fn measure<M: LeafMeasure>(ctx: &Ctx<M>, idx: usize, c: Constraints) 
             ..
         } => measure_container(ctx, *axis, children, *spacing, &node.common, c),
         NodeType::Stack { children } => measure_stack(ctx, children, &node.common, c),
-        NodeType::Rect(_) => Size::default(),
+        NodeType::Rect(_) | NodeType::Ellipse(_) => Size::default(),
+        // Points live in the content box, so the intrinsic size is their extent
+        // from its origin (not their tight bounding box) plus padding.
+        NodeType::Path(props) => {
+            let (w, h) = props
+                .points
+                .iter()
+                .fold((0.0f32, 0.0f32), |(w, h), p| (w.max(p.x), h.max(p.y)));
+            Size::new(
+                w + node.common.padding.horizontal(),
+                h + node.common.padding.vertical(),
+            )
+        }
         NodeType::Image(props) => ctx.measurer.measure_image(props),
         NodeType::Text(props) => {
             let avail = (c.max_w - node.common.padding.horizontal()).max(0.0);

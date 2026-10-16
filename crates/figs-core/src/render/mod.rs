@@ -2,9 +2,10 @@
 //! one implementation per output format. Driving every backend from the same
 //! `paint()` walk guarantees PNG and (later) PDF stay pixel/point-identical.
 //!
-//! Rectangles, text and images are all painted through [`png::TinySkiaRenderer`].
-//! Text and image painting are trait methods with no-op defaults, so future
-//! backends (e.g. PDF) keep compiling until they opt in.
+//! Rectangles, text, images and vector shapes are all painted through
+//! [`png::TinySkiaRenderer`]. Text, image and shape painting are trait methods
+//! with no-op defaults, so future backends (e.g. PDF) keep compiling until they
+//! opt in.
 
 pub mod png;
 
@@ -12,8 +13,8 @@ pub use png::{image_size, render_png, render_rgba, PngError, RenderedImage, Tiny
 
 use std::path::Path;
 
-use crate::geom::{Color, ImageFit, Rect};
-use crate::layout::{ComputedLayout, PageGeom, PaintContent, TextBox};
+use crate::geom::{Color, ImageFit, Rect, StrokeStyle};
+use crate::layout::{ComputedLayout, PageGeom, PaintContent, PathPaint, TextBox};
 use crate::text::FontStore;
 
 /// Options shared by every render entry point.
@@ -56,6 +57,13 @@ pub trait Renderer {
     /// Draw an image (resolved against the render base dir) within `rect`,
     /// honouring `fit`. Default: no-op.
     fn draw_image(&mut self, _rect: Rect, _src: &Path, _fit: ImageFit) {}
+
+    /// Fill/stroke a polyline or polygon (absolute points) and its arrowheads.
+    /// Default: no-op.
+    fn draw_path(&mut self, _path: &PathPaint) {}
+
+    /// Fill/stroke the ellipse inscribed in `rect`. Default: no-op.
+    fn draw_ellipse(&mut self, _rect: Rect, _fill: Option<Color>, _stroke: Option<&StrokeStyle>) {}
 }
 
 /// Walk a computed layout in paint order, dispatching each node to the renderer.
@@ -72,6 +80,10 @@ pub fn paint<R: Renderer>(layout: &ComputedLayout, r: &mut R) {
             } => r.fill_rect(node.rect, *fill, *stroke, *stroke_width, *corner_radius),
             PaintContent::Text(tb) => r.draw_text(node.rect, tb),
             PaintContent::Image { src, fit } => r.draw_image(node.rect, src, *fit),
+            PaintContent::Path(path) => r.draw_path(path),
+            PaintContent::Ellipse { fill, stroke } => {
+                r.draw_ellipse(node.rect, *fill, stroke.as_ref())
+            }
         }
     }
 }

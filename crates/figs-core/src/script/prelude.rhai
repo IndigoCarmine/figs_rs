@@ -91,6 +91,16 @@ fn grid(ncols, g, items) {
 }
 
 // ---------------------------------------------------------------------------
+// Shapes (sugar over the core `ellipse`)
+// ---------------------------------------------------------------------------
+
+// A circle of radius `r` (a square `ellipse`).
+fn circle(r) { ellipse().width(2 * r).height(2 * r) }
+
+// A circle of radius `r` centered on (cx, cy) of the enclosing `stack`.
+fn circle(cx, cy, r) { circle(r).at(cx - r, cy - r) }
+
+// ---------------------------------------------------------------------------
 // Labeled panels (overlay via the core `stack` / `.at`)
 // ---------------------------------------------------------------------------
 

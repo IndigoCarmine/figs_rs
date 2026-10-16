@@ -3,7 +3,7 @@
 //! consumes. Every node carries its stable `id` so a canvas hit-test can map
 //! straight back to a TOML node (needed by the Phase 2 editor).
 
-use crate::geom::{Color, ImageFit, Rect, TextAlign};
+use crate::geom::{ArrowHead, Color, ImageFit, Point, Rect, StrokeStyle, TextAlign};
 
 /// A laid-out page: geometry plus a flat list of nodes in paint order
 /// (a parent always appears before its children).
@@ -49,6 +49,27 @@ pub enum PaintContent {
         fit: ImageFit,
     },
     Text(TextBox),
+    /// A polyline/polygon (`line`, `arrow`, `path`).
+    Path(PathPaint),
+    /// An ellipse inscribed in the node rect.
+    Ellipse {
+        fill: Option<Color>,
+        stroke: Option<StrokeStyle>,
+    },
+}
+
+/// A placed polyline/polygon. Unlike other content it may paint outside the
+/// node rect: points are absolute page coordinates (points, top-left origin).
+#[derive(Debug, Clone)]
+pub struct PathPaint {
+    pub points: Vec<Point>,
+    pub closed: bool,
+    pub fill: Option<Color>,
+    pub stroke: Option<StrokeStyle>,
+    /// Arrowheads (filled with the stroke color); ignored when `closed`.
+    pub head: ArrowHead,
+    /// Arrowhead length; its base is 0.8x as wide.
+    pub head_size: f32,
 }
 
 /// Resolved text ready to be shaped/painted within its node rect.

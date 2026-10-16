@@ -7,7 +7,8 @@
 //!
 //! ## Authoring
 //!
-//! Build nodes with `text` / `rect` / `image` / `col` / `row` / `stack`, set properties by
+//! Build nodes with `text` / `rect` / `image` / `col` / `row` / `stack` (and the
+//! vector shapes `line` / `arrow` / `ellipse` / `path`), set properties by
 //! **chaining methods** (Rhai has no keyword arguments, so chaining is how you get
 //! concise, named-ish properties — no map literals), and finish with a single
 //! `page(width, height, root)` call:
@@ -27,7 +28,9 @@ use std::collections::HashMap;
 
 use rhai::{Array, Dynamic, Engine, EvalAltResult, Position};
 
-use crate::geom::{Color, CrossAxisAlign, Edges, ImageFit, MainAxisAlign, TextAlign};
+use crate::geom::{
+    ArrowHead, Color, CrossAxisAlign, Edges, ImageFit, LineCap, MainAxisAlign, TextAlign,
+};
 use crate::schema::{NodeKind, RawDocument, RawNode, RawPage};
 use crate::units::Unit;
 
@@ -155,6 +158,23 @@ fn parse_fit(s: &str) -> Option<ImageFit> {
         _ => return None,
     })
 }
+fn parse_cap(s: &str) -> Option<LineCap> {
+    Some(match s {
+        "butt" => LineCap::Butt,
+        "round" => LineCap::Round,
+        "square" => LineCap::Square,
+        _ => return None,
+    })
+}
+fn parse_head(s: &str) -> Option<ArrowHead> {
+    Some(match s {
+        "none" => ArrowHead::None,
+        "start" => ArrowHead::Start,
+        "end" => ArrowHead::End,
+        "both" => ArrowHead::Both,
+        _ => return None,
+    })
+}
 fn parse_unit(s: &str) -> Option<Unit> {
     Some(match s {
         "cm" => Unit::Cm,
@@ -198,6 +218,12 @@ fn blank_node(kind: NodeKind) -> RawNode {
         stroke: None,
         stroke_width: None,
         corner_radius: None,
+        points: Vec::new(),
+        closed: false,
+        dash: Vec::new(),
+        cap: None,
+        head: None,
+        head_size: None,
     }
 }
 
@@ -224,7 +250,9 @@ fn cast_children(children: Array) -> Result<Vec<ScriptNode>, Box<EvalAltResult>>
     for child in children {
         let node = child
             .try_cast::<ScriptNode>()
-            .ok_or_else(|| err("container children must be nodes (col/row/stack/text/rect/image)"))?;
+            .ok_or_else(|| {
+                err("container children must be nodes (col/row/stack/text/rect/image/line/arrow/ellipse/path)")
+            })?;
         out.push(node);
     }
     Ok(out)
@@ -235,6 +263,37 @@ fn make_container(kind: NodeKind, children: Array) -> Result<ScriptNode, Box<Eva
         node: blank_node(kind),
         children: cast_children(children)?,
     })
+}
+
+/// A two-point `line`/`arrow` from `(x1, y1)` to `(x2, y2)` (page units, in the
+/// node's own box).
+fn segment(
+    kind: NodeKind,
+    name: &str,
+    coords: [Dynamic; 4],
+) -> Result<ScriptNode, Box<EvalAltResult>> {
+    let mut v = [0.0f32; 4];
+    for (o, d) in v.iter_mut().zip(&coords) {
+        *o = dyn_to_f32(d).ok_or_else(|| err(format!("`{name}` expects numbers (x1, y1, x2, y2)")))?;
+    }
+    let mut sn = leaf(kind);
+    sn.node.points = vec![[v[0], v[1]], [v[2], v[3]]];
+    Ok(sn)
+}
+
+/// `[[x, y], …]` -> points, for `path`.
+fn cast_points(points: Array) -> Result<Vec<[f32; 2]>, Box<EvalAltResult>> {
+    let bad = || err("`path` expects an array of [x, y] number pairs");
+    points
+        .into_iter()
+        .map(|p| {
+            let xy = p.try_cast::<Array>().ok_or_else(bad)?;
+            match xy.as_slice() {
+                [x, y] => Ok([dyn_to_f32(x).ok_or_else(bad)?, dyn_to_f32(y).ok_or_else(bad)?]),
+                _ => Err(bad()),
+            }
+        })
+        .collect()
 }
 
 fn page_fn(width: Dynamic, height: Dynamic, root: Dynamic) -> Result<ScriptDoc, Box<EvalAltResult>> {
@@ -360,6 +419,28 @@ fn build_engine() -> Engine {
     engine.register_fn("col", |children: Array| make_container(NodeKind::Column, children));
     engine.register_fn("row", |children: Array| make_container(NodeKind::Row, children));
     engine.register_fn("stack", |children: Array| make_container(NodeKind::Stack, children));
+    // Vector shapes: coordinates in page units, relative to the node's own box.
+    engine.register_fn(
+        "line",
+        |x1: Dynamic, y1: Dynamic, x2: Dynamic, y2: Dynamic| {
+            segment(NodeKind::Line, "line", [x1, y1, x2, y2])
+        },
+    );
+    engine.register_fn(
+        "arrow",
+        |x1: Dynamic, y1: Dynamic, x2: Dynamic, y2: Dynamic| {
+            segment(NodeKind::Arrow, "arrow", [x1, y1, x2, y2])
+        },
+    );
+    engine.register_fn("ellipse", || leaf(NodeKind::Ellipse));
+    engine.register_fn(
+        "path",
+        |points: Array| -> Result<ScriptNode, Box<EvalAltResult>> {
+            let mut sn = leaf(NodeKind::Path);
+            sn.node.points = cast_points(points)?;
+            Ok(sn)
+        },
+    );
 
     // Numeric chainable setters (accept int or float).
     reg_num(&mut engine, "flex", |r, x| r.flex = Some(x));
@@ -371,6 +452,7 @@ fn build_engine() -> Engine {
     reg_num(&mut engine, "spacing", |r, x| r.spacing = x);
     reg_num(&mut engine, "stroke_width", |r, x| r.stroke_width = Some(x));
     reg_num(&mut engine, "radius", |r, x| r.corner_radius = Some(x));
+    reg_num(&mut engine, "head_size", |r, x| r.head_size = Some(x));
     reg_num(&mut engine, "margin", |r, x| r.margin = Edges::all(x));
     reg_num(&mut engine, "pad", |r, x| r.padding = Edges::all(x));
     // Absolute offset inside a `stack` parent (ignored under col/row).
@@ -398,6 +480,21 @@ fn build_engine() -> Engine {
     reg_enum(&mut engine, "main", parse_main_axis, |r, v| r.main_axis_alignment = Some(v));
     reg_enum(&mut engine, "cross", parse_cross_axis, |r, v| r.cross_axis_alignment = Some(v));
     reg_enum(&mut engine, "fit", parse_fit, |r, v| r.fit = Some(v));
+    reg_enum(&mut engine, "cap", parse_cap, |r, v| r.cap = Some(v));
+    reg_enum(&mut engine, "head", parse_head, |r, v| r.head = Some(v));
+
+    // Shape stroke dash pattern (page units) and polygon closing.
+    engine.register_fn(
+        "dash",
+        |n: ScriptNode, pattern: Array| -> Result<ScriptNode, Box<EvalAltResult>> {
+            let dash = pattern
+                .iter()
+                .map(|d| dyn_to_f32(d).ok_or_else(|| err("`dash` expects an array of numbers")))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(set_node(n, |r| r.dash = dash))
+        },
+    );
+    engine.register_fn("closed", |n: ScriptNode| set_node(n, |r| r.closed = true));
 
     // font weight (u16, rounded + range-checked).
     engine.register_fn(

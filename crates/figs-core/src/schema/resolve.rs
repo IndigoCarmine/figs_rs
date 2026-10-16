@@ -13,7 +13,8 @@
 use std::collections::HashMap;
 
 use crate::geom::{
-    Axis, Color, CrossAxisAlign, Edges, ImageFit, MainAxisAlign, TextAlign,
+    ArrowHead, Axis, Color, CrossAxisAlign, Edges, ImageFit, MainAxisAlign, Point,
+    StrokeStyle, TextAlign,
 };
 
 use super::parse::{NodeKind, RawDocument, RawNode};
@@ -24,6 +25,10 @@ pub const DEFAULT_DPI: f32 = 300.0;
 pub const DEFAULT_FONT_SIZE: f32 = 12.0;
 /// Default line height as a multiple of font size.
 pub const DEFAULT_LINE_HEIGHT: f32 = 1.2;
+/// Default stroke width of line/arrow/ellipse/path, in points (unit-independent).
+pub const DEFAULT_SHAPE_STROKE_WIDTH: f32 = 1.0;
+/// Default arrowhead length as a multiple of the stroke width.
+pub const DEFAULT_HEAD_SIZE_PER_STROKE: f32 = 5.0;
 
 /// Errors produced while resolving a raw document. Each variant names the node
 /// at fault where applicable.
@@ -42,6 +47,12 @@ pub enum ResolveError {
         node: String,
         kind: &'static str,
         field: &'static str,
+    },
+    #[error("node `{node}`: invalid `{field}`: {reason}")]
+    InvalidField {
+        node: String,
+        field: &'static str,
+        reason: String,
     },
 }
 
@@ -126,6 +137,9 @@ pub enum NodeType {
     Image(ImageProps),
     Text(TextProps),
     Rect(RectProps),
+    /// `line`, `arrow` and `path` all resolve to a stroked/filled polyline.
+    Path(PathProps),
+    Ellipse(EllipseProps),
 }
 
 impl NodeType {
@@ -162,6 +176,27 @@ pub struct RectProps {
     pub stroke: Option<Color>,
     pub stroke_width: f32,
     pub corner_radius: f32,
+}
+
+/// A polyline/polygon (`line`, `arrow`, `path`). Points are in points, relative
+/// to the node's content-box origin; they are not scaled with the box.
+#[derive(Debug, Clone)]
+pub struct PathProps {
+    pub points: Vec<Point>,
+    pub closed: bool,
+    pub fill: Option<Color>,
+    pub stroke: Option<StrokeStyle>,
+    /// Ignored when `closed` or when there is no stroke.
+    pub head: ArrowHead,
+    /// Arrowhead length in points (its width is 0.8x this).
+    pub head_size: f32,
+}
+
+/// An ellipse inscribed in the node's border box.
+#[derive(Debug, Clone)]
+pub struct EllipseProps {
+    pub fill: Option<Color>,
+    pub stroke: Option<StrokeStyle>,
 }
 
 /// Validate and convert a [`RawDocument`] into a [`Document`].
@@ -306,6 +341,66 @@ fn convert_node(
             stroke_width: raw.stroke_width.unwrap_or(0.0) * factor,
             corner_radius: raw.corner_radius.unwrap_or(0.0) * factor,
         }),
+        NodeKind::Line | NodeKind::Arrow | NodeKind::Path => {
+            let (kind, exact) = match raw.kind {
+                NodeKind::Line => ("line", true),
+                NodeKind::Arrow => ("arrow", true),
+                _ => ("path", false),
+            };
+            let invalid = |field, reason: String| ResolveError::InvalidField {
+                node: id.to_string(),
+                field,
+                reason,
+            };
+            if raw.points.is_empty() {
+                return Err(ResolveError::MissingField {
+                    node: id.to_string(),
+                    kind,
+                    field: "points",
+                });
+            }
+            let n = raw.points.len();
+            if exact && n != 2 {
+                return Err(invalid("points", format!("{kind} needs exactly 2 points, got {n}")));
+            }
+            if n < 2 {
+                return Err(invalid("points", format!("{kind} needs at least 2 points, got {n}")));
+            }
+            if raw.points.iter().flatten().any(|v| !v.is_finite()) {
+                return Err(invalid("points", "coordinates must be finite numbers".into()));
+            }
+            // Line/arrow are pure strokes, so they default to a black one; a path
+            // is stroked black only when it has neither fill nor stroke.
+            let default_stroke = exact || raw.fill.is_none();
+            let stroke = shape_stroke(id, raw, factor, default_stroke)?;
+            let default_head = if raw.kind == NodeKind::Arrow {
+                ArrowHead::End
+            } else {
+                ArrowHead::None
+            };
+            let head_size = match raw.head_size {
+                Some(h) => h * factor,
+                None => {
+                    stroke.as_ref().map_or(0.0, |s| s.width) * DEFAULT_HEAD_SIZE_PER_STROKE
+                }
+            };
+            NodeType::Path(PathProps {
+                points: raw
+                    .points
+                    .iter()
+                    .map(|[x, y]| Point::new(x * factor, y * factor))
+                    .collect(),
+                closed: raw.closed,
+                fill: raw.fill,
+                stroke,
+                head: raw.head.unwrap_or(default_head),
+                head_size,
+            })
+        }
+        NodeKind::Ellipse => NodeType::Ellipse(EllipseProps {
+            fill: raw.fill,
+            stroke: shape_stroke(id, raw, factor, raw.fill.is_none())?,
+        }),
     };
 
     Ok(Node {
@@ -313,6 +408,48 @@ fn convert_node(
         common,
         kind,
     })
+}
+
+/// The stroke of a vector shape: `stroke` (or black when `default_black` and
+/// unset), `stroke_width` (default [`DEFAULT_SHAPE_STROKE_WIDTH`] pt), the dash
+/// pattern (validated, scaled, odd lists repeated) and the cap. `None` when
+/// there is no color or the width is zero.
+fn shape_stroke(
+    id: &str,
+    raw: &RawNode,
+    factor: f32,
+    default_black: bool,
+) -> Result<Option<StrokeStyle>, ResolveError> {
+    let mut dash: Vec<f32> = raw.dash.iter().map(|d| d * factor).collect();
+    if !dash.is_empty() {
+        if dash.iter().any(|d| !d.is_finite() || *d < 0.0) || dash.iter().sum::<f32>() <= 0.0 {
+            return Err(ResolveError::InvalidField {
+                node: id.to_string(),
+                field: "dash",
+                reason: "lengths must be non-negative and not all zero".into(),
+            });
+        }
+        if dash.len() % 2 == 1 {
+            dash.extend_from_within(..);
+        }
+    }
+    let color = match raw.stroke {
+        Some(c) => c,
+        None if default_black => Color::BLACK,
+        None => return Ok(None),
+    };
+    let width = raw
+        .stroke_width
+        .map_or(DEFAULT_SHAPE_STROKE_WIDTH, |w| w * factor);
+    if width <= 0.0 {
+        return Ok(None);
+    }
+    Ok(Some(StrokeStyle {
+        color,
+        width,
+        dash,
+        cap: raw.cap.unwrap_or_default(),
+    }))
 }
 
 /// DFS from the root, rejecting back-edges. Because every node has at most one

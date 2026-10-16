@@ -38,6 +38,12 @@ fn blank(kind: NodeKind) -> RawNode {
         stroke: None,
         stroke_width: None,
         corner_radius: None,
+        points: Vec::new(),
+        closed: false,
+        dash: Vec::new(),
+        cap: None,
+        head: None,
+        head_size: None,
     }
 }
 
@@ -61,6 +67,20 @@ pub fn new_node(kind: NodeKind) -> RawNode {
             n.spacing = 12.0;
         }
         NodeKind::Stack => {}
+        NodeKind::Line | NodeKind::Arrow => {
+            n.points = vec![[0.0, 0.0], [120.0, 60.0]];
+            n.stroke_width = Some(2.0);
+        }
+        NodeKind::Ellipse => {
+            n.fill = Some(Color::parse_hex("#6ea8fe").unwrap());
+            n.width = Some(120.0);
+            n.height = Some(80.0);
+        }
+        NodeKind::Path => {
+            n.points = vec![[0.0, 60.0], [60.0, 0.0], [120.0, 60.0]];
+            n.closed = true;
+            n.fill = Some(Color::parse_hex("#3ddc97").unwrap());
+        }
     }
     n
 }

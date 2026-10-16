@@ -11,5 +11,6 @@ pub mod resolve;
 
 pub use parse::{NodeKind, RawDocument, RawNode, RawPage};
 pub use resolve::{
-    Common, Document, ImageProps, Node, NodeType, PageInfo, RectProps, ResolveError, TextProps,
+    Common, Document, EllipseProps, ImageProps, Node, NodeType, PageInfo, PathProps, RectProps,
+    ResolveError, TextProps,
 };

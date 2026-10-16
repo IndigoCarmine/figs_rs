@@ -4,10 +4,10 @@
 //! (parent before children, siblings in array order — so later stack children
 //! paint on top).
 
-use crate::geom::{Axis, CrossAxisAlign, Edges, MainAxisAlign, Rect, Size};
-use crate::schema::{NodeType, RectProps, TextProps};
+use crate::geom::{Axis, CrossAxisAlign, Edges, MainAxisAlign, Point, Rect, Size};
+use crate::schema::{Common, NodeType, RectProps, TextProps};
 
-use super::computed::{ComputedNode, PaintContent, TextBox};
+use super::computed::{ComputedNode, PaintContent, PathPaint, TextBox};
 use super::measure::{measure, stack_child_avail, stack_child_size};
 use super::{cross_of, main_of, Constraints, Ctx, LeafMeasure};
 
@@ -22,7 +22,7 @@ pub(crate) fn arrange<M: LeafMeasure>(
     out.push(ComputedNode {
         id: node.id.clone(),
         rect,
-        content: paint_content(&node.kind),
+        content: paint_content(&node.kind, &node.common, rect),
     });
 
     match &node.kind {
@@ -240,7 +240,7 @@ fn cross_axis_offset(align: CrossAxisAlign, content_cross: f32, child_cross: f32
     }
 }
 
-fn paint_content(kind: &NodeType) -> PaintContent {
+fn paint_content(kind: &NodeType, common: &Common, rect: Rect) -> PaintContent {
     match kind {
         NodeType::Container { .. } | NodeType::Stack { .. } => PaintContent::Container,
         NodeType::Rect(RectProps {
@@ -275,5 +275,25 @@ fn paint_content(kind: &NodeType) -> PaintContent {
             align: *align,
             line_height: *line_height,
         }),
+        NodeType::Path(props) => {
+            // Box-relative points -> absolute page points (content-box origin).
+            let origin = rect.inset(common.padding);
+            PaintContent::Path(PathPaint {
+                points: props
+                    .points
+                    .iter()
+                    .map(|p| Point::new(origin.x + p.x, origin.y + p.y))
+                    .collect(),
+                closed: props.closed,
+                fill: props.fill,
+                stroke: props.stroke.clone(),
+                head: props.head,
+                head_size: props.head_size,
+            })
+        }
+        NodeType::Ellipse(props) => PaintContent::Ellipse {
+            fill: props.fill,
+            stroke: props.stroke.clone(),
+        },
     }
 }

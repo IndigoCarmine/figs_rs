@@ -525,5 +525,9 @@ pub fn kind_label(k: figs_core::schema::NodeKind) -> &'static str {
         Image => "image",
         Text => "text",
         Rect => "rect",
+        Line => "line",
+        Arrow => "arrow",
+        Ellipse => "ellipse",
+        Path => "path",
     }
 }

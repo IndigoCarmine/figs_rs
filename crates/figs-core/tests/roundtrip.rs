@@ -30,6 +30,8 @@ fn kind_tag(t: &NodeType) -> &'static str {
         NodeType::Image(_) => "image",
         NodeType::Text(_) => "text",
         NodeType::Rect(_) => "rect",
+        NodeType::Path(_) => "path",
+        NodeType::Ellipse(_) => "ellipse",
     }
 }
 
@@ -135,6 +137,88 @@ fn script_stack_lowers_to_toml_and_back() {
         .find(|n| n.content.as_deref() == Some("(a)"))
         .expect("label node");
     assert_eq!((label.x, label.y), (Some(1.0), Some(2.0)));
+    let d1 = resolve(raw1).expect("resolve 1");
+    let d2 = resolve(raw2).expect("resolve 2");
+    assert_eq!(kinds(&d1), kinds(&d2));
+}
+
+#[test]
+fn vector_shapes_round_trip() {
+    let src = r##"
+        [page]
+        width = 10
+        height = 10
+        unit = "cm"
+        root = "s"
+        [nodes.s]
+        type = "stack"
+        children = ["l", "a", "e", "p"]
+        [nodes.l]
+        type = "line"
+        points = [[0, 0], [3, 2.5]]
+        dash = [0.2, 0.1]
+        cap = "round"
+        [nodes.a]
+        type = "arrow"
+        points = [[1, 1], [4, 1]]
+        stroke = "#e0635a"
+        stroke_width = 0.05
+        head = "both"
+        head_size = 0.4
+        [nodes.e]
+        type = "ellipse"
+        width = 2
+        height = 2
+        fill = "#00000000"
+        stroke = "#ffffff"
+        [nodes.p]
+        type = "path"
+        points = [[0, 0], [1, 0], [0.5, 1]]
+        closed = true
+        fill = "#6aa9e0"
+    "##;
+    let raw1 = parse_str(src).expect("parse 1");
+    let out = to_toml(&raw1);
+    // Defaults stay out of the saved file: only `p` is closed, only `l` dashed.
+    let count = |key: &str| out.lines().filter(|l| l.trim_start().starts_with(key)).count();
+    assert_eq!(count("closed ="), 1, "{out}");
+    assert_eq!(count("dash ="), 1, "{out}");
+    let raw2 = parse_str(&out).expect("parse 2");
+    for id in ["l", "a", "e", "p"] {
+        let (n1, n2) = (&raw1.nodes[id], &raw2.nodes[id]);
+        assert_eq!(n1.kind, n2.kind, "{id}");
+        assert_eq!(n1.points, n2.points, "{id}");
+        assert_eq!(n1.dash, n2.dash, "{id}");
+        assert_eq!(n1.closed, n2.closed, "{id}");
+        assert_eq!((n1.cap, n1.head, n1.head_size), (n2.cap, n2.head, n2.head_size), "{id}");
+        assert_eq!((n1.fill, n1.stroke), (n2.fill, n2.stroke), "{id}");
+    }
+    assert_eq!(raw2.nodes["l"].points, vec![[0.0, 0.0], [3.0, 2.5]]);
+    let d1 = resolve(raw1).expect("resolve 1");
+    let d2 = resolve(raw2).expect("resolve 2");
+    assert_eq!(kinds(&d1), kinds(&d2));
+}
+
+/// Script-built shapes survive the editor's lowering to TOML.
+#[cfg(feature = "script")]
+#[test]
+fn script_shapes_lower_to_toml_and_back() {
+    let raw1 = figs_core::eval_script(
+        r##"page(10, 10, stack([
+            arrow(0, 0, 3, 2).head("start").dash([0.2]).cap("square"),
+            path([[0, 0], [1, 1], [2, 0]]).closed().fill("#ff0000"),
+            ellipse().width(2).height(1).at(1, 1),
+        ])).unit("cm")"##,
+    )
+    .expect("eval");
+    let raw2 = parse_str(&to_toml(&raw1)).expect("parse lowered TOML");
+    for (id, n1) in &raw1.nodes {
+        let n2 = &raw2.nodes[id];
+        assert_eq!(n1.kind, n2.kind, "{id}");
+        assert_eq!(n1.points, n2.points, "{id}");
+        assert_eq!((&n1.dash, n1.closed), (&n2.dash, n2.closed), "{id}");
+        assert_eq!((n1.head, n1.cap), (n2.head, n2.cap), "{id}");
+    }
     let d1 = resolve(raw1).expect("resolve 1");
     let d2 = resolve(raw2).expect("resolve 2");
     assert_eq!(kinds(&d1), kinds(&d2));

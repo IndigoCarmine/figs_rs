@@ -6,7 +6,9 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use eframe::egui::{self, Color32, Rect, RichText, Sense, Stroke};
-use figs_core::geom::{Color, CrossAxisAlign, Edges, ImageFit, MainAxisAlign, TextAlign};
+use figs_core::geom::{
+    ArrowHead, Color, CrossAxisAlign, Edges, ImageFit, LineCap, MainAxisAlign, TextAlign,
+};
 use figs_core::schema::{NodeKind, RawDocument};
 use figs_core::units::Unit;
 use figs_core::ComputedLayout;
@@ -100,6 +102,10 @@ fn outline(app: &mut FigsApp, ui: &mut egui::Ui, p: &Palette) {
                 (NodeKind::Text, "Text"),
                 (NodeKind::Rect, "Rect"),
                 (NodeKind::Image, "Image"),
+                (NodeKind::Line, "Line"),
+                (NodeKind::Arrow, "Arrow"),
+                (NodeKind::Ellipse, "Ellipse"),
+                (NodeKind::Path, "Path"),
             ] {
                 if ui.button(lbl).clicked() {
                     let id = model::add_child(&mut app.model, &target, k);
@@ -286,6 +292,26 @@ fn inspector(app: &mut FigsApp, ui: &mut egui::Ui, _p: &Palette) {
                     }
                     // Stack children carry their own x/y (Layout section).
                     NodeKind::Stack => {}
+                    NodeKind::Line | NodeKind::Arrow | NodeKind::Path | NodeKind::Ellipse => {
+                        section(ui, "Shape");
+                        if kind != NodeKind::Ellipse {
+                            changed |= points_editor(ui, &mut node.points, kind == NodeKind::Path);
+                        }
+                        if kind == NodeKind::Path {
+                            changed |= ui.checkbox(&mut node.closed, "Closed").changed();
+                        }
+                        if matches!(kind, NodeKind::Path | NodeKind::Ellipse) {
+                            changed |= opt_color(ui, "Fill", &mut node.fill);
+                        }
+                        changed |= opt_color(ui, "Stroke", &mut node.stroke);
+                        changed |= opt_num(ui, "Stroke width", &mut node.stroke_width, 0.25);
+                        changed |= dash_field(ui, "Dash", &mut node.dash);
+                        changed |= cap_seg(ui, "Cap", &mut node.cap);
+                        if kind != NodeKind::Ellipse {
+                            changed |= head_seg(ui, "Head", &mut node.head);
+                            changed |= opt_num(ui, "Head size", &mut node.head_size, 0.25);
+                        }
+                    }
                 }
 
                 section(ui, "Layout");
@@ -526,6 +552,101 @@ fn fit_seg(ui: &mut egui::Ui, label: &str, v: &mut Option<ImageFit>) -> bool {
     changed
 }
 
+/// `[x, y]` rows for a line/arrow/path; `resizable` adds +/- point buttons.
+fn points_editor(ui: &mut egui::Ui, pts: &mut Vec<[f32; 2]>, resizable: bool) -> bool {
+    let mut changed = false;
+    ui.label("Points");
+    for (i, p) in pts.iter_mut().enumerate() {
+        ui.horizontal(|ui| {
+            ui.label(format!("{}", i + 1));
+            changed |= ui.add(egui::DragValue::new(&mut p[0]).speed(0.5).prefix("x ")).changed();
+            changed |= ui.add(egui::DragValue::new(&mut p[1]).speed(0.5).prefix("y ")).changed();
+        });
+    }
+    if resizable {
+        ui.horizontal(|ui| {
+            if ui.button("+").on_hover_text("Add point").clicked() {
+                let last = pts.last().copied().unwrap_or([0.0, 0.0]);
+                pts.push([last[0] + 20.0, last[1]]);
+                changed = true;
+            }
+            if ui.add_enabled(pts.len() > 2, egui::Button::new("\u{2212}")).on_hover_text("Remove last point").clicked() {
+                pts.pop();
+                changed = true;
+            }
+        });
+    }
+    changed
+}
+
+/// Dash pattern as a comma/space separated list of lengths (empty = solid).
+fn dash_field(ui: &mut egui::Ui, label: &str, dash: &mut Vec<f32>) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label(label);
+        let id = ui.id().with(label);
+        let mut s = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| {
+            dash.iter().map(|d| d.to_string()).collect::<Vec<_>>().join(", ")
+        });
+        let resp = ui.add(egui::TextEdit::singleline(&mut s).hint_text("solid").desired_width(120.0));
+        if resp.changed() {
+            let parsed: Option<Vec<f32>> = s
+                .split(|c: char| c == ',' || c.is_whitespace())
+                .filter(|t| !t.is_empty())
+                .map(|t| t.parse().ok())
+                .collect();
+            if let Some(v) = parsed {
+                *dash = v;
+                changed = true;
+            }
+        }
+        if resp.has_focus() {
+            ui.data_mut(|d| d.insert_temp(id, s));
+        } else {
+            ui.data_mut(|d| d.remove::<String>(id));
+        }
+    });
+    changed
+}
+
+fn cap_seg(ui: &mut egui::Ui, label: &str, v: &mut Option<LineCap>) -> bool {
+    let mut changed = false;
+    let cur = v.unwrap_or_default();
+    ui.horizontal(|ui| {
+        ui.label(label);
+        for (a, t) in [
+            (LineCap::Butt, "butt"),
+            (LineCap::Round, "round"),
+            (LineCap::Square, "square"),
+        ] {
+            if ui.selectable_label(cur == a, t).clicked() {
+                *v = Some(a);
+                changed = true;
+            }
+        }
+    });
+    changed
+}
+
+fn head_seg(ui: &mut egui::Ui, label: &str, v: &mut Option<ArrowHead>) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label(label);
+        for (a, t) in [
+            (ArrowHead::None, "none"),
+            (ArrowHead::Start, "start"),
+            (ArrowHead::End, "end"),
+            (ArrowHead::Both, "both"),
+        ] {
+            if ui.selectable_label(*v == Some(a), t).clicked() {
+                *v = Some(a);
+                changed = true;
+            }
+        }
+    });
+    changed
+}
+
 fn main_align_combo(ui: &mut egui::Ui, label: &str, v: &mut Option<MainAxisAlign>) -> bool {
     let mut changed = false;
     let cur = v.unwrap_or_default();
@@ -724,6 +845,10 @@ fn parse_type_value(rest: &str) -> Option<NodeKind> {
         "text" => Some(NodeKind::Text),
         "rect" => Some(NodeKind::Rect),
         "image" => Some(NodeKind::Image),
+        "line" => Some(NodeKind::Line),
+        "arrow" => Some(NodeKind::Arrow),
+        "ellipse" => Some(NodeKind::Ellipse),
+        "path" => Some(NodeKind::Path),
         _ => None,
     }
 }
@@ -784,11 +909,21 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
                 Some(NodeKind::Rect) => {
                     v.extend(["fill", "stroke", "stroke_width", "corner_radius"])
                 }
+                Some(NodeKind::Line) | Some(NodeKind::Arrow) => v.extend([
+                    "points", "stroke", "stroke_width", "dash", "cap", "head", "head_size",
+                ]),
+                Some(NodeKind::Path) => v.extend([
+                    "points", "closed", "fill", "stroke", "stroke_width", "dash", "cap", "head",
+                    "head_size",
+                ]),
+                Some(NodeKind::Ellipse) => {
+                    v.extend(["fill", "stroke", "stroke_width", "dash", "cap"])
+                }
                 None => v.extend([
                     "content", "font_size", "font_family", "font_weight", "color", "align",
                     "line_height", "src", "fit", "fill", "stroke", "stroke_width",
                     "corner_radius", "children", "spacing", "main_axis_alignment",
-                    "cross_axis_alignment",
+                    "cross_axis_alignment", "points", "closed", "dash", "cap", "head", "head_size",
                 ]),
             }
             v.extend(["flex", "width", "height", "aspect_ratio", "margin", "padding", "x", "y"]);
@@ -800,7 +935,11 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
 /// Enum values for a string-valued key (empty if the key is free-form).
 fn enum_values(key: &str) -> Vec<&'static str> {
     match key {
-        "type" => vec!["column", "row", "stack", "text", "rect", "image"],
+        "type" => vec![
+            "column", "row", "stack", "text", "rect", "image", "line", "arrow", "ellipse", "path",
+        ],
+        "cap" => vec!["butt", "round", "square"],
+        "head" => vec!["none", "start", "end", "both"],
         "fit" => vec!["contain", "cover", "fill"],
         "align" => vec!["left", "center", "right", "justify"],
         "unit" => vec!["cm", "mm", "in", "pt", "px"],

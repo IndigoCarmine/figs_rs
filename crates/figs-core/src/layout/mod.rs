@@ -14,7 +14,7 @@ pub mod arrange;
 pub mod computed;
 pub mod measure;
 
-pub use computed::{ComputedLayout, ComputedNode, PageGeom, PaintContent, TextBox};
+pub use computed::{ComputedLayout, ComputedNode, PageGeom, PaintContent, PathPaint, TextBox};
 
 use crate::geom::{Axis, Size};
 use crate::schema::{Document, ImageProps, TextProps};

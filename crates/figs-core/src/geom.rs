@@ -325,6 +325,62 @@ pub enum ImageFit {
     Fill,
 }
 
+/// A 2-D point, in points (top-left origin) once resolved.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Point {
+    pub x: f32,
+    pub y: f32,
+}
+
+impl Point {
+    pub fn new(x: f32, y: f32) -> Self {
+        Point { x, y }
+    }
+}
+
+/// How a vector shape's outline is stroked. Lengths in points once resolved.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StrokeStyle {
+    pub color: Color,
+    pub width: f32,
+    /// Alternating on/off lengths; always even-length (or empty = solid).
+    pub dash: Vec<f32>,
+    pub cap: LineCap,
+}
+
+/// How the open ends of a stroked line/arrow/path are drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LineCap {
+    /// Flat, ending exactly at the endpoint.
+    #[default]
+    Butt,
+    /// Semicircle centered on the endpoint.
+    Round,
+    /// Square extending half the stroke width past the endpoint.
+    Square,
+}
+
+/// Which ends of an open line/path carry an arrowhead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ArrowHead {
+    #[default]
+    None,
+    Start,
+    End,
+    Both,
+}
+
+impl ArrowHead {
+    pub fn at_start(self) -> bool {
+        matches!(self, ArrowHead::Start | ArrowHead::Both)
+    }
+    pub fn at_end(self) -> bool {
+        matches!(self, ArrowHead::End | ArrowHead::Both)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

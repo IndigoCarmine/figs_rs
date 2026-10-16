@@ -34,7 +34,7 @@ root = "root"
 background = "#ffffff"
 
 [nodes.root]
-type = "column"       # column | row | stack | image | text | rect
+type = "column"       # column | row | stack | image | text | rect | line | arrow | ellipse | path
 spacing = 1
 padding = 1
 cross_axis_alignment = "stretch"
@@ -64,6 +64,9 @@ You provide: hierarchy, style, content, and constraints (`flex`, `aspect_ratio`,
   `align`, `line_height` (multiple of font size).
 - **image**: `src`, `fit` (`contain`/`cover`/`fill`).
 - **rect**: `fill`, `stroke`, `stroke_width`, `corner_radius`.
+- **line** / **arrow** / **path**: `points`, `stroke`, `stroke_width`, `dash`,
+  `cap`, `head`, `head_size`; **path** adds `fill`, `closed`.
+- **ellipse**: `fill`, `stroke`, `stroke_width`, `dash`, `cap`.
 
 Lengths are in the page `unit`; `font_size` is always points. Internally
 everything is converted to points (1 pt = 1/72 in).
@@ -106,6 +109,48 @@ y = 0.2
 ```
 
 See [`examples/overlay_labels.figs`](examples/overlay_labels.figs).
+
+### Vector shapes (annotations)
+
+Four leaf nodes draw arrows, highlights and callouts:
+
+| Type | Draws |
+|---|---|
+| `line` | A stroke between exactly two `points`. |
+| `arrow` | A `line` with a filled arrowhead at the end (`head = "end"` by default). |
+| `path` | A polyline through two or more `points`; `closed = true` makes it a polygon. Segments are straight (no Béziers — generate dense points in a script for curves). |
+| `ellipse` | The ellipse inscribed in its box (a circle when the box is square). |
+
+```toml
+[nodes.pointer]
+type = "arrow"
+points = [[0, 0], [3, 1.5]]   # [x, y] pairs, page units
+stroke = "#e0635a"
+stroke_width = 0.05
+dash = [0.2, 0.1]             # on/off lengths; omit for a solid stroke
+```
+
+- **Coordinates.** `points` are page units relative to the node's own content
+  box (its rect inset by `padding`), and are **not** scaled when the box is
+  resized. The intrinsic size of a `line`/`arrow`/`path` is the extent of its
+  points from that origin (`max x`, `max y`, plus padding), so a shape placed with
+  `x`/`y` in a `stack` gets a box sized to its points, while an unpositioned one
+  fills the stack and its points are simply stack coordinates. Explicit
+  `width`/`height` override the box (not the drawing). Negative coordinates may
+  paint outside the box; shapes are not clipped. An `ellipse` has no intrinsic
+  size — give it `width`/`height` or let a parent size it.
+- **Stroke.** `stroke` is a color; `stroke_width` is in page units and defaults
+  to 1 pt. `line`/`arrow` are stroked black unless `stroke` is set; a `path` or
+  `ellipse` gets a black stroke only when it has neither `fill` nor `stroke`.
+  `dash` is a list of alternating on/off lengths in page units (an odd list is
+  repeated, as in SVG); `cap` is `butt` (default), `round` or `square`.
+- **Arrowheads.** `head` is `none` / `start` / `end` / `both` (default `end` for
+  `arrow`, `none` for `line`/`path`, so `path` + `head` gives a bent arrow).
+  `head_size` is the head's length in page units (default 5 × the stroke width);
+  its base is 0.8 × as wide. Heads are filled with the stroke color and stay solid
+  on dashed strokes; closed paths have no heads.
+
+See [`examples/annotations.figs`](examples/annotations.figs).
 
 ### Equal spacing & edge-to-edge
 
@@ -166,7 +211,9 @@ page(20, 12,
 ).unit("cm").background("#ffffff")
 ```
 
-Build nodes with `text` / `rect` / `image` / `col` / `row` / `stack([...])`, set properties by
+Build nodes with `text` / `rect` / `image` / `col` / `row` / `stack([...])` and the vector
+shapes `line(x1, y1, x2, y2)` / `arrow(x1, y1, x2, y2)` / `ellipse()` /
+`path([[x, y], …])`, set properties by
 **chaining methods**, and finish with a single `page(width, height, root)` call.
 (Rhai has no keyword arguments, so method chaining is how properties read like named
 ones — no map literals.) Numbers may be integer or float; colors are hex strings. The
@@ -181,6 +228,10 @@ setters:
 - **container** (`col`/`row`): `.spacing(n)`, `.main("space_between"|…)`,
   `.cross("start"|"center"|"end"|"stretch")` / `.stretch()`.
 - **rect**: `.fill(hex)`, `.stroke(hex)`, `.stroke_width(n)`, `.radius(n)`.
+- **shapes** (`line`/`arrow`/`ellipse`/`path`): `.stroke(hex)`, `.stroke_width(n)`,
+  `.fill(hex)` (path/ellipse), `.dash([on, off, …])`, `.cap("butt"|"round"|"square")`,
+  `.head("none"|"start"|"end"|"both")`, `.head_size(n)`, `.closed()` (path) — e.g.
+  `stack([image("a.png"), arrow(1, 4, 3, 2).stroke("#e0635a")])`.
 - **image**: `.fit("contain"|"cover"|"fill")`.
 - **page**: `.unit("cm"|…)`, `.background(hex)`, `.dpi(n)`, `.font(name)`.
 
@@ -227,6 +278,7 @@ Components (lengths in cm, font sizes in pt):
 | `grid(ncols, items)` / `grid(ncols, gap, items)` | Rows of `ncols` equal-flex cells (rows share height equally); the last row is padded with empty cells so widths stay equal. |
 | `panels(items)` / `panels(style, items)` | Each item overlaid with an auto label at its top-left (via core `stack` + `.at`). `style` is a template whose last `a`/`A`/`1` is the counter: `"(a)"` (default), `"a"`, `"A"`, `"a."`, `"Fig. 1"`. |
 | `labeled(item, s)` / `panel_label(style, i)` | One labeled panel / the `i`-th (0-based) label string. |
+| `circle(r)` / `circle(cx, cy, r)` | A square `ellipse` of radius `r`; the 3-argument form is centered on (`cx`, `cy`) of the enclosing `stack` (via `.at`). |
 | `nodes(items)` / `as_node(x)` | Bare-string sugar: a string becomes `body(s)`. Use `col(nodes([...]))` to get it in core containers. |
 
 **Bare strings.** Inside framework containers (`vbox`, `hbox`, `grid`, `panels`)
