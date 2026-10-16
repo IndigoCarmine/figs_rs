@@ -63,6 +63,10 @@ pub struct ScriptNode {
     children: Vec<ScriptNode>,
     /// Where `x`/`y` were last set (editor metadata; see [`sites`]).
     sites: sites::RawSites,
+    /// Script-only key -> value notes (`.meta(key, v)` / `.meta(key)`), never
+    /// lowered: how framework components tell each other about a node (a plot
+    /// asks `labeled` for panel-label room). See `prelude::register_meta`.
+    meta: Map,
 }
 
 /// The whole document a script returns: a page plus its root node.
@@ -287,6 +291,7 @@ fn leaf(kind: NodeKind) -> ScriptNode {
         node: blank_node(kind),
         children: Vec::new(),
         sites: Default::default(),
+        meta: Map::new(),
     }
 }
 
@@ -319,6 +324,7 @@ fn make_container(kind: NodeKind, children: Array) -> Result<ScriptNode, Box<Eva
         node: blank_node(kind),
         children: cast_children(children)?,
         sites: Default::default(),
+        meta: Map::new(),
     })
 }
 
@@ -1164,6 +1170,7 @@ pub fn eval_script_mapped(
 ) -> Result<(RawDocument, SourceMap), ScriptError> {
     let mut engine = build_engine(base_dir);
     prelude::register_style(&mut engine);
+    prelude::register_meta(&mut engine);
     let (ast, origins) =
         prelude::compile_with_prelude(&engine, src).map_err(ScriptError::from_eval)?;
     let value = engine

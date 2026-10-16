@@ -122,10 +122,74 @@ pub(super) fn register_style(engine: &mut Engine) {
     });
     let s = Arc::clone(&store);
     engine.register_fn("style_reset", move || lock(&s).clear());
-    let s = store;
+    let s = Arc::clone(&store);
     engine.register_fn("style_get", move |key: &str, default: Dynamic| {
         lock(&s).get(key).cloned().unwrap_or(default)
     });
+
+    // Scoped styles (a plot's `style:` option): `style_push(map)` saves the
+    // whole registry and merges `map` over it; `style_pop()` restores the
+    // saved registry exactly, so nothing set in between leaks out.
+    let saved: Arc<Mutex<Vec<Map>>> = Arc::default();
+    let (s, v) = (Arc::clone(&store), Arc::clone(&saved));
+    engine.register_fn("style_push", move |m: Map| {
+        let mut cur = lock(&s);
+        v.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(cur.clone());
+        cur.extend(m);
+    });
+    let (s, v) = (store, saved);
+    engine.register_fn(
+        "style_pop",
+        move || -> Result<(), Box<rhai::EvalAltResult>> {
+            let prev = v.lock().unwrap_or_else(PoisonError::into_inner).pop();
+            match prev {
+                Some(m) => {
+                    *lock(&s) = m;
+                    Ok(())
+                }
+                None => Err("style_pop() without a matching style_push()".into()),
+            }
+        },
+    );
+}
+
+/// Register script-only node notes and the container insert they enable:
+///
+/// - `n.meta(key, value)` returns `n` with the note set (any value);
+/// - `n.meta(key)` reads it back, `()` when unset;
+/// - `n.prepend(child)` inserts `child` as the first child of container `n`.
+///
+/// Notes are never lowered into the document; they let one framework component
+/// leave a hint for another that receives the finished node. A plot notes the
+/// panel-label room it wants (`plot_label_room()`), and `labeled` prepends that
+/// band inside the plot — under the plot's own aspect and size — only when it
+/// actually labels it.
+pub(super) fn register_meta(engine: &mut Engine) {
+    engine.register_fn("meta", |mut n: super::ScriptNode, key: &str, v: Dynamic| {
+        n.meta.insert(key.into(), v);
+        n
+    });
+    engine.register_fn("meta", |n: super::ScriptNode, key: &str| {
+        n.meta.get(key).cloned().unwrap_or(Dynamic::UNIT)
+    });
+    engine.register_fn(
+        "prepend",
+        |mut n: super::ScriptNode,
+         child: super::ScriptNode|
+         -> Result<super::ScriptNode, Box<rhai::EvalAltResult>> {
+            use crate::schema::NodeKind;
+            if !matches!(
+                n.node.kind,
+                NodeKind::Column | NodeKind::Row | NodeKind::Stack
+            ) {
+                return Err("`prepend`: only containers (col/row/stack) have children".into());
+            }
+            n.children.insert(0, child);
+            Ok(n)
+        },
+    );
 }
 
 /// One `ErrorInFunctionCall` frame: `name` was called at `pos`, a position in

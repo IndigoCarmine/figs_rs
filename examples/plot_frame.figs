@@ -1,0 +1,42 @@
+// Plots placed by their axes: with `frame_box: true` a plot's node *is* its
+// data frame, so `.at(x, y).width(w).height(h)` puts the axes exactly there
+// (1px freedom) and the tick labels, axis labels and title hang outside —
+// the way slide/poster layouts are drawn. Dashed guides mark the target
+// frames. Also shown: per-plot `style:` (only that plot), per-axis minor
+// ticks and tick formats, tick-label typography hooks, and a rich-text
+// `plot_text`. Synthetic data.
+style(#{ base_size: 12, plot_frame: "box", tick_direction: "in", plot_aspect: 0,
+         tick_label_size: 11, axis_label_size: 13, legend_style: "text" });
+
+let t = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+let decay = t.map(|v| 0.92 * (-v / 3.2).exp() + 0.04);
+let rise = t.map(|v| 0.9 * (1.0 - (-v / 2.1).exp()));
+
+fn guide(x, y, w, h) {
+    rect().stroke("#d0d0d0").dash([0.15, 0.1]).stroke_width(0.02)
+        .at(x, y).width(w).height(h)
+}
+
+let left = plot(#{
+    frame_box: true, x: [0, 10], y: [0, 1], xticks: [0, 2.5, 5, 7.5, 10],
+    yticks: [0, 0.25, 0.5, 0.75, 1], ytick_format: 2, xminor: 5, yminor: 5,
+    xlabel: markup("*t* [min]"), ylabel: "fraction", title: "Exchange",
+}, [
+    scatter(t, decay, #{ color: 0, open: true, label: "probe A" }),
+    scatter(t, rise, #{ color: 1, label: "probe B" }),
+    plot_text(6.2, 0.62, "*k* = 0.31 min^{−1}", #{ markup: true, size: 11 }),
+]);
+
+// This one alone uses a serif tick font and outward ticks.
+let right = plot(#{
+    frame_box: true, x: [0, 50], y: [0, 3], yticks: [0, 1, 2, 3], ytick_format: 1,
+    xtick_format: |v| `${v.to_int()}%`, xminor: 2, xlabel: "load",
+    style: #{ tick_direction: "out", tick_label_font: ["Times New Roman", "serif"], plot_frame: "open" },
+}, [
+    line_plot([0, 10, 20, 30, 40, 50], [0.1, 0.9, 1.6, 2.1, 2.4, 2.5], #{ color: 2, marker: "s" }),
+]);
+
+page(30, 13, stack([
+    guide(3, 2.5, 11, 7.5), left.at(3, 2.5).width(11).height(7.5),
+    guide(18, 2.5, 10, 7.5), right.at(18, 2.5).width(10).height(7.5),
+])).unit("cm").background("#ffffff")

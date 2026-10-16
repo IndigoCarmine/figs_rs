@@ -816,6 +816,10 @@ setters:
   see [Curves](#curves).
 - **image**: `.fit("contain"|"cover"|"fill")`, `.smooth(false)`.
 - **page**: `.unit("cm"|…)`, `.background(hex | gradient)`, `.dpi(n)`, `.font(name | list)`.
+- **script-only**: `.meta(key, value)` / `.meta(key)` (a note on the node for
+  other script code, `()` when unset; never part of the document — how a plot
+  asks `labeled` for label room), `.prepend(child)` (insert a first child into
+  a `col`/`row`/`stack`).
 
 Build it like any document (extension selects the front-end):
 
@@ -1008,6 +1012,8 @@ proportionally heavier ones.
   so the keys of `style(map)` are exactly the hook names above, and a
   misspelled key or unknown preset is an error that lists the valid ones.
   `style(name)` resets earlier `style` calls; `style(map)` merges.
+  `style_push(map)` / `style_pop()` scope a map (save the registry, merge,
+  restore it exactly) — what a plot's `style:` option uses.
 - **Your hooks still win.** A `fn base_size() { … }` in your script replaces
   the whole hook, registry lookup included, so it overrides any preset.
 - **Fonts.** The preset's `font_family()` is set on the page by
@@ -1133,7 +1139,7 @@ page("double", grid(2, panels([
 | `scatter(xs, ys)` / `scatter(xs, ys, opts)` | Markers (`"o"` circles by default). |
 | `bars(xs, ys)` / `bars(xs, ys, opts)` | Bars from 0. `xs` are numbers or **category names** (a categorical axis); several bar series are grouped side by side. Error bars on bars are in `plot_fg()` (black). |
 | `errorbars(xs, ys, errs)` / `(…, opts)` | Error bars alone (y ± err, in `plot_fg()` — black — by default). |
-| `plot_text(x, y, s)` / `(…, opts)` | Text at the **data point** (x, y), centred on it; goes among the series or in `marks`. Options: `color` (hex or palette index; default `plot_fg()`), `size` (pt, default `base_size()`), `bold`, `anchor: [ax, ay]` (which point of the text sits there, default `[0.5, 0.5]`). |
+| `plot_text(x, y, s)` / `(…, opts)` | Text at the **data point** (x, y), centred on it; goes among the series or in `marks`. Options: `color` (hex or palette index; default `plot_fg()`), `size` (pt, default `base_size()`), `font` (a family or fallback list; default `plot_font()`, the page font), `bold`, `italic`, `markup: true` (`s` is [inline markup](#rich-text-markup) — `"*k* = 0.3 min^{−1}"` becomes rich spans), `anchor: [ax, ay]` (which point of the text sits there, default `[0.5, 0.5]`). |
 | `plot_arrow(x1, y1, x2, y2)` / `(…, opts)` | An arrow between two data points, in `plot_fg()`, `series_width()` wide. Options: `color`, `width` (cm), `head` (`"end"`, `"start"`, `"both"`), `dash`. |
 | `palette_color(i)` | Colour `i` (0-based, wrapping) of `palette()` — to give markers and their fit line one colour; `#{ color: i }` does the same in series options. |
 | `legend(series)` / `legend(style, series)` | The legend as a standalone node (e.g. beside a row of plots), in `legend_style()` or `"swatch"` / `"text"`. |
@@ -1157,7 +1163,42 @@ a data point), `frame` (`"open"`, `"box"`, `"none"`), and `marks`: extra nodes
 overlaid on the data area, placed with `.at(x, y)` in data units (log10 of the
 value on a log axis) — e.g. `text("p < 0.05").at(2, 0.9).anchor(0.5, 1)` — and
 `plot_text` / `plot_arrow` annotations, which take plain data values (the plot
-applies log axes) and may equally go in the series array.
+applies log axes) and may equally go in the series array. Per axis:
+`xminor` / `yminor` (minor intervals per labelled step, overriding
+`minor_ticks()`), `xtick_format` / `ytick_format` (tick-label decimals —
+`2` gives `0.00, 0.25, …` with a real minus — or a function of the value
+returning the label, `|v| `${v.to_int()}%``; log axes pass the value itself),
+`xtick_direction` / `ytick_direction` (`"out"` / `"in"`, overriding
+`tick_direction()`). `frame_box: true` makes the node's box the data frame
+(below), and `style: #{ … }` applies style keys to **this plot only** — pushed
+over the current style while the plot is built, then the registry is restored
+exactly, so nothing leaks into later plots (defaults the series builders left
+open, such as `marker_open()`, are read inside that scope too). `xlabel`,
+`ylabel` and `title` also take markup spans: `xlabel: markup("*T* [K]")`.
+
+**Placing a plot by its axes.** By default a plot's box holds everything — the
+data area shrinks until tick labels, axis labels and title fit — which suits
+grids. To match a drawn layout instead, `frame_box: true` (or
+`style(#{ plot_frame_box: true })` for all plots) makes the node *be* the data
+frame: `.at(x, y).width(w).height(h)` puts the axes exactly there, and tick
+labels, axis labels and title hang outside the box (no `contain`, no
+`plot_pad()`, and no panel-label band; the layout doesn't clip, so they still
+render). `plot_bg()` then fills the frame only, and `plot_aspect()` applies to
+the frame ([`examples/plot_frame.figs`](examples/plot_frame.figs)):
+
+```rhai
+style(#{ plot_frame: "box", plot_aspect: 0, tick_label_size: 11 });
+let p = plot(#{ frame_box: true, x: [0, 10], y: [0, 1], ytick_format: 2, yminor: 5,
+                xlabel: markup("*t* [min]"), ylabel: "fraction" }, series);
+page(30, 13, stack([p.at(3, 2.5).width(11).height(7.5)])).unit("cm")  // frame at (3, 2.5)
+```
+
+**Panel-label room.** A plot reserves `plot_label_room()` (the label inset
+plus one label line) at its top only when it is **labelled**: it notes the room
+on its node (`.meta("label_room", …)`, script-only data that is never lowered),
+and `labeled` / `panels` prepend that band inside the plot — under its aspect
+and any size you chained, so a labelled plot keeps its box — before overlaying
+the label. A plot on its own, in a `row`, or with `frame_box` reserves nothing.
 
 **Fits over data, text legends, annotations, dark themes**
 ([`examples/plot_dark.figs`](examples/plot_dark.figs), the heating-curve /
@@ -1210,7 +1251,7 @@ fn plot_frame() { "box" }       // "open" (default) / "box" / "none"
 fn legend_corner() { "top-left" }  // "auto" (default) / a corner / "" for none
 fn bar_width() { 0.8 }          // fraction of the bar spacing (default 0.7)
 fn plot_aspect() { 1.0 }        // width / height of a plot panel; 0 = size it yourself (default 4:3)
-fn plot_label_room() { 0 }      // band kept free at the top for a panel label, cm
+fn plot_label_room() { 0 }      // band a labelled plot keeps free for its panel label, cm (standalone plots: none)
 fn plot_pad() { 0 }             // clear space between the outermost labels and the plot's box, cm (default base_size() * 0.01)
 fn ylabel_rotated() { false }   // y label horizontal above the axis (default true: turned 90° left of the tick labels)
 fn tick_direction() { "in" }    // ticks into the data area (default "out")
@@ -1222,10 +1263,25 @@ fn legend_style() { "text" }    // "swatch" (default) / "text": coloured labels 
 fn plot_title_size() { 10 }     // pt, the `title` option (default base_size())
 fn plot_fg() { "#ffffff" }      // axes, ticks, labels, titles, legend text, annotations (default fg(), i.e. black)
 fn plot_bg() { "#1b2a44" }      // fill behind the whole plot panel (default "": transparent)
+fn plot_frame_box() { true }    // the plot's box is its data frame, labels hang outside (default false)
+fn plot_font() { "Arial" }      // all plot text (default "": the page font); the fonts below follow it
+fn tick_label_size() { 7 }      // pt (default base_size())
+fn tick_label_font() { "Arial" }  // default plot_font()
+fn tick_label_pad() { 0.05 }    // tick end (or axis, ticks "in") -> tick label, cm (default base_size() * 0.012)
+fn axis_label_size() { 9 }      // xlabel / ylabel, pt (default base_size())
+fn axis_label_font() { "Arial" }  // default plot_font()
+fn axis_label_pad() { 0.1 }     // tick labels -> axis label, cm; the turned y label sits twice that (default base_size() * 0.012)
+fn legend_size() { 7 }          // legend labels, pt (default base_size())
+fn legend_font() { "Arial" }    // default plot_font()
+fn plot_title_font() { "Arial" }  // the `title` option (default plot_font())
 ```
 
 Every plot hook reads its style key first, so all of them can also be set with
 `style(#{ … })` or a preset (`palette: dark_palette()`, `plot_frame: "box"`, …).
+
+The rotated y label can still wrap mid-word when it is longer than the axis
+(the core has no "don't wrap" switch yet); keep it shorter than the axis or use
+`ylabel_rotated()` false.
 
 How it maps data: the plot area is a core `stack` with
 `.viewbox(xlo, yhi, xhi, ylo)`; lines and bars are `path`s with the same

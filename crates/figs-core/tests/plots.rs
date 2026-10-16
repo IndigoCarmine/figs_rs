@@ -715,11 +715,7 @@ fn plot_margins_are_the_measured_label_sizes() {
     );
     let panel = rect_of(&p.l, "root");
     let area = p.area();
-    let (pp, tl, room) = (
-        hook_pt("plot_pad"),
-        hook_pt("tick_length"),
-        hook_pt("plot_label_room"),
-    );
+    let (pp, tl) = (hook_pt("plot_pad"), hook_pt("tick_length"));
     let gap = 8.0 * 0.012 * 72.0 / 2.54; // tick -> label, base_size() * 0.012 cm
     let lw = 3.0 * CHAR_W; // "0.0" … "1.0"
 
@@ -742,10 +738,11 @@ fn plot_margins_are_the_measured_label_sizes() {
     let xl = p.text("Time");
     approx(xl.x + xl.w / 2.0, area.x + area.w / 2.0); // centred under the area
     approx(xl.y + xl.h, panel.y + panel.h - pp);
-    // Top: the panel-label room, then the y label, its bottom half a line
-    // above the axis (clear of the top tick label's half-line overhang).
+    // Top: the y label (a standalone plot keeps no panel-label room), its
+    // bottom half a line above the axis (clear of the top tick label's
+    // half-line overhang).
     let yl = p.text("Signal");
-    approx(yl.y, panel.y + room + pp);
+    approx(yl.y, panel.y + pp);
     approx(yl.x, area.x);
     approx(area.y - (yl.y + yl.h), LINE_H / 2.0);
     let top = p.text("1.0");
@@ -800,11 +797,7 @@ fn rotated_y_label_sits_left_of_the_tick_labels() {
     );
     let panel = rect_of(&p.l, "root");
     let area = p.area();
-    let (pp, tl, room) = (
-        hook_pt("plot_pad"),
-        hook_pt("tick_length"),
-        hook_pt("plot_label_room"),
-    );
+    let (pp, tl) = (hook_pt("plot_pad"), hook_pt("tick_length"));
     let gap = 8.0 * 0.012 * 72.0 / 2.54;
     let node =
         p.l.nodes
@@ -818,9 +811,8 @@ fn rotated_y_label_sits_left_of_the_tick_labels() {
     approx(area.x - (yl.x + yl.w), 2.0 * gap + 3.0 * CHAR_W + tl + gap);
     let tick = p.text("0.4");
     assert!(yl.x + yl.w < tick.x, "{yl:?} vs {tick:?}");
-    // Nothing above the axis but the label room and the top tick label's
-    // half-line overhang.
-    approx(area.y, panel.y + room + pp + LINE_H / 2.0);
+    // Nothing above the axis but the top tick label's half-line overhang.
+    approx(area.y, panel.y + pp + LINE_H / 2.0);
 }
 
 // ---- csv() -------------------------------------------------------------------
@@ -1042,13 +1034,10 @@ fn plot_colours_follow_the_theme_hooks() {
         let (texts, lines) = chrome_colors(&raw);
         assert!(texts.iter().all(|c| c == "#123456"), "{prelude}: {texts:?}");
         assert!(lines.iter().all(|c| c == "#123456"), "{prelude}: {lines:?}");
-        let bg = find_raw(&raw, |n| n.kind == NodeKind::Rect && n.fill.is_some());
-        assert_eq!(hx(&raw.nodes[bg].fill), "#eeeeee");
-        // The fill sits under the plot: the root is a stack of [fill, plot]
-        // carrying the plot's aspect.
+        // The fill is the plot node's own (container) fill, under all of it.
         let root = &raw.nodes["root"];
-        assert_eq!(root.kind, NodeKind::Stack);
-        assert_eq!(root.children[0], bg);
+        assert_eq!(root.kind, NodeKind::Column);
+        assert_eq!(hx(&root.fill), "#eeeeee");
         assert!(root.aspect_ratio.is_some());
     }
 
@@ -1336,12 +1325,9 @@ fn title_is_centred_above_the_area() {
     let t = p.text("加熱曲線");
     approx(t.x + t.w / 2.0, area.x + area.w / 2.0);
     // Its bottom half its own height above the axis (clear of the top tick
-    // label's half-line overhang), under the panel-label room.
+    // label's half-line overhang), at the top of the box.
     approx(area.y - (t.y + t.h), LINE_H / 2.0);
-    approx(
-        t.y,
-        panel.y + hook_pt("plot_label_room") + hook_pt("plot_pad"),
-    );
+    approx(t.y, panel.y + hook_pt("plot_pad"));
     let n = p
         .raw
         .nodes
@@ -1448,4 +1434,403 @@ fn plot_dark_example_renders() {
         white > 5000 && orange > 1000 && sky > 1000,
         "white {white}, orange {orange}, sky {sky}"
     );
+}
+
+// ---- frame-anchored plots ------------------------------------------------------
+
+#[test]
+fn frame_box_plot_is_its_data_frame() {
+    // `frame_box: true`: the node placed with `.at(..).width(..).height(..)`
+    // *is* the data frame; tick labels, axis labels and title hang outside.
+    let src = |opt: &str, pre: &str| {
+        format!(
+            r#"{pre}
+            page(12, 9, stack([plot(#{{ x: [0, 10], y: [0, 1], xlabel: "Time", ylabel: "Signal",
+                    title: "T"{opt} }}, [line_plot([0, 10], [0, 1])]).at(2, 1.5).width(8).height(6)]))
+                .unit("cm")"#
+        )
+    };
+    let cm = 72.0 / 2.54;
+    for (opt, pre) in [
+        (", frame_box: true", ""),
+        ("", "style(#{ plot_frame_box: true });"),
+    ] {
+        let p = Plotted::new(&src(opt, pre));
+        assert!(p.raw.nodes.values().all(|n| !n.contain), "no contain stack");
+        // Every stack with the data viewbox (the plot node and its area)
+        // is exactly the box the plot was given.
+        let frames: Vec<Rect> =
+            p.l.nodes
+                .iter()
+                .filter(|n| {
+                    let r = &p.raw.nodes[&n.id];
+                    r.kind == NodeKind::Stack && r.viewbox == Some([0.0, 1.0, 10.0, 0.0])
+                })
+                .map(|n| n.rect)
+                .collect();
+        assert_eq!(frames.len(), 2, "{frames:?}");
+        for f in &frames {
+            assert_rect(*f, 2.0 * cm, 1.5 * cm, 8.0 * cm, 6.0 * cm);
+        }
+        let area = frames[0];
+        // The data line runs corner to corner of the given box.
+        let line_id = find_raw(&p.raw, |n| {
+            n.kind == NodeKind::Path && n.points == vec![[0.0, 0.0], [10.0, 1.0]]
+        });
+        let s = segs_of(&p.l, line_id);
+        assert_eq!(
+            s[0],
+            PathSegment::MoveTo(Point::new(area.x, area.y + area.h))
+        );
+        // Labels hang outside the frame, at the usual distances.
+        let (tl, gap) = (hook_pt("tick_length"), 8.0 * 0.012 * cm);
+        let y0 = p.text("0.0");
+        approx(y0.x + y0.w, area.x - tl - gap);
+        let x5 = p.text("4");
+        approx(x5.y, area.y + area.h + tl + gap);
+        let xl = p.text("Time");
+        approx(xl.y, area.y + area.h + tl + gap + LINE_H + gap);
+        let t = p.text("T");
+        approx(t.y + t.h, area.y - LINE_H / 2.0);
+        let yl =
+            p.l.nodes
+                .iter()
+                .find(|n| p.raw.nodes[&n.id].content.as_deref() == Some("Signal"))
+                .unwrap()
+                .bounds();
+        assert!(yl.x + yl.w < y0.x, "{yl:?} vs {y0:?}");
+    }
+
+    // A labelled frame-box plot gets no band: the frame stays where it is put.
+    let p = Plotted::new(
+        r#"page(12, 9, stack([labeled(plot(#{ x: [0, 2], y: [0, 1], frame_box: true },
+                [line_plot([0, 1], [0, 1])]).at(2, 1.5).width(8).height(6), "(a)")])).unit("cm")"#,
+    );
+    let frames: Vec<Rect> =
+        p.l.nodes
+            .iter()
+            .filter(|n| {
+                let r = &p.raw.nodes[&n.id];
+                r.kind == NodeKind::Stack && r.viewbox == Some([0.0, 1.0, 2.0, 0.0])
+            })
+            .map(|n| n.rect)
+            .collect();
+    assert_eq!(frames.len(), 2, "{frames:?}");
+    for f in frames {
+        assert_rect(f, 2.0 * cm, 1.5 * cm, 8.0 * cm, 6.0 * cm);
+    }
+    let e = eval_script(r#"page(1, 1, plot(#{ frame_box: 1 }, [line_plot([0, 1], [0, 1])]))"#)
+        .unwrap_err();
+    assert!(e.message.contains("frame_box must be"), "{}", e.message);
+}
+
+#[test]
+fn label_room_only_when_labelled() {
+    let plot = r#"plot(#{ x: [0, 10], y: [0, 1] }, [line_plot([0, 10], [0, 1])])"#;
+    let room = hook_pt("plot_label_room");
+    assert!(room > 10.0, "{room}");
+    let pp = hook_pt("plot_pad");
+    // Standalone: the area starts right under the top tick label's overhang.
+    let alone = Plotted::new(&format!(r#"page(12, 9, {plot}.flex(1)).unit("cm")"#));
+    approx(alone.area().y, pp + LINE_H / 2.0);
+    let band = |raw: &RawDocument| {
+        raw.nodes
+            .values()
+            .filter(|n| n.kind == NodeKind::Rect && n.height.is_some_and(|h| h > 0.5))
+            .count()
+    };
+    assert_eq!(band(&alone.raw), 0);
+    // `panels` / `labeled` prepend the band inside the plot, under its
+    // aspect: the box keeps its size, the area moves down by the room.
+    for wrap in [
+        format!("panels([{plot}])[0]"),
+        format!(r#"labeled({plot}, "(a)")"#),
+    ] {
+        let p = Plotted::new(&format!(
+            r#"page(12, "auto", col([{wrap}]).stretch()).unit("cm")"#
+        ));
+        approx(p.area().y, room + pp + LINE_H / 2.0);
+        approx(rect_of(&p.l, "root").h, 9.0 * 72.0 / 2.54); // still 4:3
+        assert_eq!(band(&p.raw), 1);
+    }
+    // Labelling twice adds one band; images get none; room 0 adds none.
+    let raw = eval_script(&format!(
+        r#"page(12, 9, labeled(labeled({plot}, "a"), "b")).unit("cm")"#
+    ))
+    .unwrap();
+    assert_eq!(band(&raw), 1);
+    let raw = eval_script(&format!(
+        r#"page(12, 9, col(panels([{plot}, image("a.png")]))).unit("cm")"#
+    ))
+    .unwrap();
+    assert_eq!(band(&raw), 1);
+    let raw = eval_script(&format!(
+        r#"style(#{{ plot_label_room: 0 }}); page(12, 9, col(panels([{plot}]))).unit("cm")"#
+    ))
+    .unwrap();
+    assert_eq!(band(&raw), 0);
+}
+
+// ---- typography and per-axis ticks ----------------------------------------------
+
+#[test]
+fn plot_typography_hooks() {
+    let raw = eval_script(
+        r#"style(#{ plot_font: "Plot Sans", tick_label_size: 6, tick_label_font: "Tick Mono",
+                   axis_label_size: 11, legend_size: 7, legend_font: ["Leg A", "Leg B"],
+                   plot_title_size: 12 });
+        page("single", plot(#{ x: [0, 10], y: [0, 1], xticks: [0, 10], yticks: [0, 1],
+                xlabel: "Time", ylabel: "Signal", title: "T" },
+            [line_plot([0, 10], [0, 1], "data"), plot_text(5, 0.5, "note")]))"#,
+    )
+    .unwrap();
+    let node = |s: &str| {
+        raw.nodes
+            .values()
+            .find(|n| n.content.as_deref() == Some(s))
+            .unwrap_or_else(|| panic!("no text {s:?}"))
+    };
+    let font = |s: &str| node(s).font_family.clone().unwrap_or_default();
+    for t in ["0", "10", "1"] {
+        assert_eq!(node(t).font_size, Some(6.0), "{t}");
+        assert_eq!(font(t), "Tick Mono");
+    }
+    for t in ["Time", "Signal"] {
+        assert_eq!(node(t).font_size, Some(11.0), "{t}");
+        assert_eq!(font(t), "Plot Sans"); // axis_label_font() follows plot_font()
+    }
+    assert_eq!(node("data").font_size, Some(7.0));
+    assert!(font("data").contains("Leg A"), "{}", font("data"));
+    assert_eq!(node("T").font_size, Some(12.0));
+    assert_eq!(font("T"), "Plot Sans");
+    assert_eq!(font("note"), "Plot Sans");
+    assert_eq!(node("note").font_size, Some(8.0));
+
+    // The default sets no font: plot text uses the page font.
+    let raw = themed("");
+    assert!(raw
+        .nodes
+        .values()
+        .filter(|n| n.kind == NodeKind::Text)
+        .all(|n| n.font_family.is_none()));
+
+    // `tick_label_pad()` is the tick -> label gap; `axis_label_pad()` the
+    // tick label -> axis label gap.
+    let p = Plotted::new(
+        r#"style(#{ tick_label_pad: 0.5, axis_label_pad: 0.3 });
+        page(12, 9, plot(#{ x: [0, 10], y: [0, 1], xticks: [0, 5, 10], xlabel: "Time" },
+            [line_plot([0, 10], [0, 1])]).flex(1)).unit("cm")"#,
+    );
+    let area = p.area();
+    let cm = 72.0 / 2.54;
+    let tl = hook_pt("tick_length");
+    let five = p.text("5");
+    approx(five.y, area.y + area.h + tl + 0.5 * cm);
+    approx(p.text("Time").y, five.y + LINE_H + 0.3 * cm);
+    approx(p.text("0.0").x + 3.0 * CHAR_W, area.x - tl - 0.5 * cm);
+}
+
+#[test]
+fn per_axis_minor_ticks_and_directions() {
+    let p = Plotted::new(
+        r#"page(12, 9, plot(#{ x: [0, 10], y: [0, 1], xticks: [0, 5, 10], yticks: [0, 1],
+                xminor: 5, yminor: 2, xtick_direction: "in" },
+            [line_plot([0, 10], [0, 1])]).flex(1)).unit("cm")"#,
+    );
+    let area = p.area();
+    let ticks: Vec<Rect> =
+        p.l.nodes
+            .iter()
+            .filter(|n| p.raw.nodes[&n.id].kind == NodeKind::Line)
+            .map(|n| n.rect)
+            .collect();
+    // 3 + 2 labelled, 4 minor per x step (8), 1 per y step (1).
+    assert_eq!(ticks.len(), 5 + 8 + 1);
+    let (xs, ys): (Vec<Rect>, Vec<Rect>) = ticks.iter().partition(|r| r.w < r.h);
+    assert_eq!((xs.len(), ys.len()), (11, 3));
+    for r in xs {
+        // x ticks point in (up from the axis) ...
+        assert!(
+            r.y + r.h <= area.y + area.h + 1e-3 && r.y >= area.y,
+            "{r:?}"
+        );
+    }
+    for r in ys {
+        // ... y ticks still out (left of it).
+        assert!(r.x + r.w <= area.x + 1e-3, "{r:?}");
+    }
+    // The x labels move up to the axis; the y labels keep the tick room.
+    let gap = 8.0 * 0.012 * 72.0 / 2.54;
+    approx(p.text("5").y, area.y + area.h + gap);
+    approx(
+        p.text("1").x + CHAR_W,
+        area.x - hook_pt("tick_length") - gap,
+    );
+    // The per-axis option overrides `minor_ticks()`; bad values are errors.
+    let raw = eval_script(
+        r#"style(#{ minor_ticks: 2 });
+        page(1, 1, plot(#{ x: [0, 10], y: [0, 1], xticks: [0, 10], yticks: [0, 1], xminor: 0 },
+            [line_plot([0, 10], [0, 1])]))"#,
+    )
+    .unwrap();
+    let lines = raw
+        .nodes
+        .values()
+        .filter(|n| n.kind == NodeKind::Line)
+        .count();
+    assert_eq!(lines, 2 + 2 + 1);
+    let e = eval_script(r#"page(1, 1, plot(#{ yminor: -1 }, [line_plot([0, 1], [0, 1])]))"#)
+        .unwrap_err();
+    assert!(e.message.contains("yminor must be"), "{}", e.message);
+    let e =
+        eval_script(r#"page(1, 1, plot(#{ ytick_direction: "up" }, [line_plot([0, 1], [0, 1])]))"#)
+            .unwrap_err();
+    assert!(e.message.contains("ytick_direction"), "{}", e.message);
+}
+
+#[test]
+fn tick_format_sets_decimals_or_calls_a_function() {
+    let texts = |src: &str| -> Vec<String> {
+        let raw = eval_script(src).unwrap_or_else(|e| panic!("{e}"));
+        raw.nodes
+            .values()
+            .filter_map(|n| n.content.clone())
+            .collect()
+    };
+    let t = texts(
+        r#"page("single", plot(#{ x: [0, 10], y: [0, 1], xticks: [0, 5, 10], yticks: [0, 0.5, 1],
+                ytick_format: 2, xtick_format: |v| `${v.to_int()} s` },
+            [line_plot([0, 10], [0, 1])]))"#,
+    );
+    for s in ["0.00", "0.50", "1.00", "0 s", "5 s", "10 s"] {
+        assert!(t.contains(&s.to_string()), "missing {s:?} in {t:?}");
+    }
+    // Negative values keep the real minus; log axes format the value itself.
+    let t = texts(
+        r#"page("single", plot(#{ x: [1, 100], y: [-1, 1], yticks: [-1, 1], xscale: "log",
+                xtick_format: 0, ytick_format: 1 }, [line_plot([1, 100], [-1, 1])]))"#,
+    );
+    for s in ["1", "10", "100", "−1.0", "1.0"] {
+        assert!(t.contains(&s.to_string()), "missing {s:?} in {t:?}");
+    }
+    let e =
+        eval_script(r#"page(1, 1, plot(#{ xtick_format: "%.2f" }, [line_plot([0, 1], [0, 1])]))"#)
+            .unwrap_err();
+    assert!(e.message.contains("xtick_format must be"), "{}", e.message);
+    let e = eval_script(r#"page(1, 1, plot(#{ xtick_format: 1 }, [bars(["a", "b"], [1, 2])]))"#)
+        .unwrap_err();
+    assert!(e.message.contains("numeric axis"), "{}", e.message);
+}
+
+// ---- per-plot style ------------------------------------------------------------
+
+#[test]
+fn per_plot_style_does_not_leak() {
+    let raw = eval_script(
+        r##"style(#{ base_size: 9 });
+        let a = plot(#{ style: #{ base_size: 20, plot_fg: "#ff0000", marker_open: true } },
+                     [scatter([0, 1], [0, 1], "first")]);
+        let b = plot([scatter([0, 1], [0, 1], "second")]);
+        page("double", col([a, b, text(`${base_size()}`)]))"##,
+    )
+    .unwrap();
+    let node = |s: &str| {
+        raw.nodes
+            .values()
+            .find(|n| n.content.as_deref() == Some(s))
+            .unwrap_or_else(|| panic!("no text {s:?}"))
+    };
+    // Plot a: its style (also for defaults of series built before it).
+    assert_eq!(node("first").font_size, Some(20.0));
+    assert_eq!(hx(&node("first").color), "#ff0000");
+    // Plot b and everything after: the script's style again.
+    assert_eq!(node("second").font_size, Some(9.0));
+    assert_eq!(hx(&node("second").color), "#000000");
+    assert!(raw
+        .nodes
+        .values()
+        .any(|n| n.content.as_deref() == Some("9")));
+    let (open, filled): (Vec<_>, Vec<_>) = raw
+        .nodes
+        .values()
+        .filter(|n| n.kind == NodeKind::Ellipse)
+        .partition(|n| n.fill.is_none());
+    assert_eq!((open.len(), filled.len()), (3, 3)); // 2 markers + legend key each
+
+    let e =
+        eval_script(r#"page(1, 1, plot(#{ style: #{ base: 1 } }, [line_plot([0, 1], [0, 1])]))"#)
+            .unwrap_err();
+    assert!(
+        e.message.contains("unknown style key \"base\""),
+        "{}",
+        e.message
+    );
+    let e = eval_script(r#"style_pop(); page(1, 1, rect())"#).unwrap_err();
+    assert!(e.message.contains("style_push"), "{}", e.message);
+}
+
+// ---- plot_text options ---------------------------------------------------------
+
+#[test]
+fn plot_text_takes_font_italic_and_markup() {
+    let raw = eval_script(
+        r#"page("single", plot(#{ x: [0, 10], y: [0, 1] }, [
+            line_plot([0, 10], [0, 1]),
+            plot_text(2, 0.5, "plain", #{ font: "Serif X", italic: true, size: 10 }),
+            plot_text(8, 0.5, "*T*_{1/2}", #{ markup: true, bold: true }),
+        ]))"#,
+    )
+    .unwrap();
+    let plain = raw
+        .nodes
+        .values()
+        .find(|n| n.content.as_deref() == Some("plain"))
+        .unwrap();
+    assert_eq!(plain.font_family.as_deref(), Some("Serif X"));
+    assert_eq!(plain.font_style, Some(figs_core::schema::FontStyle::Italic));
+    assert_eq!(plain.font_size, Some(10.0));
+    let rich = raw
+        .nodes
+        .values()
+        .find(|n| !n.spans.is_empty())
+        .expect("markup text has spans");
+    let text: String = rich.spans.iter().map(|s| s.text.as_str()).collect();
+    assert_eq!(text, "T1/2");
+    assert_eq!(rich.font_weight, Some(700));
+    assert_eq!(hx(&rich.color), "#000000");
+    // Rich axis labels: `markup(..)` spans work for xlabel / ylabel / title.
+    let raw = eval_script(
+        r#"page("single", plot(#{ xlabel: markup("*T* [K]") }, [line_plot([0, 1], [0, 1])]))"#,
+    )
+    .unwrap();
+    assert!(raw.nodes.values().any(|n| n.spans.len() >= 2));
+    let e =
+        eval_script(r#"page(1, 1, plot([plot_text(0, 0, "x", #{ italic: "yes" })]))"#).unwrap_err();
+    assert!(e.message.contains("italic must be"), "{}", e.message);
+}
+
+#[test]
+fn plot_frame_example_puts_frames_on_the_guides() {
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    let src = std::fs::read_to_string(examples.join("plot_frame.figs")).unwrap();
+    let raw = eval_script_in(&src, Some(&examples)).unwrap();
+    let doc = figs_core::schema::resolve::resolve(raw.clone()).unwrap();
+    let fonts = FontStore::new();
+    let l = layout(&doc, &fonts);
+    // The dashed guides and the plot nodes (stacks with a viewbox, children
+    // of the page stack) share their boxes exactly.
+    let root = &raw.nodes["root"];
+    let boxes = |f: &dyn Fn(&figs_core::schema::RawNode) -> bool| -> Vec<Rect> {
+        root.children
+            .iter()
+            .filter(|id| f(&raw.nodes[id.as_str()]))
+            .map(|id| rect_of(&l, id))
+            .collect()
+    };
+    let guides = boxes(&|n| n.kind == NodeKind::Rect && !n.dash.is_empty());
+    let plots = boxes(&|n| n.kind == NodeKind::Stack && n.viewbox.is_some());
+    assert_eq!((guides.len(), plots.len()), (2, 2));
+    for (g, p) in guides.iter().zip(&plots) {
+        assert_rect(*p, g.x, g.y, g.w, g.h);
+    }
 }
