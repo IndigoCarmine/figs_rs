@@ -189,7 +189,7 @@ pub fn offset_literal(
     let args = call_args(src, site.line, site.column, site.call).ok_or(computed.clone())?;
     // Method form `n.at(x, y)`, or function form `at(n, x, y)`.
     let (arity, index) = match site.call {
-        "at" => (2, axis),
+        "at" | "at_baseline" => (2, axis),
         _ => (1, 0),
     };
     let index = match args.len() {

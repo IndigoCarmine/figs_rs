@@ -354,10 +354,18 @@ pub fn plan_move(app: &FigsApp, id: &str) -> Result<MovePlan, String> {
         return Err(format!("fix the TOML error first ({e})"));
     }
 
-    let [ax, ay] = node.anchor.unwrap_or([0.0, 0.0]);
+    let [ax, ay] = node.anchor.unwrap_or_default();
+    // A baseline anchor's point needs the text's metrics: take it from the
+    // offset itself (the frame maps it exactly), else the far edge.
+    let point = |a: usize, v: figs_core::geom::AnchorValue, lo: f32, len: f32, margin: f32| match v
+        .frac()
+    {
+        Some(f) => lo + f * len - margin * unit_pt,
+        None => start[a].map_or(lo + len, |s| frame.pt_of(a, s)),
+    };
     let start_point = [
-        rect.x + ax * rect.w - node.margin.left * unit_pt,
-        rect.y + ay * rect.h - node.margin.top * unit_pt,
+        point(0, ax, rect.x, rect.w, node.margin.left),
+        point(1, ay, rect.y, rect.h, node.margin.top),
     ];
     let siblings = parent
         .children

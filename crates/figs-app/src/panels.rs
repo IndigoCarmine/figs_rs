@@ -7,8 +7,8 @@ use std::path::PathBuf;
 
 use eframe::egui::{self, Color32, Rect, RichText, Sense, Stroke};
 use figs_core::geom::{
-    ArrowHead, Color, CrossAxisAlign, Edges, GradientStop, HeadStyle, HeadWidth, ImageFit, LineCap,
-    LineJoin, LinearDir, MainAxisAlign, Paint, TextAlign,
+    AnchorValue, ArrowHead, Color, CrossAxisAlign, Edges, GradientStop, HeadStyle, HeadWidth,
+    ImageFit, LineCap, LineJoin, LinearDir, MainAxisAlign, Paint, TextAlign,
 };
 use figs_core::schema::{NodeKind, PageHeight, RawDocument, RawGlow, RawSegment, RawShadow};
 use figs_core::units::Unit;
@@ -415,7 +415,7 @@ fn inspector(app: &mut FigsApp, ui: &mut egui::Ui, _p: &Palette) {
                 // Offsets only take effect under a `stack` parent.
                 changed |= opt_num(ui, "X", &mut node.x, 0.5);
                 changed |= opt_num(ui, "Y", &mut node.y, 0.5);
-                changed |= opt_nums(ui, "Anchor", &mut node.anchor, [0.5, 0.5], 0.05);
+                changed |= anchor_field(ui, &mut node.anchor);
                 // Degrees clockwise; ±90 swaps the footprint, others are paint-only.
                 changed |= opt_num(ui, "Rotate", &mut node.rotate, 1.0);
                 changed |= edges(ui, "Margin", &mut node.margin);
@@ -619,6 +619,41 @@ fn opt_nums<const N: usize>(
         if let Some(xs) = v {
             for x in xs.iter_mut() {
                 changed |= ui.add(egui::DragValue::new(x).speed(speed)).changed();
+            }
+        }
+    });
+    changed
+}
+
+/// `anchor`: a checkbox, then per axis a fraction (drag value) or a text
+/// baseline (`"baseline"` / `"last_baseline"`, shown as a label; its button
+/// turns it back into a fraction).
+fn anchor_field(ui: &mut egui::Ui, v: &mut Option<[AnchorValue; 2]>) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label("Anchor");
+        let mut on = v.is_some();
+        if ui.checkbox(&mut on, "").changed() {
+            *v = on.then_some([AnchorValue::Frac(0.5); 2]);
+            changed = true;
+        }
+        if let Some(xs) = v {
+            for x in xs.iter_mut() {
+                match x {
+                    AnchorValue::Frac(f) => {
+                        changed |= ui.add(egui::DragValue::new(f).speed(0.05)).changed();
+                    }
+                    AnchorValue::Baseline(k) => {
+                        if ui
+                            .button(k.name())
+                            .on_hover_text("a text baseline; click for a fraction")
+                            .clicked()
+                        {
+                            *x = AnchorValue::Frac(0.0);
+                            changed = true;
+                        }
+                    }
+                }
             }
         }
     });
@@ -1076,6 +1111,7 @@ fn cross_align_combo(ui: &mut egui::Ui, label: &str, v: &mut Option<CrossAxisAli
                     CrossAxisAlign::Center,
                     CrossAxisAlign::End,
                     CrossAxisAlign::Stretch,
+                    CrossAxisAlign::Baseline,
                 ] {
                     if ui.selectable_label(cur == a, cross_label(a)).clicked() {
                         *v = Some(a);
@@ -1104,6 +1140,7 @@ fn cross_label(a: CrossAxisAlign) -> &'static str {
         CrossAxisAlign::Center => "center",
         CrossAxisAlign::End => "end",
         CrossAxisAlign::Stretch => "stretch",
+        CrossAxisAlign::Baseline => "baseline",
     }
 }
 
@@ -1305,6 +1342,7 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
                     "fill",
                     "stroke",
                     "stroke_width",
+                    "stroke_align",
                     "corner_radius",
                     "dash",
                     "clip",
@@ -1315,6 +1353,7 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
                     "fill",
                     "stroke",
                     "stroke_width",
+                    "stroke_align",
                     "corner_radius",
                     "dash",
                     "clip",
@@ -1327,14 +1366,19 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
                     "color",
                     "align",
                     "line_height",
+                    "wrap",
                     "stroke",
                     "stroke_width",
                     "join",
                 ]),
                 Some(NodeKind::Image) => v.extend(["src", "fit", "smooth"]),
-                Some(NodeKind::Rect) => {
-                    v.extend(["fill", "stroke", "stroke_width", "corner_radius"])
-                }
+                Some(NodeKind::Rect) => v.extend([
+                    "fill",
+                    "stroke",
+                    "stroke_width",
+                    "stroke_align",
+                    "corner_radius",
+                ]),
                 Some(NodeKind::Line) | Some(NodeKind::Arrow) => v.extend([
                     "points",
                     "segments",
@@ -1357,6 +1401,7 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
                     "fill",
                     "stroke",
                     "stroke_width",
+                    "stroke_align",
                     "dash",
                     "cap",
                     "join",
@@ -1365,9 +1410,15 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
                     "head_width",
                     "head_style",
                 ]),
-                Some(NodeKind::Ellipse) => {
-                    v.extend(["fill", "stroke", "stroke_width", "dash", "cap", "join"])
-                }
+                Some(NodeKind::Ellipse) => v.extend([
+                    "fill",
+                    "stroke",
+                    "stroke_width",
+                    "stroke_align",
+                    "dash",
+                    "cap",
+                    "join",
+                ]),
                 None => v.extend([
                     "content",
                     "font_size",
@@ -1440,7 +1491,8 @@ fn enum_values(key: &str) -> Vec<&'static str> {
             "space_around",
             "space_evenly",
         ],
-        "cross_axis_alignment" => vec!["start", "center", "end", "stretch"],
+        "cross_axis_alignment" => vec!["start", "center", "end", "stretch", "baseline"],
+        "stroke_align" => vec!["inside", "center", "outside"],
         _ => vec![],
     }
 }

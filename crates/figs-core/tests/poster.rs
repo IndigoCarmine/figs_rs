@@ -183,7 +183,7 @@ fn section_is_a_bar_over_padded_content() {
     assert_eq!(title.content.as_deref(), Some("1. Intro"));
     approx(title.font_size.unwrap(), 24.0 * 2.23);
     assert_eq!(title.color, hex("#ffffff"));
-    assert_eq!(title.anchor, Some([0.5, 0.5]));
+    assert_eq!(title.anchor, Some([0.5.into(), 0.5.into()]));
     assert_eq!((title.x, title.y), (Some(0.5), Some(0.5)));
     // The content: padded `section_pad()`, items `section_gap()` apart, the
     // bare string a body text.

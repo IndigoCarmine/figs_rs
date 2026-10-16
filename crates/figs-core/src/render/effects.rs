@@ -170,11 +170,28 @@ pub fn ink_bounds(group: &[ComputedNode]) -> Option<Rect> {
     for n in group {
         let local = match &n.content {
             PaintContent::Container => continue,
-            PaintContent::Frame(_) | PaintContent::Image { .. } => n.rect,
-            PaintContent::Rect { stroke_width, .. } => grow(n.rect, stroke_width / 2.0),
-            PaintContent::Ellipse { stroke, .. } => {
-                grow(n.rect, stroke.as_ref().map_or(0.0, |s| s.width / 2.0))
-            }
+            PaintContent::Image { .. } => n.rect,
+            PaintContent::Frame(f) => grow(
+                n.rect,
+                f.stroke
+                    .as_ref()
+                    .map_or(0.0, |s| f.stroke_align.outer_extent(s.width)),
+            ),
+            PaintContent::Rect {
+                stroke_width,
+                stroke_align,
+                ..
+            } => grow(n.rect, stroke_align.outer_extent(*stroke_width)),
+            PaintContent::Ellipse {
+                stroke,
+                stroke_align,
+                ..
+            } => grow(
+                n.rect,
+                stroke
+                    .as_ref()
+                    .map_or(0.0, |s| stroke_align.outer_extent(s.width)),
+            ),
             PaintContent::Text(t) => grow(
                 n.rect,
                 t.font_size + t.stroke.as_ref().map_or(0.0, |s| s.width),
@@ -183,7 +200,14 @@ pub fn ink_bounds(group: &[ComputedNode]) -> Option<Rect> {
                 let Some((lo, hi)) = crate::path::bounds(&p.segments) else {
                     continue;
                 };
-                let w = p.stroke.as_ref().map_or(0.0, |s| s.width);
+                // Twice the width covers miters; an outside stroke's offset
+                // line is mitered too.
+                let w = p.stroke.as_ref().map_or(0.0, |s| s.width)
+                    * if p.stroke_align == crate::geom::StrokeAlign::Outside {
+                        3.0
+                    } else {
+                        1.0
+                    };
                 let heads = if p.head == ArrowHead::None {
                     0.0
                 } else {

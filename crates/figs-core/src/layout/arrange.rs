@@ -9,6 +9,7 @@ use crate::geom::{
 };
 use crate::schema::{Common, NodeType, RectProps, TextProps};
 
+use super::baseline::{anchor_shift, row_baseline};
 use super::computed::{ClipRegion, ComputedNode, FramePaint, PaintContent, PathPaint, TextBox};
 use super::measure::{
     measure, stack_child_avail, stack_child_constraints, stack_child_size, tighten,
@@ -90,6 +91,7 @@ pub(crate) fn arrange<M: LeafMeasure>(
                 layout_stack(ctx, children, *viewbox, content, xf, out);
             }
         }
+        NodeType::Text(_) => warn_unwrapped_overflow(ctx, idx, rect),
         _ => {}
     }
 
@@ -108,8 +110,9 @@ pub(crate) fn arrange<M: LeafMeasure>(
 }
 
 /// The region a `clip` decoration keeps its children in: the box inside
-/// the border (inset by the stroke width, radius reduced to match), in the
-/// container's local frame.
+/// the border (inset by however far the border reaches inside the box —
+/// its full width when `inside`, half when `center`, nothing when
+/// `outside` — radius reduced to match), in the container's local frame.
 fn clip_region(
     d: &crate::schema::Decoration,
     rect: Rect,
@@ -118,12 +121,37 @@ fn clip_region(
     if !d.clip {
         return None;
     }
-    let sw = d.stroke.as_ref().map_or(0.0, |s| s.width);
+    let inner = d
+        .stroke
+        .as_ref()
+        .map_or(0.0, |s| d.stroke_align.inner_extent(s.width));
     Some(ClipRegion {
-        rect: rect.inset(Edges::all(sw)),
-        radius: (d.corner_radius - sw).max(0.0),
+        rect: rect.inset(Edges::all(inner)),
+        radius: (d.corner_radius - inner).max(0.0),
         transform: xf,
     })
+}
+
+/// A `wrap = false` text node whose single-line width doesn't fit its box
+/// overflows it: say so (the drawing is not clipped).
+fn warn_unwrapped_overflow<M: LeafMeasure>(ctx: &Ctx<M>, idx: usize, rect: Rect) {
+    let node = &ctx.doc.nodes[idx];
+    let NodeType::Text(props) = &node.kind else {
+        return;
+    };
+    if props.wrap {
+        return;
+    }
+    let natural =
+        ctx.measurer.measure_text(props, f32::INFINITY).w + node.common.padding.horizontal();
+    if natural > rect.w + 0.01 {
+        tracing::warn!(
+            node = %node.id,
+            width = natural,
+            room = rect.w,
+            "unwrapped text (wrap = false) is wider than its box; it overflows"
+        );
+    }
 }
 
 /// The local box and accumulated transform of a node rotated by `degrees`
@@ -186,9 +214,9 @@ fn layout_stack<M: LeafMeasure>(
             ),
             None => (common.x.unwrap_or(0.0), common.y.unwrap_or(0.0)),
         };
-        let [ax, ay] = common.anchor.unwrap_or([0.0, 0.0]);
-        let x = content.x + ox - ax * size.w + common.margin.left;
-        let y = content.y + oy - ay * size.h + common.margin.top;
+        let (dx, dy) = anchor_shift(ctx, child, common.anchor, size);
+        let x = content.x + ox - dx + common.margin.left;
+        let y = content.y + oy - dy + common.margin.top;
         arrange(ctx, child, Rect::new(x, y, size.w, size.h), xf, out);
     }
 }
@@ -389,31 +417,55 @@ fn layout_children<M: LeafMeasure>(
         Axis::Horizontal => content.y,
     };
 
+    // Cross-axis size: stretch fills the content cross extent; otherwise the
+    // measured cross size. aspect_ratio, when present, derives cross from the
+    // (possibly flex-imposed) main size and takes precedence over stretch.
+    let cross_size: Vec<f32> = (0..n)
+        .map(|i| {
+            let bmain = main_size[i];
+            let mut bcross = match cross_align {
+                CrossAxisAlign::Stretch => (content_cross - margin_cross(i)).max(0.0),
+                _ => cross_of(axis, measured[i]),
+            };
+            if let Some(ar) = ctx.doc.nodes[children[i]].common.outer().aspect_ratio {
+                if ar > 0.0 {
+                    bcross = match axis {
+                        // column: main = height, cross = width = height * ar
+                        Axis::Vertical => bmain * ar,
+                        // row: main = width, cross = height = width / ar
+                        Axis::Horizontal => bmain / ar,
+                    };
+                }
+            }
+            bcross.min((content_cross - margin_cross(i)).max(0.0))
+        })
+        .collect();
+
+    // A baseline row puts every child's first baseline (or bottom edge) on
+    // one line, as low as the child reaching furthest above it needs.
+    let baselines: Option<Vec<f32>> =
+        (axis == Axis::Horizontal && cross_align == CrossAxisAlign::Baseline).then(|| {
+            (0..n)
+                .map(|i| {
+                    let fp = Size::new(main_size[i], cross_size[i]);
+                    row_baseline(ctx, children[i], fp, margins[i])
+                })
+                .collect()
+        });
+    let shared_baseline = baselines
+        .as_ref()
+        .map_or(0.0, |b| b.iter().copied().fold(0.0, f32::max));
+
     let mut cursor = main_start + start_offset;
     for i in 0..n {
         let child = children[i];
         let bmain = main_size[i];
+        let bcross = cross_size[i];
 
-        // Cross-axis size: stretch fills the content cross extent; otherwise the
-        // measured cross size. aspect_ratio, when present, derives cross from the
-        // (possibly flex-imposed) main size and takes precedence over stretch.
-        let mut bcross = match cross_align {
-            CrossAxisAlign::Stretch => (content_cross - margin_cross(i)).max(0.0),
-            _ => cross_of(axis, measured[i]),
+        let cross_off = match &baselines {
+            Some(b) => shared_baseline - b[i],
+            None => cross_axis_offset(cross_align, content_cross, bcross + margin_cross(i)),
         };
-        if let Some(ar) = ctx.doc.nodes[child].common.outer().aspect_ratio {
-            if ar > 0.0 {
-                bcross = match axis {
-                    // column: main = height, cross = width = height * ar
-                    Axis::Vertical => bmain * ar,
-                    // row: main = width, cross = height = width / ar
-                    Axis::Horizontal => bmain / ar,
-                };
-            }
-        }
-        bcross = bcross.min((content_cross - margin_cross(i)).max(0.0));
-
-        let cross_off = cross_axis_offset(cross_align, content_cross, bcross + margin_cross(i));
 
         let main_pos = cursor + margin_leading_main(axis, margins[i]);
         let cross_pos = cross_start + cross_off + margin_leading_cross(axis, margins[i]);
@@ -478,7 +530,8 @@ fn main_axis_distribution(align: MainAxisAlign, leftover: f32, n: usize) -> (f32
 fn cross_axis_offset(align: CrossAxisAlign, content_cross: f32, child_cross: f32) -> f32 {
     let slack = (content_cross - child_cross).max(0.0);
     match align {
-        CrossAxisAlign::Start | CrossAxisAlign::Stretch => 0.0,
+        // Baseline is resolved by the caller in rows; in a column it is start.
+        CrossAxisAlign::Start | CrossAxisAlign::Stretch | CrossAxisAlign::Baseline => 0.0,
         CrossAxisAlign::Center => slack / 2.0,
         CrossAxisAlign::End => slack,
     }
@@ -491,6 +544,7 @@ fn paint_content(kind: &NodeType, common: &Common, rect: Rect) -> PaintContent {
                 fill: d.fill.as_ref().map(|p| p.place(rect)),
                 stroke: d.stroke.clone(),
                 corner_radius: d.corner_radius,
+                stroke_align: d.stroke_align,
             }),
             _ => PaintContent::Container,
         },
@@ -499,11 +553,13 @@ fn paint_content(kind: &NodeType, common: &Common, rect: Rect) -> PaintContent {
             stroke,
             stroke_width,
             corner_radius,
+            stroke_align,
         }) => PaintContent::Rect {
             fill: fill.as_ref().map(|p| p.place(rect)),
             stroke: *stroke,
             stroke_width: *stroke_width,
             corner_radius: *corner_radius,
+            stroke_align: *stroke_align,
         },
         NodeType::Image(props) => PaintContent::Image {
             src: props.src.clone().into(),
@@ -524,7 +580,9 @@ fn paint_content(kind: &NodeType, common: &Common, rect: Rect) -> PaintContent {
             strike,
             letter_spacing,
             spans,
+            wrap,
         }) => PaintContent::Text(TextBox {
+            wrap: *wrap,
             content: content.clone(),
             spans: spans.clone(),
             font_style: *font_style,
@@ -558,11 +616,13 @@ fn paint_content(kind: &NodeType, common: &Common, rect: Rect) -> PaintContent {
                 head_size: props.head_size,
                 head_width: props.head_width,
                 head_style: props.head_style,
+                stroke_align: props.stroke_align,
             })
         }
         NodeType::Ellipse(props) => PaintContent::Ellipse {
             fill: props.fill.as_ref().map(|p| p.place(rect)),
             stroke: props.stroke.clone(),
+            stroke_align: props.stroke_align,
         },
     }
 }

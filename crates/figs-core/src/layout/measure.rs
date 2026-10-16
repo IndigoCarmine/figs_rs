@@ -17,6 +17,7 @@
 use crate::geom::{Axis, CrossAxisAlign, Edges, Size};
 use crate::schema::{Common, NodeType};
 
+use super::baseline::{anchor_shift, row_baseline};
 use super::{cross_of, main_of, Constraints, Ctx, LeafMeasure, FALLBACK_IMAGE_ASPECT};
 
 /// Measure node `idx` under `c`, returning its border-box size (content +
@@ -109,7 +110,12 @@ fn measure_own<M: LeafMeasure>(ctx: &Ctx<M>, idx: usize, c: Constraints) -> Size
             }
         }
         NodeType::Text(props) => {
-            let avail = (c.max_w - node.common.padding.horizontal()).max(0.0);
+            // Unwrapped text takes its natural width (then clamped to `c`).
+            let avail = if props.wrap {
+                (c.max_w - node.common.padding.horizontal()).max(0.0)
+            } else {
+                f32::INFINITY
+            };
             let inner = ctx.measurer.measure_text(props, avail);
             Size::new(
                 inner.w + node.common.padding.horizontal(),
@@ -208,12 +214,24 @@ fn measure_container<M: LeafMeasure>(
 
     let mut main_sum = 0.0f32;
     let mut cross_max = 0.0f32;
+    // Baseline rows: the tallest part above the shared baseline plus the
+    // tallest part below it.
+    let baseline_row = axis == Axis::Horizontal && cross_align == CrossAxisAlign::Baseline;
+    let (mut above, mut below) = (0.0f32, 0.0f32);
     for (&child, sz) in children.iter().zip(&sizes) {
         let sz = sz.unwrap_or_default();
         let margin = ctx.doc.nodes[child].common.margin;
         let outer = Size::new(sz.w + margin.horizontal(), sz.h + margin.vertical());
         main_sum += main_of(axis, outer);
         cross_max = cross_max.max(cross_of(axis, outer));
+        if baseline_row {
+            let b = row_baseline(ctx, child, sz, margin);
+            above = above.max(b);
+            below = below.max(outer.h - b);
+        }
+    }
+    if baseline_row {
+        cross_max = cross_max.max(above + below);
     }
     main_sum += gaps;
 
@@ -265,11 +283,8 @@ fn measure_stack<M: LeafMeasure>(
         let (x, y) = if user {
             (0.0, 0.0)
         } else {
-            let [ax, ay] = cc.anchor.unwrap_or([0.0, 0.0]);
-            (
-                cc.x.unwrap_or(0.0) - ax * sz.w,
-                cc.y.unwrap_or(0.0) - ay * sz.h,
-            )
+            let (dx, dy) = anchor_shift(ctx, child, cc.anchor, sz);
+            (cc.x.unwrap_or(0.0) - dx, cc.y.unwrap_or(0.0) - dy)
         };
         w = w.max(x + cc.margin.horizontal() + sz.w);
         h = h.max(y + cc.margin.vertical() + sz.h);

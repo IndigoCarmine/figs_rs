@@ -272,7 +272,7 @@ fn script_setters_lower_and_round_trip_through_toml() {
         .values()
         .find(|n| n.kind == NodeKind::Rect)
         .unwrap();
-    assert_eq!(rect.anchor, Some([0.5, 1.0]));
+    assert_eq!(rect.anchor, Some([0.5.into(), 1.0.into()]));
 
     let toml = toml::to_string(&raw).unwrap();
     assert!(toml.contains("viewbox = [0.0, 1.0, 10.0, 0.0]"), "{toml}");

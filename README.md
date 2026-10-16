@@ -55,32 +55,50 @@ You provide: hierarchy, style, content, and constraints (`flex`, `aspect_ratio`,
 - **Shared** (all nodes): `flex`, `width`, `height`, `aspect_ratio`, `margin`,
   `padding`, `x`, `y`, `anchor`, `rotate` (see [Rotation](#rotation)), and the
   visual effects `shadow`, `glow`, `opacity` (see
-  [Shadows, glows & opacity](#shadows-glows--opacity)). `margin`/`padding` accept a scalar (`1.5`) or a table
-  (`{ top = 1, left = 2 }`). `x`/`y` are only read by a `stack` parent (see
-  below); under `column`/`row` and on the root they are ignored.
+  [Shadows, glows & opacity](#shadows-glows--opacity)). `margin`/`padding` accept a scalar (`1.5`), a table
+  (`{ top = 1, left = 2 }`; `x` / `y` set left+right / top+bottom and a named
+  side overrides them: `{ x = 1, top = 0.5 }`) or an array in CSS order
+  (`[vertical, horizontal]`, `[top, horizontal, bottom]`,
+  `[top, right, bottom, left]`). `x`/`y` are only read by a `stack` parent (see
+  below); under `column`/`row` and on the root they are ignored. A text's
+  `anchor` may name its baseline: `anchor = [0, "baseline"]` (see
+  [Baselines](#baselines)).
 - **Container** (`column`/`row`): `children`, `spacing`, `main_axis_alignment`
   (`start`/`center`/`end`/`space_between`/`space_around`/`space_evenly`),
-  `cross_axis_alignment` (`start`/`center`/`end`/`stretch`).
+  `cross_axis_alignment` (`start`/`center`/`end`/`stretch`/`baseline` — rows
+  only, see [Baselines](#baselines)).
 - **stack**: `children`, `viewbox` (plus the shared `padding`).
 - **Decoration** (`column`/`row`/`stack`): `fill` (colour or gradient),
-  `stroke`, `stroke_width`, `corner_radius` (alias `radius`), `dash`, `clip` —
-  a background and border painted behind the children (see
+  `stroke`, `stroke_width`, `stroke_align`, `corner_radius` (alias `radius`),
+  `dash`, `clip` — a background and border painted behind the children (see
   [Gradients & frames](#gradients--frames)).
 - **text**: `content`, `font_size` (pt), `font_family` (an ordered fallback
   list: `"Arial, Yu Gothic"` or `["Arial", "Yu Gothic"]`), `font_weight`,
   `font_style` (`normal`/`italic`), `color`, `align`, `line_height` (multiple
   of font size), `letter_spacing` (em), `underline`, `strike`, inline `spans`
-  (see [Rich text](#rich-text-spans)), and an outline: `stroke`,
+  (see [Rich text](#rich-text-spans)), `wrap` (`false`: never wrap — see
+  [Unwrapped text](#unwrapped-text-wrap--false)), and an outline: `stroke`,
   `stroke_width`, `join` (see [Text outline](#text-outline)).
 - **image**: `src`, `fit` (`contain`/`cover`/`fill`), `smooth` (`false`:
   nearest-neighbour scaling, see [Pixelated images](#pixelated-images)).
-- **rect**: `fill`, `stroke`, `stroke_width`, `corner_radius`.
+- **rect**: `fill`, `stroke`, `stroke_width`, `stroke_align`, `corner_radius`.
   Every `fill` (rect, ellipse, path, containers) and `page.background` takes a
   colour *or a gradient* (see [Gradients & frames](#gradients--frames)).
 - **line** / **arrow** / **path**: `points`, `segments` (curves), `viewbox`, `stroke`,
   `stroke_width`, `dash`, `cap`, `join`, `head`, `head_size`, `head_width`,
-  `head_style`; **path** adds `fill`, `closed`.
-- **ellipse**: `fill`, `stroke`, `stroke_width`, `dash`, `cap`, `join`.
+  `head_style`; **path** adds `fill`, `closed`, `stroke_align` (closed only).
+- **ellipse**: `fill`, `stroke`, `stroke_width`, `stroke_align`, `dash`, `cap`,
+  `join`.
+
+`stroke_align = "inside" | "center" | "outside"` says where the stroke of a
+closed outline — rect, ellipse, closed path, container border — lies: its
+outer edge on the outline, centred on it, or its inner edge on it. Shapes
+default to `center` (as in SVG), container borders to `inside`. The fill
+always covers the outline itself; layout ignores the stroke. The geometry is
+computed once (the outline offset by half the width, corners mitered, curve
+handles scaled by the curvature — exact for rects, circles and polygons) and
+drawn the same by PNG, PDF and SVG. A clipping container keeps its children
+inside the border whatever the alignment.
 
 Lengths are in the page `unit`; `font_size` is always points. Internally
 everything is converted to points (1 pt = 1/72 in).
@@ -158,7 +176,8 @@ fill = { radial = [0.5, 0.5], radius = 0.5, focal = [0.35, 0.3],
 `stroke_width` (default 1 pt once `stroke` is set), `corner_radius` (`radius`),
 and `dash` — a background over the whole rounded box and a border drawn
 **inside** it (its outer edge is the box edge, outer corner radius =
-`corner_radius`), both painted behind the children. That replaces the
+`corner_radius`; `stroke_align = "center"` / `"outside"` moves it onto / out
+of the edge), both painted behind the children. That replaces the
 `stack([rect()…, content])` wrapper:
 
 ```toml
@@ -173,7 +192,7 @@ radius = 0.6
 ```
 
 `clip = true` keeps the children inside the box — inside the border, with the
-corner radius reduced by the stroke width — e.g. an image or plot in a rounded
+corner radius reduced by however far the border reaches in — e.g. an image or plot in a rounded
 frame. Clips nest (a child clipped twice shows only where both regions
 overlap), and follow rotation. The clip is exact in every backend: PDF clip
 path, SVG `clipPath`, PNG via a canvas snapshot restored outside an
@@ -538,6 +557,57 @@ children = ["curve", "end"]
 Overhangs are measured on what children actually cover, so a rotated child
 counts with its turned box.
 
+### Baselines
+
+A text node can be placed by its **baseline** instead of its box: in
+`anchor`, `"baseline"` (the first line's) or `"last_baseline"` stands for
+where that baseline crosses the axis, measured on the shaped text (the same
+shaping every backend draws), whatever the font, size, `line_height` or
+[spans](#rich-text-spans) on the line.
+
+```toml
+[nodes.label]            # the left end of the first baseline at (2, 5)
+type = "text"
+content = "Results"
+font_size = 28
+x = 2
+y = 5
+anchor = [0, "baseline"]
+```
+
+Like a fraction, a baseline acts in the **parent's frame**, on the footprint,
+so it goes in the slot *across* the baseline: `y` for upright and `180°`
+text, `x` for a quarter-turned one — `rotate = -90, anchor = ["baseline", 1]`
+is a label reading upwards with its baseline on `x` and its start at `y`.
+(A paint-only angle uses the unrotated box.) Anything else is an error: a
+baseline in the wrong slot, in both, or on a non-text node.
+
+In scripts, `.anchor(0.5, "last_baseline")`, or `.at_baseline(x, y)`: the
+**pen origin** of the first line (left end of its baseline) at (`x`, `y`)
+for any quarter turn — the anchor is derived from the node's final `rotate`
+(`[0, "baseline"]`, `["baseline", 0]` at `90`, `[1, "baseline"]` at `180`,
+`["baseline", 1]` at `-90`).
+
+`cross_axis_alignment = "baseline"` (script: `.cross("baseline")`) lines up
+the **first baselines** of a row's texts — mixed fonts and sizes share one
+line, placed as low as the child reaching furthest above it needs; the row
+measures as the tallest part above plus the tallest part below. A child
+without a horizontal baseline (not text, or quarter-turned text) sits on it
+with its bottom edge. In a column it acts as `start`.
+
+#### Unwrapped text (`wrap = false`)
+
+`wrap = false` (script: `.nowrap()`, or `.wrap(bool)`) keeps each paragraph
+on one line: the text measures at its natural width (clamped to what the
+parent offers) and is drawn unbroken, overflowing its box — centred text on
+both sides, right-aligned text to the left — with a warning naming the node.
+`\n` still starts a new line. Use it for labels: a quarter-turned axis label
+longer than its axis stays one line wide instead of wrapping (wrapped text
+breaks between words, and inside a word only when the word alone is wider
+than the box, which is what used to inflate a rotated label's footprint).
+
+See [`examples/baselines_strokes.figs`](examples/baselines_strokes.figs).
+
 ### Rotation
 
 `rotate` (degrees) turns any node — and its whole subtree — **clockwise on the
@@ -778,33 +848,44 @@ ones — no map literals.) Numbers may be integer or float; colors are hex strin
 setters:
 
 - **layout** (any node): `.flex(n)`, `.width(n)`, `.height(n)`, `.aspect(n)`,
-  `.margin(n)`, `.pad(n)`, `.rotate(deg)` (clockwise; see [Rotation](#rotation)).
+  `.margin(e)`, `.pad(e)` — `e` a number, `[v, h]` / `[t, h, b]` /
+  `[t, r, b, l]` (CSS order) or `#{ top, right, bottom, left, x, y }` (`x` / `y`
+  set both horizontal / vertical sides; a named side wins), as in TOML —
+  `.rotate(deg)` (clockwise; see [Rotation](#rotation)).
 - **effects** (any node): `.shadow(dx, dy, blur[, [spread,] color])`,
   `.glow(blur[, color])`, `.opacity(a)` — see
   [Shadows, glows & opacity](#shadows-glows--opacity).
 - **user coordinates**: `.viewbox(x0, y0, x1, y1)` (stack/line/arrow/path) and
-  `.anchor(ax, ay)` (read by a `stack` parent) — see
-  [User coordinates](#user-coordinates-viewbox--anchors).
+  `.anchor(ax, ay)` (read by a `stack` parent; on text either may be
+  `"baseline"` / `"last_baseline"`) — see
+  [User coordinates](#user-coordinates-viewbox--anchors) and
+  [Baselines](#baselines).
 - **offset** (read by a `stack` parent): `.at(x, y)`, `.x(n)`, `.y(n)` — e.g.
-  `stack([image("a.png"), text("(a)").at(0.2, 0.2)])`.
+  `stack([image("a.png"), text("(a)").at(0.2, 0.2)])`; on text,
+  `.at_baseline(x, y)` puts the left end of the first baseline there (any
+  quarter turn).
 - **text**: `.size(n)`, `.weight(n)` / `.bold()`, `.italic()`, `.color(hex)`,
   `.font(name | "A, B" | ["A", "B"])`, `.tracking(em)`, `.underline()`, `.strike()`,
   `.align("left"|"center"|"right"|"justify")` / `.center()`, `.line_height(n)`,
+  `.nowrap()` / `.wrap(bool)` (see [Unwrapped text](#unwrapped-text-wrap--false)),
   and an outline painted behind the glyphs: `.stroke(hex)`, `.stroke_width(n)`,
   `.join("round"|"miter"|"bevel")` (see [Text outline](#text-outline)).
   Rich text: `text([span("ΔG"), span("300K").sub(), …])` (see
   [Rich text](#rich-text-spans)).
 - **container** (`col`/`row`): `.spacing(n)`, `.main("space_between"|…)`,
-  `.cross("start"|"center"|"end"|"stretch")` / `.stretch()`.
+  `.cross("start"|"center"|"end"|"stretch"|"baseline")` / `.stretch()`.
 - **decoration** (`col`/`row`/`stack`): `.fill(hex | gradient)`, `.stroke(hex)`,
-  `.stroke_width(n)`, `.radius(n)`, `.dash([on, off, …])`, `.clip()` — see
+  `.stroke_width(n)`, `.stroke_align("inside"|"center"|"outside")`,
+  `.radius(n)`, `.dash([on, off, …])`, `.clip()` — see
   [Gradients & frames](#gradients--frames).
 - **gradients** (for any `.fill` / `.background`): `linear(deg, stops)`,
   `linear([x1, y1], [x2, y2], stops)`, `radial(stops)`,
   `radial([cx, cy], r, stops)`, `.focal(fx, fy)`, `.absolute()`; `stops` are
   `[[0, "#…"], [1, "#…"]]` or `["#…", "#…"]`.
-- **rect**: `.fill(hex | gradient)`, `.stroke(hex)`, `.stroke_width(n)`, `.radius(n)`.
+- **rect**: `.fill(hex | gradient)`, `.stroke(hex)`, `.stroke_width(n)`, `.radius(n)`,
+  `.stroke_align(..)`.
 - **shapes** (`line`/`arrow`/`ellipse`/`path`): `.stroke(hex)`, `.stroke_width(n)`,
+  `.stroke_align(..)` (ellipse, closed path),
   `.fill(hex)` (path/ellipse), `.dash([on, off, …])`, `.cap("butt"|"round"|"square")`,
   `.join("miter"|"round"|"bevel")`,
   `.head("none"|"start"|"end"|"both")`, `.head_size(n)`, `.head_width(n | "3x")`,
@@ -1431,7 +1512,12 @@ Modeled on Flutter's `BoxConstraints`/`RenderFlex`:
   sit flush with the box edge — the box is the font's metrics, with no extra
   padding; add `spacing`/`pad` for breathing room. With [spans](#rich-text-spans)
   each line box follows its largest run; super/subscripts count at their base
-  size, unshifted.
+  size, unshifted. `wrap = false` text measures at its natural width.
+- **baselines**: the measurer also reports a text block's first/last baseline
+  (`LeafMeasure::text_baselines`, shaped at the box width; a measurer without
+  fonts falls back to a 0.8 / 0.2 em ascent/descent with half-leading). Stacks
+  use it for baseline anchors and rows for `cross_axis_alignment = "baseline"`,
+  in measure and arrange alike. See [Baselines](#baselines).
 
 ## Output formats
 

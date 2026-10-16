@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::geom::{
-    ArcSweep, ArrowHead, Color, CrossAxisAlign, Edges, HeadStyle, HeadWidth, ImageFit, LineCap,
-    LineJoin, MainAxisAlign, Paint, TextAlign,
+    AnchorValue, ArcSweep, ArrowHead, Color, CrossAxisAlign, Edges, HeadStyle, HeadWidth, ImageFit,
+    LineCap, LineJoin, MainAxisAlign, Paint, StrokeAlign, TextAlign,
 };
 use crate::units::Unit;
 
@@ -203,8 +203,16 @@ pub struct RawNode {
     /// `stack` parent reads it; an anchored child may extend past any edge of
     /// the stack (it is clamped to the stack's size, not to the space after
     /// its offset).
+    ///
+    /// On a `text` node a component may instead be `"baseline"` (the first
+    /// line's baseline) or `"last_baseline"`: `anchor = [0, "baseline"]` puts
+    /// the left end of the first baseline at the offset. Like fractions it
+    /// acts in the parent's frame, so it goes in the slot *across* the
+    /// baseline: `y` for upright (and `180`) text, `x` for a quarter-turned
+    /// one (`rotate = -90, anchor = ["baseline", 1]` is a label reading
+    /// upwards whose baseline is at `x` and which starts at `y`).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub anchor: Option<[f32; 2]>,
+    pub anchor: Option<[AnchorValue; 2]>,
     /// Rotation in degrees, **clockwise** on the page, about the centre of the
     /// node's box; it turns the node and its whole subtree. A multiple of 90°
     /// is a *quarter turn*: an odd one (`90`, `-90`, `270`) swaps the node's
@@ -302,6 +310,13 @@ pub struct RawNode {
     /// outline painted behind the glyph fill.)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line_height: Option<f32>,
+    /// `false`: never wrap — each paragraph (`\n`) is one line, laid out at
+    /// its natural width (clamped to the space the parent gives, with a
+    /// warning when the text then overflows its box). Default `true`: wrap
+    /// to the box width. Meant for labels (a quarter-turned axis label
+    /// longer than its axis stays one line instead of breaking).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wrap: Option<bool>,
 
     // ---- image ----
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -329,6 +344,12 @@ pub struct RawNode {
     /// past the glyph edges; it does not change the laid-out box).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stroke_width: Option<f32>,
+    /// Where the stroke of a closed outline lies (`rect`, `ellipse`, closed
+    /// `path`, container border): `inside` (outer edge on the outline — the
+    /// container default), `center` (the shape default) or `outside` (inner
+    /// edge on the outline). A container's `clip` stays inside the border.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stroke_align: Option<StrokeAlign>,
     /// Corner radius in the page unit (`rect` and containers; `radius` is
     /// accepted as an alias).
     #[serde(alias = "radius", skip_serializing_if = "Option::is_none")]

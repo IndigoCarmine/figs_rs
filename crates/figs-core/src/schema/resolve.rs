@@ -13,9 +13,9 @@
 use std::collections::HashMap;
 
 use crate::geom::{
-    ArcSweep, ArrowHead, Axis, Color, CrossAxisAlign, Edges, Effects, HeadStyle, HeadWidth,
-    ImageFit, LineJoin, MainAxisAlign, Paint, PathSegment, Point, Shadow, StrokeStyle, TextAlign,
-    ViewBox,
+    AnchorValue, ArcSweep, ArrowHead, Axis, Color, CrossAxisAlign, Edges, Effects, HeadStyle,
+    HeadWidth, ImageFit, LineJoin, MainAxisAlign, Paint, PathSegment, Point, Shadow, StrokeAlign,
+    StrokeStyle, TextAlign, ViewBox,
 };
 use crate::path::arc_to_cubics;
 
@@ -155,9 +155,10 @@ pub struct Common {
     /// (mapped at layout time).
     pub x: Option<f32>,
     pub y: Option<f32>,
-    /// Fractions `[ax, ay]` of the border box placed at the `x`/`y` offset
-    /// (`None` = top-left, unclamped otherwise; see [`RawNode::anchor`]).
-    pub anchor: Option<[f32; 2]>,
+    /// Which point of the footprint is placed at the `x`/`y` offset, per
+    /// axis a fraction or (text only) a baseline (`None` = top-left; see
+    /// [`RawNode::anchor`]).
+    pub anchor: Option<[AnchorValue; 2]>,
     /// Clockwise rotation in degrees about the box centre (`0` = none; see
     /// [`RawNode::rotate`]). `width`/`height`/`aspect_ratio`/`padding` are the
     /// node's own (unrotated) box; `margin`, `flex`, `x`/`y` and `anchor` act
@@ -242,14 +243,18 @@ impl NodeType {
 }
 
 /// A container's own painting: a background `fill` and a border `stroke`
-/// with rounded corners, both inside the node's border box and behind its
-/// children; `clip` keeps the children inside the box (within the border).
+/// with rounded corners, both behind its children (the border inside the
+/// node's border box unless `stroke_align` says otherwise); `clip` keeps the
+/// children inside the box (within the border).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Decoration {
     /// Background paint over the whole (rounded) border box.
     pub fill: Option<Paint>,
-    /// Border, drawn *inside* the box: its outer edge is the box edge.
+    /// Border, drawn *inside* the box by default: its outer edge is the box
+    /// edge (see `stroke_align`).
     pub stroke: Option<StrokeStyle>,
+    /// Where the border lies relative to the box edge (default `Inside`).
+    pub stroke_align: StrokeAlign,
     /// Outer corner radius, points.
     pub corner_radius: f32,
     /// Clip the children to the box inside the border.
@@ -292,6 +297,9 @@ pub struct TextProps {
     /// Styled byte ranges of `content` (sorted, non-overlapping); bytes
     /// outside every span use the node style.
     pub spans: Vec<TextSpan>,
+    /// Wrap lines to the available width (default). `false`: each paragraph
+    /// is one line whatever the width (see [`RawNode::wrap`]).
+    pub wrap: bool,
 }
 
 impl Default for TextProps {
@@ -310,6 +318,7 @@ impl Default for TextProps {
             strike: false,
             letter_spacing: 0.0,
             spans: Vec::new(),
+            wrap: true,
         }
     }
 }
@@ -331,6 +340,8 @@ pub struct RectProps {
     pub stroke: Option<Color>,
     pub stroke_width: f32,
     pub corner_radius: f32,
+    /// Where the border lies relative to the box edge (default `Center`).
+    pub stroke_align: StrokeAlign,
 }
 
 /// A stroked/filled outline (`line`, `arrow`, `path`). Coordinates are in
@@ -355,6 +366,9 @@ pub struct PathProps {
     /// User coordinates of `segments`, mapped onto the content box (`None`:
     /// segments are points from the content-box origin).
     pub viewbox: Option<ViewBox>,
+    /// Where the stroke lies relative to a *closed* outline (default
+    /// `Center`; resolve rejects anything else on an open one).
+    pub stroke_align: StrokeAlign,
 }
 
 /// An ellipse inscribed in the node's border box.
@@ -362,6 +376,8 @@ pub struct PathProps {
 pub struct EllipseProps {
     pub fill: Option<Paint>,
     pub stroke: Option<StrokeStyle>,
+    /// Where the stroke lies relative to the ellipse (default `Center`).
+    pub stroke_align: StrokeAlign,
 }
 
 /// Validate and convert a [`RawDocument`] into a [`Document`].
@@ -506,6 +522,71 @@ fn check_finite(id: &str, field: &'static str, v: f32) -> Result<(), ResolveErro
     }
 }
 
+/// `anchor`: finite fractions; a baseline only on a text node, in the slot
+/// across its baseline in the parent's frame (`y` unless the text is turned
+/// by an odd quarter turn, then `x`), and in one slot at most.
+fn check_anchor(id: &str, raw: &RawNode, anchor: &[AnchorValue; 2]) -> Result<(), ResolveError> {
+    let invalid = |reason: String| ResolveError::InvalidField {
+        node: id.to_string(),
+        field: "anchor",
+        reason,
+    };
+    if anchor
+        .iter()
+        .any(|v| v.frac().is_some_and(|f| !f.is_finite()))
+    {
+        return Err(invalid("values must be finite numbers".into()));
+    }
+    let slots: Vec<usize> = (0..2).filter(|&i| anchor[i].baseline().is_some()).collect();
+    if slots.is_empty() {
+        return Ok(());
+    }
+    if raw.kind != NodeKind::Text {
+        return Err(invalid(
+            "only a text node has a baseline (use a fraction)".into(),
+        ));
+    }
+    if slots.len() > 1 {
+        return Err(invalid(
+            "a baseline goes in one slot: [ax, \"baseline\"] (or [\"baseline\", ay] for quarter-turned text)".into(),
+        ));
+    }
+    let turned = crate::geom::quarter_turns(raw.rotate.unwrap_or(0.0)).is_some_and(|k| k % 2 == 1);
+    let want = if turned { 0 } else { 1 };
+    if slots[0] != want {
+        let reason = if turned {
+            "this text is turned a quarter turn, so its baseline runs vertically: put \"baseline\" in the x slot ([\"baseline\", ay])"
+        } else {
+            "the baseline runs horizontally: put \"baseline\" in the y slot ([ax, \"baseline\"])"
+        };
+        return Err(invalid(reason.into()));
+    }
+    Ok(())
+}
+
+/// `stroke_align` only applies to a closed outline: a rect, an ellipse, a
+/// closed path, or a container border.
+fn check_stroke_align(id: &str, raw: &RawNode) -> Result<(), ResolveError> {
+    if raw.stroke_align.is_none() {
+        return Ok(());
+    }
+    let ok = match raw.kind {
+        NodeKind::Rect | NodeKind::Ellipse | NodeKind::Column | NodeKind::Row | NodeKind::Stack => {
+            true
+        }
+        NodeKind::Path => raw.closed,
+        _ => false,
+    };
+    if ok {
+        return Ok(());
+    }
+    Err(ResolveError::InvalidField {
+        node: id.to_string(),
+        field: "stroke_align",
+        reason: "only a closed outline (rect, ellipse, closed path, container border) has an inside and an outside".into(),
+    })
+}
+
 fn convert_node(
     id: &str,
     raw: &RawNode,
@@ -531,11 +612,15 @@ fn convert_node(
             reason: "must be a finite number of degrees".into(),
         });
     }
-    if raw.anchor.is_some_and(|a| a.iter().any(|v| !v.is_finite())) {
+    if let Some(anchor) = &raw.anchor {
+        check_anchor(id, raw, anchor)?;
+    }
+    check_stroke_align(id, raw)?;
+    if raw.wrap.is_some() && raw.kind != NodeKind::Text {
         return Err(ResolveError::InvalidField {
             node: id.to_string(),
-            field: "anchor",
-            reason: "values must be finite numbers".into(),
+            field: "wrap",
+            reason: "only a text node wraps".into(),
         });
     }
     let is_container = matches!(raw.kind, NodeKind::Column | NodeKind::Row | NodeKind::Stack);
@@ -573,6 +658,7 @@ fn convert_node(
         Ok(Some(Box::new(Decoration {
             fill: fill.clone(),
             stroke,
+            stroke_align: raw.stroke_align.unwrap_or(StrokeAlign::Inside),
             corner_radius,
             clip: raw.clip,
         })))
@@ -659,6 +745,7 @@ fn convert_node(
                 content,
                 spans,
                 letter_spacing,
+                wrap: raw.wrap.unwrap_or(true),
                 font_style: raw.font_style.unwrap_or_default(),
                 underline: raw.underline,
                 strike: raw.strike,
@@ -679,6 +766,7 @@ fn convert_node(
             stroke: raw.stroke,
             stroke_width: raw.stroke_width.unwrap_or(0.0) * factor,
             corner_radius: raw.corner_radius.unwrap_or(0.0) * factor,
+            stroke_align: raw.stroke_align.unwrap_or_default(),
         }),
         NodeKind::Line | NodeKind::Arrow | NodeKind::Path => {
             let (kind, exact) = match raw.kind {
@@ -761,11 +849,13 @@ fn convert_node(
                 head_width,
                 head_style: raw.head_style.unwrap_or_default(),
                 viewbox,
+                stroke_align: raw.stroke_align.unwrap_or_default(),
             })
         }
         NodeKind::Ellipse => NodeType::Ellipse(EllipseProps {
             fill: fill.clone(),
             stroke: shape_stroke(id, raw, factor, raw.fill.is_none())?,
+            stroke_align: raw.stroke_align.unwrap_or_default(),
         }),
     };
 

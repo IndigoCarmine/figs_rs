@@ -5,7 +5,7 @@
 
 use crate::geom::{
     Affine, ArrowHead, Brush, Color, Effects, HeadStyle, ImageFit, PathSegment, Point, Rect,
-    StrokeStyle, TextAlign,
+    StrokeAlign, StrokeStyle, TextAlign,
 };
 
 /// A laid-out page: geometry plus a flat list of nodes in paint order
@@ -164,6 +164,9 @@ pub enum PaintContent {
         stroke: Option<Color>,
         stroke_width: f32,
         corner_radius: f32,
+        /// Where the border lies relative to the rect edge (the fill always
+        /// covers the rect; see [`crate::render::geometry::aligned_rect`]).
+        stroke_align: StrokeAlign,
     },
     Image {
         src: std::path::PathBuf,
@@ -178,18 +181,22 @@ pub enum PaintContent {
     Ellipse {
         fill: Option<Brush>,
         stroke: Option<StrokeStyle>,
+        /// Where the stroke lies relative to the ellipse (the fill always
+        /// covers the inscribed ellipse).
+        stroke_align: StrokeAlign,
     },
 }
 
 /// A container's background and border in its local frame, filling the node
-/// rect. The border lies *inside* the rect (its outer edge is the rect edge,
-/// outer corner radius `corner_radius`); the fill covers the whole rounded
-/// rect, under the border.
+/// rect. By default (`stroke_align = Inside`) the border lies *inside* the
+/// rect (its outer edge is the rect edge, outer corner radius
+/// `corner_radius`); the fill covers the whole rounded rect, under the border.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FramePaint {
     pub fill: Option<Brush>,
     pub stroke: Option<StrokeStyle>,
     pub corner_radius: f32,
+    pub stroke_align: StrokeAlign,
 }
 
 impl FramePaint {
@@ -198,19 +205,18 @@ impl FramePaint {
         crate::render::geometry::rounded_rect(rect, self.corner_radius)
     }
 
-    /// Centre line of the border: the rect inset by half the stroke width,
-    /// its radius reduced to match (`None` without a stroke).
+    /// Centre line of the border: the rect offset by the alignment (inset
+    /// by half the stroke width for `inside`), its radius adjusted to match
+    /// (`None` without a stroke, or when an inside border fills the box).
     pub fn stroke_outline(&self, rect: Rect) -> Option<Vec<PathSegment>> {
         let s = self.stroke.as_ref()?;
-        let h = s.width / 2.0;
-        let inner = Rect::new(rect.x + h, rect.y + h, rect.w - s.width, rect.h - s.width);
-        if inner.w < 0.0 || inner.h < 0.0 {
-            return None;
-        }
-        Some(crate::render::geometry::rounded_rect(
-            inner,
-            (self.corner_radius - h).max(0.0),
-        ))
+        let (line, radius) = crate::render::geometry::aligned_rect(
+            rect,
+            self.corner_radius,
+            self.stroke_align,
+            s.width,
+        )?;
+        Some(crate::render::geometry::rounded_rect(line, radius))
     }
 }
 
@@ -231,12 +237,31 @@ pub struct PathPaint {
     /// Arrowhead base width, points.
     pub head_width: f32,
     pub head_style: HeadStyle,
+    /// Where the stroke lies relative to a closed outline (always `Center`
+    /// for an open one).
+    pub stroke_align: StrokeAlign,
 }
 
 impl PathPaint {
     /// Whether the outline is closed (ends with `Close`).
     pub fn is_closed(&self) -> bool {
         matches!(self.segments.last(), Some(PathSegment::Close))
+    }
+
+    /// The centre line to stroke when the stroke is not centred on a closed
+    /// outline: the outline offset outwards by
+    /// [`StrokeAlign::centre_offset`] (see
+    /// [`crate::render::geometry::offset_outline`]). `None` when the stroke
+    /// is centred (stroke [`PathPaint::stroke_geometry`] as usual).
+    pub fn aligned_stroke_outline(&self) -> Option<Vec<PathSegment>> {
+        let s = self.stroke.as_ref()?;
+        if self.stroke_align == StrokeAlign::Center || !self.is_closed() {
+            return None;
+        }
+        Some(crate::render::geometry::offset_outline(
+            &self.segments,
+            self.stroke_align.centre_offset(s.width),
+        ))
     }
 
     /// The stroked shaft (pulled back into any arrowheads), the filled head
@@ -286,4 +311,7 @@ pub struct TextBox {
     /// and only the outer half of the stroke shows. It may overhang `rect` by
     /// `width / 2`; layout ignores it.
     pub stroke: Option<StrokeStyle>,
+    /// `false`: shape without wrapping (each paragraph one line), whatever
+    /// the rect width.
+    pub wrap: bool,
 }

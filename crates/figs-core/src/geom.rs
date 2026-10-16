@@ -48,14 +48,49 @@ impl Rect {
 
 /// Per-side insets (margin/padding), in the page unit at parse time, points after conversion.
 ///
-/// Accepts either a scalar (`padding = 1.5`, applied to all four sides) or a table
-/// (`padding = { top = 1, left = 2 }`, missing sides default to 0).
+/// Accepts a scalar (`padding = 1.5`, all four sides), a table
+/// (`padding = { top = 1, left = 2 }`, missing sides default to 0; `x` / `y`
+/// set left+right / top+bottom, and a named side overrides them), or an array
+/// in CSS order: `[all]`, `[vertical, horizontal]`, `[top, horizontal,
+/// bottom]` or `[top, right, bottom, left]`.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Edges {
     pub top: f32,
     pub right: f32,
     pub bottom: f32,
     pub left: f32,
+}
+
+/// The named sides of an [`Edges`] table / map, before defaults (see
+/// [`Edges::from_sides`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct EdgeSides {
+    pub top: Option<f32>,
+    pub right: Option<f32>,
+    pub bottom: Option<f32>,
+    pub left: Option<f32>,
+    /// Shorthand for `left` and `right`.
+    pub x: Option<f32>,
+    /// Shorthand for `top` and `bottom`.
+    pub y: Option<f32>,
+}
+
+impl EdgeSides {
+    /// The accepted keys.
+    pub const KEYS: [&'static str; 6] = ["top", "right", "bottom", "left", "x", "y"];
+
+    /// The slot for key `k` (one of [`EdgeSides::KEYS`]).
+    pub fn slot(&mut self, k: &str) -> Option<&mut Option<f32>> {
+        Some(match k {
+            "top" => &mut self.top,
+            "right" => &mut self.right,
+            "bottom" => &mut self.bottom,
+            "left" => &mut self.left,
+            "x" => &mut self.x,
+            "y" => &mut self.y,
+            _ => return None,
+        })
+    }
 }
 
 impl Edges {
@@ -65,6 +100,36 @@ impl Edges {
             right: v,
             bottom: v,
             left: v,
+        }
+    }
+
+    /// Edges from 1–4 values in CSS order: `[all]`, `[vertical,
+    /// horizontal]`, `[top, horizontal, bottom]`, `[top, right, bottom,
+    /// left]`. `None` for any other length.
+    pub fn from_css(v: &[f32]) -> Option<Self> {
+        let (top, right, bottom, left) = match *v {
+            [a] => (a, a, a, a),
+            [y, x] => (y, x, y, x),
+            [t, x, b] => (t, x, b, x),
+            [t, r, b, l] => (t, r, b, l),
+            _ => return None,
+        };
+        Some(Edges {
+            top,
+            right,
+            bottom,
+            left,
+        })
+    }
+
+    /// Edges from named sides: `x` / `y` set both horizontal / vertical
+    /// sides, and an explicitly named side overrides them; unset sides are 0.
+    pub fn from_sides(s: EdgeSides) -> Self {
+        Edges {
+            top: s.top.or(s.y).unwrap_or(0.0),
+            right: s.right.or(s.x).unwrap_or(0.0),
+            bottom: s.bottom.or(s.y).unwrap_or(0.0),
+            left: s.left.or(s.x).unwrap_or(0.0),
         }
     }
 
@@ -98,36 +163,50 @@ impl<'de> Deserialize<'de> for Edges {
     where
         D: Deserializer<'de>,
     {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Raw {
-            Scalar(f32),
-            Sides {
-                #[serde(default)]
-                top: f32,
-                #[serde(default)]
-                right: f32,
-                #[serde(default)]
-                bottom: f32,
-                #[serde(default)]
-                left: f32,
-            },
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = Edges;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str(
+                    "a number, a table of top/right/bottom/left/x/y, or an array of 1 to 4 numbers",
+                )
+            }
+            fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<Edges, E> {
+                Ok(Edges::all(v as f32))
+            }
+            fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<Edges, E> {
+                Ok(Edges::all(v as f32))
+            }
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<Edges, E> {
+                Ok(Edges::all(v as f32))
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<Edges, A::Error> {
+                let mut v = Vec::new();
+                while let Some(x) = seq.next_element::<f32>()? {
+                    v.push(x);
+                }
+                Edges::from_css(&v).ok_or_else(|| {
+                    serde::de::Error::invalid_length(v.len(), &"1 to 4 numbers (CSS order)")
+                })
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<Edges, A::Error> {
+                let mut sides = EdgeSides::default();
+                while let Some(k) = map.next_key::<String>()? {
+                    let slot = sides
+                        .slot(&k)
+                        .ok_or_else(|| serde::de::Error::unknown_field(&k, &EdgeSides::KEYS))?;
+                    *slot = Some(map.next_value::<f32>()?);
+                }
+                Ok(Edges::from_sides(sides))
+            }
         }
-
-        Ok(match Raw::deserialize(deserializer)? {
-            Raw::Scalar(v) => Edges::all(v),
-            Raw::Sides {
-                top,
-                right,
-                bottom,
-                left,
-            } => Edges {
-                top,
-                right,
-                bottom,
-                left,
-            },
-        })
+        deserializer.deserialize_any(V)
     }
 }
 
@@ -295,6 +374,10 @@ pub enum CrossAxisAlign {
     Center,
     End,
     Stretch,
+    /// Rows: line up the children's first text baselines; a child with no
+    /// baseline (anything but a text node, or a quarter-turned text) sits on
+    /// it with its bottom edge. In a column it acts as `start`.
+    Baseline,
 }
 
 /// How a node distributes its children. Determines the main/cross axes.
@@ -315,6 +398,155 @@ pub enum TextAlign {
     Center,
     Right,
     Justify,
+}
+
+/// Which line's baseline an anchor refers to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BaselineKind {
+    /// The first line's baseline (`"baseline"`).
+    First,
+    /// The last line's baseline (`"last_baseline"`).
+    Last,
+}
+
+impl BaselineKind {
+    /// The schema spelling: `"baseline"` / `"last_baseline"`.
+    pub fn name(self) -> &'static str {
+        match self {
+            BaselineKind::First => "baseline",
+            BaselineKind::Last => "last_baseline",
+        }
+    }
+
+    /// Parse `"baseline"` / `"last_baseline"`.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "baseline" => Some(BaselineKind::First),
+            "last_baseline" => Some(BaselineKind::Last),
+            _ => None,
+        }
+    }
+}
+
+/// One component of an `anchor`: a fraction of the footprint along that
+/// axis, or a text baseline (`"baseline"` / `"last_baseline"`): where that
+/// baseline crosses the axis, in the parent's frame (see
+/// [`crate::schema::RawNode::anchor`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AnchorValue {
+    Frac(f32),
+    Baseline(BaselineKind),
+}
+
+impl Default for AnchorValue {
+    fn default() -> Self {
+        AnchorValue::Frac(0.0)
+    }
+}
+
+impl From<f32> for AnchorValue {
+    fn from(v: f32) -> Self {
+        AnchorValue::Frac(v)
+    }
+}
+
+impl AnchorValue {
+    /// The fraction, when this is one.
+    pub fn frac(self) -> Option<f32> {
+        match self {
+            AnchorValue::Frac(f) => Some(f),
+            AnchorValue::Baseline(_) => None,
+        }
+    }
+
+    /// The baseline, when this is one.
+    pub fn baseline(self) -> Option<BaselineKind> {
+        match self {
+            AnchorValue::Baseline(k) => Some(k),
+            AnchorValue::Frac(_) => None,
+        }
+    }
+}
+
+impl Serialize for AnchorValue {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            AnchorValue::Frac(f) => s.serialize_f32(*f),
+            AnchorValue::Baseline(k) => s.serialize_str(k.name()),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for AnchorValue {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl serde::de::Visitor<'_> for V {
+            type Value = AnchorValue;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str(r#"a fraction, "baseline" or "last_baseline""#)
+            }
+            fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<AnchorValue, E> {
+                Ok(AnchorValue::Frac(v as f32))
+            }
+            fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<AnchorValue, E> {
+                Ok(AnchorValue::Frac(v as f32))
+            }
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<AnchorValue, E> {
+                Ok(AnchorValue::Frac(v as f32))
+            }
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<AnchorValue, E> {
+                BaselineKind::parse(v)
+                    .map(AnchorValue::Baseline)
+                    .ok_or_else(|| E::invalid_value(serde::de::Unexpected::Str(v), &self))
+            }
+        }
+        d.deserialize_any(V)
+    }
+}
+
+/// Where a closed outline's stroke lies relative to the outline (rect,
+/// ellipse, closed path, container border): `inside` (its outer edge on the
+/// outline), `center` (centred on it, as in SVG) or `outside` (its inner edge
+/// on it). Containers default to `inside`, shapes to `center`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StrokeAlign {
+    Inside,
+    #[default]
+    Center,
+    Outside,
+}
+
+impl StrokeAlign {
+    /// How far the stroke's centre line lies *outside* the outline, for a
+    /// stroke `width` wide: `-width / 2`, `0` or `width / 2`.
+    pub fn centre_offset(self, width: f32) -> f32 {
+        match self {
+            StrokeAlign::Inside => -width / 2.0,
+            StrokeAlign::Center => 0.0,
+            StrokeAlign::Outside => width / 2.0,
+        }
+    }
+
+    /// How far the stroke reaches past the outline, outwards.
+    pub fn outer_extent(self, width: f32) -> f32 {
+        self.centre_offset(width) + width / 2.0
+    }
+
+    /// How far the stroke reaches inside the outline.
+    pub fn inner_extent(self, width: f32) -> f32 {
+        width / 2.0 - self.centre_offset(width)
+    }
+
+    /// Parse `"inside"` / `"center"` / `"outside"`.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "inside" => Some(StrokeAlign::Inside),
+            "center" => Some(StrokeAlign::Center),
+            "outside" => Some(StrokeAlign::Outside),
+            _ => None,
+        }
+    }
 }
 
 /// How an image is fitted into its computed box.
