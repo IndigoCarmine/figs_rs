@@ -1,0 +1,23 @@
+// Style presets: one line switches a coherent bundle of framework defaults to
+// a journal's conventions — here Nature-like: Arial, 7 pt text, 8 pt bold
+// lowercase "a" labels and 89 / 183 mm column widths (so "double" is 18.3 cm).
+// The journal presets approximate the author guidelines; check the current
+// ones before submitting.
+//
+// Try instead:
+//   style("science");                            // uppercase "A" labels
+//   style("acs"); / style("rsc");                // "(a)" labels
+//   style("poster");                             // 24 pt body, 60 pt titles
+//   style("nature", #{ label_corner: "top-right" });  // preset + overrides
+//   style(#{ base_size: 9, label_style: "A" });  // individual keys only
+//
+// A hook you define yourself still wins over the preset, e.g.
+//   fn label_halo() { "" }   // no white rim around the labels
+style("nature");
+
+page("double", grid(2, panels([
+    annotate(image("a.png"), scalebar(2, "500 nm")),
+    image("b.png"),
+    image("c.png"),
+    annotate(image("d.png"), callout(3.3, 1.3, 4.6, 2.6, "grain")),
+])))

@@ -1,7 +1,7 @@
 // Labeled panels with captions: `panels(items, captions)` puts "(a)", "(b)", …
 // inset from each panel's corner and the caption below it. The hooks restyle
-// every label at once — here a white box behind each letter for readability
-// over dark micrographs.
+// every label at once — here a white box behind each letter instead of the
+// default white halo (both keep the label readable over dark micrographs).
 fn label_background() { "#ffffff" }
 
 page("double", grid(2, panels([

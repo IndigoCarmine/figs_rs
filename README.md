@@ -378,14 +378,16 @@ Components (lengths in cm, font sizes in pt):
 
 | Function | Result |
 |---|---|
-| `page(preset, root)` | Page of a named size, unit `cm`. Journal presets `"single"` (8.5 cm column) and `"double"` (17.5 cm) fix only the width and get an [auto height](#auto-page-height) that fits the content. Paper presets `"a5"`, `"a4"`, `"a3"`, `"a0"` (poster), `"letter"` are fixed; append `-landscape` to swap their sides (journal presets have no landscape form). The core `page(w, h, root)` is unchanged. |
+| `style(preset)` / `style(map)` / `style(preset, map)` | Switch a bundle of defaults in one line: `style("nature");` at the top of the script. See [Style presets](#style-presets). |
+| `page(preset, root)` | Page of a named size, unit `cm`, in the style's `font_family()` when one is set. Journal presets `"single"` (`single_width()`, default 8.5 cm column) and `"double"` (`double_width()`, default 17.5 cm) fix only the width and get an [auto height](#auto-page-height) that fits the content. Paper presets `"a5"`, `"a4"`, `"a3"`, `"a0"` (poster), `"letter"` are fixed; append `-landscape` to swap their sides (journal presets have no landscape form). The core `page(w, h, root)` is unchanged. |
 | `paper_size(preset)` | `[w, h]` of a preset, to drop down to core: `let s = paper_size("double"); page(s[0], 5, root).unit("cm")`. For journal presets `h` is the string `"auto"`, so `page(s[0], s[1], root)` stays auto. |
-| `title(s)` / `caption(s)` / `label(s)` / `body(s)` | Semantic text: 1.5× base bold centered / base centered / 1.25× base bold / base. |
+| `title(s)` / `caption(s)` / `label(s)` / `body(s)` | Semantic text: `title_size()` (1.5× base) bold centered / base centered / `label_size()` (1.25× base) bold / base. |
+| `halo(t, color, r)` | Text node `t` over a halo: 12 copies in `color`, `r` cm around it. Lays out exactly like `t` alone (a negative margin cancels the rim), so it drops in anywhere — what panel labels use by default. |
 | `vbox(items)` / `hbox(items)` | `col`/`row` with the default gap, stretched cross axis, and bare strings allowed. |
 | `grid(ncols, items)` / `grid(ncols, gap, items)` | Rows of `ncols` equal-flex cells (rows share height equally); the last row is padded with empty cells so widths stay equal. |
 | `panels(items)` / `panels(style, items)` | Each item overlaid with an auto label, `label_inset()` in from its `label_corner()` (via core `stack`). `style` is a template whose last `a`/`A`/`1` is the counter: `"(a)"` (default), `"a"`, `"A"`, `"a."`, `"Fig. 1"`. |
 | `panels(items, captions)` / `panels(style, items, captions)` | The same labeled panels, each with its caption below (`captioned`). `captions` must match `items` in length. |
-| `labeled(item, s)` / `panel_label(style, i)` | One labeled panel / the `i`-th (0-based) label string. |
+| `labeled(item, s)` / `panel_label(style, i)` | One labeled panel — `stack([item, pin(label_tag(s), label_corner(), label_inset())])` — / the `i`-th (0-based) label string. |
 | `circle(r)` / `circle(cx, cy, r)` | A square `ellipse` of radius `r`; the 3-argument form is centered on (`cx`, `cy`) of the enclosing `stack` (via `.at`). |
 | `curve` / `curved_arrow` / `brace` / `bracket` `(x1, y1, x2, y2, bend_or_depth)` | Curved annotations built on the core curve builders — see [Curves](#curves). |
 | `annotate(item, marks)` | `stack([item, ..marks])`: overlays annotation nodes (an array, or one node) on a panel; coordinates inside are cm from the panel's top-left. Composes with labels: `panels([annotate(..), ..])`, `labeled(annotate(..), "(a)")`. |
@@ -394,7 +396,7 @@ Components (lengths in cm, font sizes in pt):
 | `callout(tx, ty, x, y, s)` | The core `arrow(tx, ty, x, y)` in `accent()` with label `s` at its tail, beside it on the side away from the target and vertically centered on `ty`. |
 | `highlight(x, y, w, h)` / `spot(cx, cy, r)` | Dashed box with its top-left at (`x`, `y`) / dashed circle centered on (`cx`, `cy`), in `accent()` (a closed `path` / an `ellipse`; `.dash([])` makes them solid). |
 | `pin(node, corner)` / `pin(node, corner, inset)` | Any node pinned `inset` (default `label_inset()`) in from a corner of the enclosing stack — what `labeled` and `scalebar` use. |
-| `captioned(item, c)` | `item` above caption `c` (a string becomes `caption(c)`, a node is used as is), `caption_gap()` apart; the item takes the spare height. |
+| `captioned(item, c)` | `item` above caption `c` (a string becomes `caption(c)`, a node is used as is), `caption_gap()` apart; the item takes the spare height and the caption spans the item's width, so its centered text sits under the middle of the panel whatever the parent's cross alignment. |
 | `nodes(items)` / `as_node(x)` | Bare-string sugar: a string becomes `body(s)`. Use `col(nodes([...]))` to get it in core containers. |
 
 **Bare strings.** Inside framework containers (`vbox`, `hbox`, `grid`, `panels`)
@@ -408,13 +410,20 @@ same name in your script to override it everywhere:
 
 ```rhai
 fn base_size() { 9 }        // pt; all semantic text scales from it (default 8)
+fn font_family() { "Arial" }  // page font of page(preset, root) (default "": renderer default)
+fn title_size() { 14 }      // pt (default base_size() * 1.5)
+fn label_size() { 9 }       // pt (default base_size() * 1.25)
 fn gap() { 0.3 }            // cm between siblings in framework containers (default 0.2)
 fn label_style() { "A" }    // panel labels A, B, C … (default "(a)")
 fn label_inset() { 0.3 }    // cm from the panel corner (default base_size() * 0.02 = 0.16)
 fn label_corner() { "top-right" }   // or "bottom-left" / "bottom-right" (default "top-left")
-fn label_background() { "#ffffff" } // box behind the label (default "": none)
+fn label_halo() { "" }      // rim around the label (default "#ffffff"; "" for none)
+fn label_halo_width() { 0.05 }      // cm (default label_size() * 0.0035 ≈ 1 pt)
+fn label_background() { "#ffffff" } // box behind the label instead of the halo (default "": none)
 fn label_pad() { 0.1 }      // cm between label text and its box (default base_size() * 0.01)
 fn caption_gap() { 0.15 }   // cm between a panel and its caption (default gap() / 2)
+fn single_width() { 8.9 }   // cm, the "single" page preset (default 8.5)
+fn double_width() { 18.3 }  // cm, the "double" page preset (default 17.5)
 fn accent() { "#ffd400" }   // callout / highlight / spot colour (default "#ff5a3c")
 fn annotation_width() { 0.05 }      // their stroke, cm (default base_size() * 0.005)
 fn annotation_dash() { [0.2, 0.1] } // highlight/spot dash, cm (default 3x / 2x the width)
@@ -431,19 +440,78 @@ overriding those rescales them too. The inset keeps labels off the panel edge;
 the caption gap is half the grid gap so a caption reads as belonging to the panel
 above it rather than the one below.
 
-**Labeled & captioned panels.** A labeled panel is a core `stack`: the item
-fills it and the label is overlaid. Stack offsets measure from the top-left, so
-a top-left label is simply `label(s).at(inset, inset)`; for the other corners
-the label sits in a column that fills the stack (no offset, no size), padded by
-the inset and aligned with `.main("end")` / `.cross("end")` as needed. With
-`label_background()` set, the label becomes a small stack of a filled `rect`
-under the text (padded via the text's margin). All of it is ordinary nodes, so
-you can restyle or replace any piece. Captions go below with
-`panels(items, captions)`
-([`examples/captioned_panels.figs`](examples/captioned_panels.figs)):
+#### Style presets
+
+Hooks give one-knob-at-a-time control; `style(..)` switches a coherent bundle
+of them in one line at the top of the script
+([`examples/style_presets.figs`](examples/style_presets.figs)):
 
 ```rhai
-fn label_background() { "#ffffff" }   // readable over dark micrographs
+style("nature");                               // a preset
+style(#{ base_size: 9, label_style: "A" });    // individual keys, merged over it
+style("science", #{ label_corner: "top-right" }); // both at once
+
+page("double", grid(2, panels([image("a.png"), image("b.png")])))
+```
+
+| Preset | Font | Text (`base_size`) | Labels | `single` / `double` width |
+|---|---|---|---|---|
+| `"default"` | renderer default sans | 8 pt | `(a)`, 10 pt bold | 8.5 / 17.5 cm |
+| `"nature"` | Arial | 7 pt | `a`, 8 pt bold lowercase | 8.9 / 18.3 cm (89 / 183 mm) |
+| `"science"` | Arial | 7 pt | `A`, 8 pt bold uppercase | 5.7 / 18.3 cm |
+| `"acs"` | Arial | 7 pt | `(a)`, 8 pt bold | 8.25 / 17.78 cm (3.25 / 7 in) |
+| `"rsc"` | Arial | 7 pt | `(a)`, 8 pt bold | 8.3 / 17.1 cm |
+| `"poster"` | renderer default sans | 24 pt (60 pt titles, 1 cm gaps) | `(a)`, 30 pt bold | 8.5 / 17.5 cm |
+
+The journal presets are **approximations** of each publisher's author
+guidelines (which change, and differ between titles) — sensible starting points,
+not certified styles; check the current guide before submitting. They use Arial
+for the Helvetica/Arial-class sans the guides ask for, since it is the most
+widely installed. Line widths need no key of their own: annotation strokes,
+scale bars, insets and halos are derived from the text size, so 7 pt text gives
+~1 pt strokes (inside the usual 0.25–1.5 pt range) and `"poster"` gets
+proportionally heavier ones.
+
+- **Mechanism.** Hooks are functions, and Rhai functions can't see script
+  variables, so each evaluation gets a small style registry on the Rust side
+  (`style_set` / `style_get` / `style_reset`, fresh per script). Every hook
+  reads its own key first — `fn base_size() { style_get("base_size", 8) }` —
+  so the keys of `style(map)` are exactly the hook names above, and a
+  misspelled key or unknown preset is an error that lists the valid ones.
+  `style(name)` resets earlier `style` calls; `style(map)` merges.
+- **Your hooks still win.** A `fn base_size() { … }` in your script replaces
+  the whole hook, registry lookup included, so it overrides any preset.
+- **Fonts.** The preset's `font_family()` is set on the page by
+  `page(preset, root)` (chain `.font("…")` to override, or set it on single
+  nodes with the core `.font`). A family that isn't installed falls back to the
+  system's default font — the figure still renders, in another face — so pin a
+  concrete installed family for reproducible output.
+
+**Labeled & captioned panels.** A labeled panel is a core `stack`: the item
+fills it and the label tag is overlaid with `pin(tag, label_corner(),
+label_inset())`. Stack offsets measure from the top-left, so a top-left tag is
+simply `.at(inset, inset)`; for the other corners it sits in a column that fills
+the stack (no offset, no size), padded by the inset and aligned with
+`.main("end")` / `.cross("end")` as needed.
+
+By default the label is black with a thin white **halo** (`label_halo()`): on
+white plots and light images the rim is invisible, so the label looks exactly
+as before, while on dark micrographs it keeps the letter crisp instead of
+vanishing — the same contrast trick as `scalebar_halo()`, without covering the
+image with a box. The core has no text outline, so `halo(t, color, r)` builds it
+from ordinary nodes: twelve copies of the text in the halo colour, `r` around it,
+under the label; a negative margin cancels the rim's extent so the label lands
+exactly where a bare one would. (The copies are real text, so a PDF's text layer
+repeats the label — set `fn label_halo() { "" }` if that matters.) With
+`label_background()` set, the label instead becomes a small stack of a filled
+`rect` under the text (padded via the text's margin). All of it is ordinary
+nodes, so you can restyle or replace any piece. Captions go below with
+`panels(items, captions)`
+([`examples/captioned_panels.figs`](examples/captioned_panels.figs)); a caption
+spans its panel's width, so its centered text sits under the panel's middle:
+
+```rhai
+fn label_background() { "#ffffff" }   // a white box instead of the halo
 
 page("double", grid(2, panels(
     [image("a.png"), image("b.png")],
@@ -457,7 +525,7 @@ callouts and highlights; wrap it in `panels`/`labeled` and the label goes on top
 ([`examples/annotated_figure.figs`](examples/annotated_figure.figs)):
 
 ```rhai
-fn label_background() { "#ffffff" }   // labels readable on dark micrographs
+fn label_background() { "#ffffff" }   // a white box instead of the halo
 
 page("double", grid(2, panels([
     annotate(image("a.png"), [

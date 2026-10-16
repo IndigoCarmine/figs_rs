@@ -1,25 +1,24 @@
-// Research poster (FES + PMF) — the same layout as poster.toml, but with a
-// reusable component (`captioned`) and arithmetic-driven sizes.
-fn captioned(src, ratio, caption) {
-    col([
-        image(src).aspect(ratio),
-        text(caption).size(14).center(),
-    ]).flex(1).spacing(0.5)
-}
+// Research poster (FES + PMF) — the same content as poster.toml, written with
+// the framework: `style("poster")` switches every default to poster scale
+// (24 pt body, 60 pt title, 1 cm gaps) in one line, and `captioned` centers
+// each caption under its panel.
+style("poster");
 
-let base = 24;             // base font size (pt); the title is base * 2
 let muted = "#666666";
 
 page(100, 150,
     col([
-        col([
-            text("Free Energy Surface Analysis").size(base * 2).bold().center(),
-            text("MD Simulation Results").size(base).color(muted).center(),
-        ]).spacing(0.5).cross("center"),
+        vbox([
+            title("Free Energy Surface Analysis"),
+            body("MD Simulation Results").color(muted).center(),
+        ]),
+        // Images take their file's natural aspect; cross "center" keeps each
+        // panel at its natural height (rather than stretching it to the row's
+        // height) and centers the pair in the free space.
         row([
-            captioned("fes.png", 1.0, "(a) FES 2D Landscape"),
-            captioned("pmf.png", 2.0, "(b) PMF Profile"),
-        ]).flex(1).spacing(1.5).main("space_around").cross("stretch"),
-        text("Simulation: GROMACS 2024, FF: AMBER99SB").size(10).color("#999999").center(),
-    ]).spacing(2).pad(1.5).cross("center"),
+            captioned(image("fes.png"), "(a) FES 2D Landscape").flex(1),
+            captioned(image("pmf.png"), "(b) PMF Profile").flex(1),
+        ]).flex(1).spacing(gap() * 1.5).cross("center"),
+        body("Simulation: GROMACS 2024, FF: AMBER99SB").size(10).color("#999999").center(),
+    ]).spacing(gap() * 2).pad(1.5).stretch(),
 ).unit("cm").background("#ffffff")

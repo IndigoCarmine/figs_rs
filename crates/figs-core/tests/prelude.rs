@@ -53,12 +53,36 @@ fn rect_of(l: &ComputedLayout, id: &str) -> Rect {
         .rect
 }
 
-/// The raw text node with this content.
-fn text_node<'a>(d: &'a RawDocument, content: &str) -> &'a RawNode {
+/// Pre-order index of a lowered node id (`root` = 0, `nodeN` = N), i.e. its
+/// paint order: later nodes paint over earlier ones.
+fn order(id: &str) -> usize {
+    id.strip_prefix("node").map_or(0, |n| n.parse().unwrap())
+}
+
+/// Id of the topmost (last-painted) text node with this content. Halos and
+/// shadows paint copies of a text *under* it, so this is the foreground.
+fn text_id(d: &RawDocument, content: &str) -> String {
     d.nodes
-        .values()
-        .find(|n| n.kind == NodeKind::Text && n.content.as_deref() == Some(content))
+        .iter()
+        .filter(|(_, n)| n.kind == NodeKind::Text && n.content.as_deref() == Some(content))
+        .max_by_key(|(id, _)| order(id))
+        .map(|(id, _)| id.clone())
         .unwrap_or_else(|| panic!("no text node with content {content:?}"))
+}
+
+/// The raw (topmost) text node with this content.
+fn text_node<'a>(d: &'a RawDocument, content: &str) -> &'a RawNode {
+    &d.nodes[&text_id(d, content)]
+}
+
+/// Id of the foreground text of a label tag node: the node itself when it is
+/// a bare text, else the last child of its halo / background stack.
+fn tag_text(d: &RawDocument, id: &str) -> String {
+    let n = &d.nodes[id];
+    match n.kind {
+        NodeKind::Text => id.to_string(),
+        _ => tag_text(d, n.children.last().expect("tag has children")),
+    }
 }
 
 /// The raw children of node `id`, in order.
@@ -274,14 +298,16 @@ fn panels_overlay_labels_top_left() {
         let kids = children(&d, sid);
         assert_eq!(kids.len(), 2, "panel + label");
         assert_eq!(kids[0].1.kind, NodeKind::Rect);
-        assert_eq!(kids[1].1.content.as_deref(), Some(want));
-        assert_eq!(kids[1].1.font_weight, Some(700));
-        // The panel fills its cell; the label sits inset from its top-left.
+        // The label tag (by default a halo stack) is pinned at the inset.
         assert_eq!(kids[1].1.x, Some(0.16));
         assert_eq!(kids[1].1.y, Some(0.16));
+        let fg = tag_text(&d, kids[1].0);
+        assert_eq!(d.nodes[&fg].content.as_deref(), Some(want));
+        assert_eq!(d.nodes[&fg].font_weight, Some(700));
+        // The panel fills its cell; the label sits inset from its top-left.
         let cell = rect_of(&l, sid);
         let panel = rect_of(&l, kids[0].0);
-        let label = rect_of(&l, kids[1].0);
+        let label = rect_of(&l, &fg);
         approx(panel.w, cell.w);
         approx(panel.h, cell.h);
         approx(label.x, cell.x + 0.16);
@@ -296,9 +322,9 @@ fn label_inset_follows_base_size_and_hook() {
         fn base_size() { 10 }
         page("single", labeled(rect(), "(a)"))
         "#);
-    let t = text_node(&d, "(a)");
-    approx(t.x.unwrap(), 0.2);
-    approx(t.y.unwrap(), 0.2);
+    let tag = children(&d, "root")[1].1;
+    approx(tag.x.unwrap(), 0.2);
+    approx(tag.y.unwrap(), 0.2);
 
     // … and replaced outright by a user `label_inset()`.
     let src = r#"
@@ -307,21 +333,14 @@ fn label_inset_follows_base_size_and_hook() {
         "#;
     let d = raw(src);
     let l = lay(src);
-    let label = rect_of(&l, children(&d, "root")[1].0);
+    let label = rect_of(&l, &tag_text(&d, children(&d, "root")[1].0));
     approx(label.x, 5.0);
     approx(label.y, 5.0);
 }
 
 /// Layout rect of label `s` (the text node) in `src`.
 fn label_rect(src: &str, s: &str) -> Rect {
-    let d = raw(src);
-    let id = d
-        .nodes
-        .iter()
-        .find(|(_, n)| n.kind == NodeKind::Text && n.content.as_deref() == Some(s))
-        .map(|(id, _)| id.clone())
-        .unwrap();
-    rect_of(&lay_fixed(src), &id)
+    rect_of(&lay_fixed(src), &text_id(&raw(src), s))
 }
 
 #[test]
@@ -370,7 +389,8 @@ fn label_corner_structure() {
     approx(c.padding.right, 0.16);
     assert_eq!(c.main_axis_alignment, Some(MainAxisAlign::End));
     assert_eq!(c.cross_axis_alignment, Some(CrossAxisAlign::End));
-    assert_eq!(children(&d, cid)[0].1.content.as_deref(), Some("(a)"));
+    let tag = tag_text(&d, children(&d, cid)[0].0);
+    assert_eq!(d.nodes[&tag].content.as_deref(), Some("(a)"));
 
     let e = eval_script(
         r#"
@@ -441,7 +461,8 @@ fn captioned_panels_structure() {
         let (sid, panel) = kids[0];
         assert_eq!(panel.kind, NodeKind::Stack);
         assert_eq!(panel.flex, Some(1.0));
-        assert_eq!(children(&d, sid)[1].1.content.as_deref(), Some(want_label));
+        let tag = tag_text(&d, children(&d, sid)[1].0);
+        assert_eq!(d.nodes[&tag].content.as_deref(), Some(want_label));
         let cap = kids[1].1;
         assert_eq!(cap.content.as_deref(), Some(want_cap));
         assert_eq!(cap.font_size, Some(8.0)); // caption(): base size, centered
@@ -784,7 +805,8 @@ fn annotate_composes_with_labels_and_panels() {
         let kids = children(&d, sid);
         assert_eq!(kids[0].1.kind, NodeKind::Stack);
         assert_eq!(children(&d, kids[0].0)[0].1.kind, NodeKind::Rect);
-        assert_eq!(kids[1].1.content.as_deref(), Some(want));
+        let tag = tag_text(&d, kids[1].0);
+        assert_eq!(d.nodes[&tag].content.as_deref(), Some(want));
     }
 }
 
@@ -1011,4 +1033,330 @@ fn annotated_figure_example() {
     let l = lay(src);
     assert!(!l.nodes.is_empty());
     assert!(l.nodes[0].rect.w <= l.page.width_pt + 0.01);
+}
+
+// ---- style presets -----------------------------------------------------------
+
+/// Values of the hook expressions `exprs` after the script lines `prelude`
+/// (e.g. `style("nature");` or a user hook), as Rhai prints them.
+fn hooks(prelude: &str, exprs: &[&str]) -> Vec<String> {
+    let parts: Vec<String> = exprs.iter().map(|e| format!("`${{{e}}}`")).collect();
+    let src = format!(
+        "{prelude}\nlet s = \"\";\nfor x in [{}] {{ s += x + \"|\"; }}\npage(1, 1, text(s))",
+        parts.join(", ")
+    );
+    let d = raw(&src);
+    let s = d.nodes["root"].content.clone().unwrap();
+    s.trim_end_matches('|')
+        .split('|')
+        .map(String::from)
+        .collect()
+}
+
+const STYLE_HOOKS: &[&str] = &[
+    "base_size()",
+    "label_size()",
+    "label_style()",
+    "font_family()",
+    "single_width()",
+    "double_width()",
+    "title_size()",
+    "gap()",
+];
+
+#[test]
+fn style_presets_set_hook_values() {
+    let at = |p: &str| hooks(&format!("style(\"{p}\");"), STYLE_HOOKS);
+    // base, label size, label, font, single, double, title, gap
+    let want: [(&str, [&str; 8]); 6] = [
+        (
+            "default",
+            ["8", "10.0", "(a)", "", "8.5", "17.5", "12.0", "0.2"],
+        ),
+        (
+            "nature",
+            ["7", "8", "a", "Arial", "8.9", "18.3", "10.5", "0.2"],
+        ),
+        (
+            "science",
+            ["7", "8", "A", "Arial", "5.7", "18.3", "10.5", "0.2"],
+        ),
+        (
+            "acs",
+            ["7", "8", "(a)", "Arial", "8.25", "17.78", "10.5", "0.2"],
+        ),
+        (
+            "rsc",
+            ["7", "8", "(a)", "Arial", "8.3", "17.1", "10.5", "0.2"],
+        ),
+        (
+            "poster",
+            ["24", "30.0", "(a)", "", "8.5", "17.5", "60", "1.0"],
+        ),
+    ];
+    for (preset, values) in want {
+        assert_eq!(at(preset), values, "preset {preset}");
+    }
+    // No `style` call at all = "default".
+    assert_eq!(hooks("", STYLE_HOOKS), at("default"));
+}
+
+#[test]
+fn style_preset_applies_to_components_and_page() {
+    let d = raw(r#"
+        style("nature");
+        page("single", hbox(panels([rect(), rect()])))
+        "#);
+    approx(d.page.width, 8.9);
+    assert_eq!(d.page.font_family.as_deref(), Some("Arial"));
+    let a = text_node(&d, "a");
+    assert_eq!(a.font_size, Some(8.0));
+    assert_eq!(a.font_weight, Some(700));
+    let _ = text_node(&d, "b");
+
+    // The page font is a plain core setting: chaining `.font` overrides it,
+    // and the default style sets none (the renderer's default sans).
+    let d = raw(r#"style("nature"); page("single", rect()).font("Times")"#);
+    assert_eq!(d.page.font_family.as_deref(), Some("Times"));
+    assert_eq!(raw(r#"page("single", rect())"#).page.font_family, None);
+}
+
+#[test]
+fn user_hook_beats_preset() {
+    let v = hooks(
+        r#"fn base_size() { 11 } fn label_style() { "i." } style("nature");"#,
+        &[
+            "base_size()",
+            "label_style()",
+            "label_size()",
+            "font_family()",
+        ],
+    );
+    // User hooks win; the preset still sets everything else.
+    assert_eq!(v, ["11", "i.", "8", "Arial"]);
+}
+
+#[test]
+fn style_map_overrides() {
+    let v = hooks(
+        r#"style(#{ base_size: 9, label_style: "A" });"#,
+        &[
+            "base_size()",
+            "label_style()",
+            "label_size()",
+            "label_inset()",
+        ],
+    );
+    // Derived hooks follow the overridden base.
+    assert_eq!(v, ["9", "A", "11.25", "0.18"]);
+
+    // Merged over a preset: one call or two.
+    for prelude in [
+        r#"style("nature", #{ base_size: 6 });"#,
+        r#"style("nature"); style(#{ base_size: 6 });"#,
+    ] {
+        assert_eq!(
+            hooks(prelude, &["base_size()", "label_style()", "font_family()"]),
+            ["6", "a", "Arial"],
+            "{prelude}"
+        );
+    }
+    // A later preset starts over.
+    let v = hooks(
+        r#"style(#{ base_size: 6 }); style("science");"#,
+        &["base_size()"],
+    );
+    assert_eq!(v, ["7"]);
+}
+
+#[test]
+fn every_style_key_drives_its_hook() {
+    // Each key `style(map)` accepts is read by the hook of the same name, and
+    // every preset only uses such keys.
+    let src = r#"
+        let bad = [];
+        for k in style_keys() {
+            style("default");
+            let m = #{};
+            m[k] = "__set__";
+            style(m);
+            if Fn(k).call() != "__set__" { bad.push(k); }
+        }
+        for p in style_presets().values() {
+            for k in p.keys() { if !style_keys().contains(k) { bad.push(k); } }
+        }
+        let s = "";
+        for k in bad { s += k + " "; }
+        page(1, 1, text(s))
+    "#;
+    assert_eq!(raw(src).nodes["root"].content.as_deref(), Some(""));
+}
+
+#[test]
+fn style_errors() {
+    let (line, col, msg) = fail("\nstyle(\"natur\");\npage(\"single\", rect())");
+    assert_eq!((line, col), (Some(2), Some(1)), "{msg}");
+    assert_eq!(
+        msg,
+        "line 2, col 1: style: unknown preset \"natur\" (acs, default, nature, poster, rsc, science)"
+    );
+
+    let (_, _, msg) = fail(r#"style(#{ base_sise: 9 }); page("single", rect())"#);
+    assert!(
+        msg.contains("style: unknown key \"base_sise\" (keys are hook names: base_size,"),
+        "{msg}"
+    );
+    let (_, _, msg) = fail(r#"style(7); page("single", rect())"#);
+    assert!(
+        msg.contains("style: expected a preset name or a map"),
+        "{msg}"
+    );
+}
+
+#[test]
+fn style_is_reset_per_evaluation() {
+    let _ = raw(r#"style("poster"); page("single", rect())"#);
+    assert_eq!(hooks("", &["base_size()"]), ["8"]);
+}
+
+// ---- label halo ----------------------------------------------------------------
+
+#[test]
+fn label_halo_structure() {
+    let d = raw(r#"page("single", labeled(rect(), "(a)"))"#);
+    let (hid, h) = children(&d, "root")[1];
+    // A stack of 12 halo copies under the label, cancelled by a negative margin.
+    assert_eq!(h.kind, NodeKind::Stack);
+    let r = 10.0 * 0.0035; // label_size() * 0.0035
+    for m in [h.margin.left, h.margin.top, h.margin.right, h.margin.bottom] {
+        approx(m, -r);
+    }
+    let parts = children(&d, hid);
+    assert_eq!(parts.len(), 13);
+    let (copies, fg) = parts.split_at(12);
+    let fg = fg[0].1;
+    assert_eq!(fg.content.as_deref(), Some("(a)"));
+    assert_eq!(fg.color, None, "the label keeps the default text colour");
+    approx(fg.x.unwrap(), r);
+    approx(fg.y.unwrap(), r);
+    for (_, c) in copies {
+        assert_eq!(c.content.as_deref(), Some("(a)"));
+        assert_eq!(c.color, hex("#ffffff"));
+        assert_eq!((c.font_size, c.font_weight), (fg.font_size, fg.font_weight));
+        // Every copy sits `r` from the label, so the rim is even all round.
+        let (dx, dy) = (c.x.unwrap() - r, c.y.unwrap() - r);
+        approx((dx * dx + dy * dy).sqrt(), r);
+    }
+
+    // "" draws a bare label; a background box replaces the halo.
+    let d = raw(r#"fn label_halo() { "" } page("single", labeled(rect(), "(a)"))"#);
+    assert_eq!(children(&d, "root")[1].1.kind, NodeKind::Text);
+    let d = raw(r##"
+        fn label_background() { "#ffffff" }
+        page("single", labeled(rect(), "(a)"))
+        "##);
+    assert!(d.nodes.values().all(|n| n.color.is_none()));
+}
+
+#[test]
+fn halo_lays_out_like_the_bare_label() {
+    // The halo's negative margin cancels its extent: the label lands exactly
+    // where a bare label would, in every corner — also with an integer width.
+    for corner in ["top-left", "top-right", "bottom-left", "bottom-right"] {
+        let src = |halo: &str| {
+            format!(
+                r#"fn label_inset() {{ 5 }} fn label_corner() {{ "{corner}" }}
+                {halo}
+                page(100, 80, labeled(rect(), "(a)")).unit("pt")"#
+            )
+        };
+        let bare = label_rect(&src(r#"fn label_halo() { "" }"#), "(a)");
+        for (halo, w) in [("", 10.0 * 0.0035), ("fn label_halo_width() { 2 }", 2.0)] {
+            let src = src(halo);
+            let r = label_rect(&src, "(a)");
+            assert_xywh(r, bare.x, bare.y, bare.w, bare.h);
+            // … and the halo stack hugs it, `w` larger on every side.
+            let d = raw(&src);
+            let tag = find_id(&d, |n| n.kind == NodeKind::Stack && n.margin.left < 0.0);
+            let t = rect_of(&lay_fixed(&src), &tag);
+            assert_xywh(t, r.x - w, r.y - w, r.w + 2.0 * w, r.h + 2.0 * w);
+        }
+    }
+}
+
+// ---- labeled == pin ------------------------------------------------------------
+
+/// Layout of `src` (fixed text metrics) as (id, rect) pairs, sorted by id.
+fn rects(src: &str) -> Vec<(String, Rect)> {
+    let mut v: Vec<_> = lay_fixed(src)
+        .nodes
+        .into_iter()
+        .map(|n| (n.id, n.rect))
+        .collect();
+    v.sort_by(|a, b| a.0.cmp(&b.0));
+    v
+}
+
+#[test]
+fn labeled_is_pin_of_the_label_tag() {
+    for corner in ["top-left", "top-right", "bottom-left", "bottom-right"] {
+        let hooks = format!(r#"fn label_inset() {{ 5 }} fn label_corner() {{ "{corner}" }}"#);
+        let a = rects(&format!(
+            r#"{hooks} page(100, 80, labeled(rect(), "(a)")).unit("pt")"#
+        ));
+        let b = rects(&format!(
+            r#"{hooks} page(100, 80, stack([rect(),
+                pin(label_tag("(a)"), label_corner(), label_inset())])).unit("pt")"#
+        ));
+        assert_eq!(a.len(), b.len(), "{corner}");
+        for ((ia, ra), (ib, rb)) in a.iter().zip(&b) {
+            assert_eq!(ia, ib, "{corner}");
+            assert_xywh(*ra, rb.x, rb.y, rb.w, rb.h);
+        }
+    }
+}
+
+// ---- caption centering ---------------------------------------------------------
+
+#[test]
+fn captions_center_under_their_panels() {
+    // Natural-height panels in a row (as in examples/poster.figs): each
+    // caption box spans its panel, so centered text sits under its middle.
+    let src = r#"
+        page(100, 100, row([
+            captioned(rect().height(30), "x").flex(1),
+            captioned(rect().height(20), "y").flex(2),
+        ]).spacing(10).cross("center")).unit("pt")
+        "#;
+    let d = raw(src);
+    let l = lay_fixed(src);
+    for (cid, _) in children(&d, "root") {
+        let kids = children(&d, cid);
+        let panel = rect_of(&l, kids[0].0);
+        let cap = rect_of(&l, kids[1].0);
+        approx(cap.x, panel.x);
+        approx(cap.w, panel.w);
+        approx(cap.x + cap.w / 2.0, panel.x + panel.w / 2.0);
+        approx(cap.y, panel.y + panel.h + 0.1); // caption_gap() right under it
+        assert_eq!(kids[1].1.align, Some(TextAlign::Center));
+    }
+}
+
+#[test]
+fn style_presets_example() {
+    let src = include_str!("../../../examples/style_presets.figs");
+    let d = raw(src);
+    assert_eq!(d.page.font_family.as_deref(), Some("Arial"));
+    let l = lay(src);
+    assert!(l.nodes[0].rect.w <= l.page.width_pt + 0.01);
+}
+
+#[test]
+fn poster_example_uses_the_poster_style() {
+    let d = raw(include_str!("../../../examples/poster.figs"));
+    let title = text_node(&d, "Free Energy Surface Analysis");
+    assert_eq!(title.font_size, Some(60.0));
+    let cap = text_node(&d, "(a) FES 2D Landscape");
+    assert_eq!(cap.font_size, Some(24.0));
+    assert_eq!(cap.align, Some(TextAlign::Center));
 }

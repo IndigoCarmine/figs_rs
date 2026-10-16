@@ -3,7 +3,7 @@
 // Coordinates are cm from each panel's top-left; colours, stroke widths and
 // dashes come from overridable hooks (`accent()`, `annotation_width()`,
 // `scalebar_color()`, …).
-fn label_background() { "#ffffff" }   // black "(a)" would vanish on dark images
+fn label_background() { "#ffffff" }   // a white box instead of the default halo
 
 page("double", grid(2, panels([
     annotate(image("a.png"), [

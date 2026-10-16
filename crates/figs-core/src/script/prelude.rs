@@ -23,9 +23,9 @@
 //! with that framework function's name (`grid: ncols must be …`).
 
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
-use rhai::{Engine, EvalAltResult, Position, AST};
+use rhai::{Dynamic, Engine, EvalAltResult, Map, Position, AST};
 
 use super::ScriptError;
 
@@ -86,6 +86,41 @@ pub(super) fn compile_with_prelude(
         user: fn_table(&user),
     };
     Ok((prelude.ast.merge(&user), origins))
+}
+
+/// Register the style registry behind `style(..)` presets on `engine`.
+///
+/// Hooks are functions, and Rhai functions can't see script globals, so a
+/// preset can't simply assign variables the hooks read. Instead each
+/// evaluation gets one shared key -> value map, captured by three native
+/// functions that the prelude builds `style(..)` and every default hook on:
+///
+/// - `style_set(map)` merges `map` into the registry (later keys win);
+/// - `style_reset()` empties it (back to the hooks' built-in defaults);
+/// - `style_get(key, default)` reads `key`, or returns `default` when unset.
+///
+/// A hook reads its own key — `fn base_size() { style_get("base_size", 8) }` —
+/// so a user `fn base_size()` replaces the whole hook and still wins over any
+/// preset. The engine is built per [`super::eval_script`] call, so the registry
+/// starts empty for every evaluation and never leaks between scripts.
+pub(super) fn register_style(engine: &mut Engine) {
+    // A poisoned lock only means an earlier call panicked mid-update; the map
+    // itself is still a valid map, so keep using it.
+    fn lock(s: &Mutex<Map>) -> MutexGuard<'_, Map> {
+        s.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    let store: Arc<Mutex<Map>> = Arc::default();
+    let s = Arc::clone(&store);
+    engine.register_fn("style_set", move |m: Map| {
+        lock(&s).extend(m);
+    });
+    let s = Arc::clone(&store);
+    engine.register_fn("style_reset", move || lock(&s).clear());
+    let s = store;
+    engine.register_fn("style_get", move |key: &str, default: Dynamic| {
+        lock(&s).get(key).cloned().unwrap_or(default)
+    });
 }
 
 /// One `ErrorInFunctionCall` frame: `name` was called at `pos`, a position in

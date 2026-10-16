@@ -15,69 +15,194 @@
 // ---------------------------------------------------------------------------
 // Defaults (overridable hooks)
 // ---------------------------------------------------------------------------
+//
+// Every hook reads its own key from the per-script style registry first
+// (`style_get(key, default)`; see "Style presets" below), so `style("nature")`
+// or `style(#{ base_size: 9 })` switches them all at once; the second argument
+// is the built-in default. A user `fn` with the same name replaces the whole
+// hook, so it always wins over any preset.
 
 // Base font size (pt) every semantic text style is derived from.
-fn base_size() { 8 }
+fn base_size() { style_get("base_size", 8) }
+
+// Font family of the page (`page(preset, root)` applies it with the core
+// `.font`); "" (default) keeps the renderer's default sans-serif. A family
+// that isn't installed falls back to the system's default font, so a preset
+// naming "Arial" still renders (in another face) where Arial is missing.
+fn font_family() { style_get("font_family", "") }
+
+// Title size (pt): 1.5x base.
+fn title_size() { style_get("title_size", base_size() * 1.5) }
+
+// Panel label size (pt): 1.25x base.
+fn label_size() { style_get("label_size", base_size() * 1.25) }
 
 // Default gap between siblings in framework containers (page units, cm).
-fn gap() { 0.2 }
+fn gap() { style_get("gap", 0.2) }
 
 // Panel label template used by `panels(items)`; see `panel_label`.
-fn label_style() { "(a)" }
+fn label_style() { style_get("label_style", "(a)") }
 
 // Distance from the panel corner to the label (cm). Scales with the text so
 // the label never sits flush against the edge: 0.16 cm at the default 8 pt.
-fn label_inset() { base_size() * 0.02 }
+fn label_inset() { style_get("label_inset", base_size() * 0.02) }
 
 // Panel corner the label sits in: "top-left" (default), "top-right",
 // "bottom-left" or "bottom-right".
-fn label_corner() { "top-left" }
+fn label_corner() { style_get("label_corner", "top-left") }
 
-// Fill colour of a box behind the label (e.g. "#ffffff" for readability over
-// dark images); "" (default) draws no box.
-fn label_background() { "" }
+// Fill colour of a box behind the label (e.g. "#ffffff"); "" (default) draws
+// no box. A box replaces the halo.
+fn label_background() { style_get("label_background", "") }
 
 // Padding between the label text and its background box (cm).
-fn label_pad() { base_size() * 0.01 }
+fn label_pad() { style_get("label_pad", base_size() * 0.01) }
+
+// Halo (outline) colour around the label, so the default black "(a)" stays
+// legible on dark images: invisible on white/light panels, a crisp rim on dark
+// ones. "" draws a bare label. See `halo`.
+fn label_halo() { style_get("label_halo", "#ffffff") }
+
+// Halo width (cm): 0.035 cm (~1 pt) at the default 10 pt label.
+fn label_halo_width() { style_get("label_halo_width", label_size() * 0.0035) }
 
 // Space between a panel and its caption in captioned panels (cm). Tighter than
 // `gap()` so a caption reads as belonging to the panel above it.
-fn caption_gap() { gap() * 0.5 }
+fn caption_gap() { style_get("caption_gap", gap() * 0.5) }
+
+// Widths (cm) of the "single" (one journal column) and "double" (full page
+// width) page presets.
+fn single_width() { style_get("single_width", 8.5) }
+fn double_width() { style_get("double_width", 17.5) }
 
 // --- Annotations (see the "Annotations" section below) ---
 
 // Colour of callouts, highlights and spots: a warm red that reads on both
 // light plots and dark micrographs.
-fn accent() { "#ff5a3c" }
+fn accent() { style_get("accent", "#ff5a3c") }
 
 // Stroke width of callout arrows, highlights and spots (cm): 0.04 cm (~1.1 pt)
 // at the default 8 pt, so annotations scale with the text.
-fn annotation_width() { base_size() * 0.005 }
+fn annotation_width() { style_get("annotation_width", base_size() * 0.005) }
 
 // Dash pattern of `highlight` / `spot` (on, off, … in cm), tied to the stroke.
-fn annotation_dash() { [annotation_width() * 3, annotation_width() * 2] }
+fn annotation_dash() {
+    style_get("annotation_dash", [annotation_width() * 3, annotation_width() * 2])
+}
 
 // Scale bar and its label colour. White is the micrograph convention (TEM/SEM/
 // fluorescence images are mostly dark); `scalebar_halo()` keeps it legible on
 // bright regions.
-fn scalebar_color() { "#ffffff" }
+fn scalebar_color() { style_get("scalebar_color", "#ffffff") }
 
 // Bar thickness (cm): 0.08 cm (~2.3 pt) at the default 8 pt.
-fn scalebar_thickness() { base_size() * 0.01 }
+fn scalebar_thickness() { style_get("scalebar_thickness", base_size() * 0.01) }
 
 // Corner of the panel the scale bar sits in (same names as `label_corner()`).
-fn scalebar_corner() { "bottom-right" }
+fn scalebar_corner() { style_get("scalebar_corner", "bottom-right") }
 
 // Distance from the panel corner to the scale bar (cm); follows the label inset.
-fn scalebar_inset() { label_inset() }
+fn scalebar_inset() { style_get("scalebar_inset", label_inset()) }
 
 // Thin outline around the bar and drop shadow under its label, for contrast on
 // bright image regions; "" draws neither.
-fn scalebar_halo() { "#000000a0" }
+fn scalebar_halo() { style_get("scalebar_halo", "#000000a0") }
 
 // Side inset of a field-scaled `scalebar(len, field, s)` as a fraction of the
 // panel width (that form is laid out in fractions, so a cm inset can't apply).
-fn scalebar_frac_inset() { 0.025 }
+fn scalebar_frac_inset() { style_get("scalebar_frac_inset", 0.025) }
+
+// ---------------------------------------------------------------------------
+// Style presets
+// ---------------------------------------------------------------------------
+//
+// `style("nature");` at the top of a script switches a coherent bundle of the
+// hooks above (font, sizes, label format, column widths) in one line;
+// `style(#{ base_size: 9, label_style: "A" })` sets individual keys (merged
+// over the current style), and `style("nature", #{ .. })` does both. Keys are
+// hook names. The registry lives on the Rust side (`style_set` / `style_get` /
+// `style_reset`, fresh for every evaluation) because hooks are functions, and
+// Rhai functions can't see script variables.
+//
+// The journal presets are *approximations* of each publisher's author
+// guidelines (which change, and differ between titles), not certified styles.
+// All use Arial: the Helvetica-class sans the guidelines ask for that is most
+// widely installed (a missing font falls back to the system default).
+//   nature   7 pt text (guide: 5-7 pt), 8 pt bold lowercase "a" labels,
+//            89 / 183 mm columns.
+//   science  7 pt text, 8 pt bold uppercase "A" labels, 5.7 / 18.3 cm columns.
+//   acs      7 pt text (guide: >= 4.5 pt), 8 pt "(a)" labels, 3.25 / 7 in
+//            columns.
+//   rsc      7 pt text, 8 pt "(a)" labels, 8.3 / 17.1 cm columns.
+//   poster   24 pt body (readable from ~2 m), 60 pt titles, 1 cm gaps; strokes,
+//            insets and halos scale up with the text.
+// Line widths need no key of their own: annotation strokes follow the base
+// size (7 pt -> 0.035 cm ~ 1 pt, inside the usual 0.25-1.5 pt range).
+
+// Preset name -> style map ("default" is the built-in hook defaults).
+fn style_presets() {
+    let journal = #{ font_family: "Arial", base_size: 7, label_size: 8 };
+    #{
+        "default": #{},   // quoted: `default` is reserved in Rhai
+        nature: journal + #{ label_style: "a", single_width: 8.9, double_width: 18.3 },
+        science: journal + #{ label_style: "A", single_width: 5.7, double_width: 18.3 },
+        acs: journal + #{ label_style: "(a)", single_width: 8.25, double_width: 17.78 },
+        rsc: journal + #{ label_style: "(a)", single_width: 8.3, double_width: 17.1 },
+        poster: #{ base_size: 24, title_size: 60, gap: 1.0 },
+    }
+}
+
+// The keys `style(map)` accepts: the hooks above that read the registry.
+fn style_keys() {
+    [
+        "base_size", "font_family", "title_size", "label_size", "gap",
+        "label_style", "label_inset", "label_corner", "label_background",
+        "label_pad", "label_halo", "label_halo_width", "caption_gap",
+        "single_width", "double_width", "accent", "annotation_width",
+        "annotation_dash", "scalebar_color", "scalebar_thickness",
+        "scalebar_corner", "scalebar_inset", "scalebar_halo", "scalebar_frac_inset",
+    ]
+}
+
+// `style(name)` switches to a preset (dropping earlier `style` calls);
+// `style(map)` merges individual keys over the current style.
+fn style(x) {
+    if type_of(x) == "map" {
+        let keys = style_keys();
+        for k in x.keys() {
+            if !keys.contains(k) {
+                throw `style(): unknown key "${k}" (keys are hook names: ${list_names(keys)})`;
+            }
+        }
+        style_set(x);
+        return;
+    }
+    if type_of(x) != "string" {
+        throw `style(): expected a preset name or a map of hook values (got ${type_of(x)})`;
+    }
+    let presets = style_presets();
+    if !presets.contains(x) {
+        throw `style(): unknown preset "${x}" (${list_names(presets.keys())})`;
+    }
+    style_reset();
+    style_set(presets[x]);
+}
+
+// A preset plus overrides: `style("nature", #{ base_size: 6 })`.
+fn style(name, overrides) {
+    style(name);
+    style(overrides);
+}
+
+// "a, b, c" from an array of strings (for error messages).
+fn list_names(xs) {
+    let out = "";
+    for x in xs {
+        if out != "" { out += ", "; }
+        out += x;
+    }
+    out
+}
 
 // ---------------------------------------------------------------------------
 // Semantic text
@@ -86,14 +211,30 @@ fn scalebar_frac_inset() { 0.025 }
 // Running text; also what a bare string in a framework container becomes.
 fn body(s) { text(s).size(base_size()) }
 
-// Figure/poster title: 1.5x base, bold, centered.
-fn title(s) { text(s).size(base_size() * 1.5).bold().center() }
+// Figure/poster title: `title_size()` (1.5x base), bold, centered.
+fn title(s) { text(s).size(title_size()).bold().center() }
 
 // Caption under a panel: base size, centered.
 fn caption(s) { text(s).size(base_size()).center() }
 
-// Panel label ("(a)"): 1.25x base, bold.
-fn label(s) { text(s).size(base_size() * 1.25).bold() }
+// Panel label ("(a)"): `label_size()` (1.25x base), bold.
+fn label(s) { text(s).size(label_size()).bold() }
+
+// `t` (a text node) over a halo: twelve copies of it in `color`, offset `r`
+// (cm) around it every 30° and painted first — a text outline made of core
+// text nodes, legible on any background (eight copies leave visible steps at
+// stroke ends). A negative margin of `r` cancels the halo's extent, so the
+// result lays out exactly like `t` alone (same box, same corner placement).
+// Works for any overlay text: `halo(body("50 °C"), "#000000", 0.03)`.
+fn halo(t, color, r) {
+    let parts = [];
+    for i in 0..12 {
+        let a = i * PI() / 6.0;
+        parts.push(t.color(color).at(r + r * a.cos(), r + r * a.sin()));
+    }
+    parts.push(t.at(r, r));
+    stack(parts).margin(-r)
+}
 
 // ---------------------------------------------------------------------------
 // Bare-string sugar
@@ -260,40 +401,24 @@ fn panel_label(style, i) {
     style.sub_string(0, pos) + token + style.sub_string(pos + 1)
 }
 
-// The label node: `label(s)`, boxed in `label_background()` when that is set
-// (a stack of a filling rect under the text, padded via the text's margin).
+// The label node: `label(s)` over a `label_halo()` halo — or, when
+// `label_background()` is set, boxed in it instead (a stack of a filling rect
+// under the text, padded via the text's margin).
 fn label_tag(s) {
     let t = label(s);
     let bg = label_background();
-    if bg == "" { return t; }
-    stack([rect().fill(bg), t.at(0.0, 0.0).margin(label_pad())])
+    if bg != "" {
+        return stack([rect().fill(bg), t.at(0.0, 0.0).margin(label_pad())]);
+    }
+    let h = label_halo();
+    if h == "" { t } else { halo(t, h, label_halo_width()) }
 }
 
-// Overlay label `s` on `item`, `label_inset()` in from its `label_corner()`.
-//
-// Stack offsets only measure from the top-left, so "top-left" pins the label
-// with `.at(inset, inset)`. The other corners put it in a column that fills the
-// stack (no offset, no size), padded by the inset and aligned to the corner
-// with main/cross "end" — plain core nodes either way.
+// Overlay label `s` on `item`, `label_inset()` in from its `label_corner()`:
+// `pin(label_tag(s), corner, inset)` over the item, in a core `stack`.
 fn labeled(item, s) {
-    let tag = label_tag(s);
-    let inset = label_inset();
-    let corner = label_corner();
-    // [main, cross] alignment of the filling column, per corner.
-    let align = #{
-        "top-right": ["start", "end"],
-        "bottom-left": ["end", "start"],
-        "bottom-right": ["end", "end"],
-    };
-    let overlay = if corner == "top-left" {
-        tag.at(inset, inset)
-    } else if align.contains(corner) {
-        let a = align[corner];
-        col([tag]).pad(inset).main(a[0]).cross(a[1])
-    } else {
-        throw `label_corner(): unknown corner "${corner}" (top-left, top-right, bottom-left, bottom-right)`;
-    };
-    stack([as_node(item), overlay])
+    let tag = pin_in("label_corner", label_tag(s), label_corner(), label_inset());
+    stack([as_node(item), tag])
 }
 
 // `item` with caption `c` (a string becomes `caption(c)`) below it, `caption_gap()`
@@ -345,8 +470,8 @@ fn paper_size(name) {
         throw "page(): use page(width, height, root) or page(preset, root)";
     }
     let journal = #{
-        single: 8.5,    // single journal column
-        double: 17.5,   // full page width (two columns)
+        single: single_width(),   // one journal column (default 8.5 cm)
+        double: double_width(),   // full page width, two columns (default 17.5 cm)
     };
     let paper = #{
         a5: [14.8, 21.0],
@@ -370,10 +495,13 @@ fn paper_size(name) {
     if landscape { [s[1], s[0]] } else { s }
 }
 
-// A page sized by preset name, in cm: `page("double", root)`.
+// A page sized by preset name, in cm: `page("double", root)`, in the style's
+// `font_family()` when one is set (chain `.font(name)` to override).
 fn page(preset, root) {
     let s = paper_size(preset);
-    page(s[0], s[1], root).unit("cm")
+    let d = page(s[0], s[1], root).unit("cm");
+    let f = font_family();
+    if f == "" { d } else { d.font(f) }
 }
 
 // ---------------------------------------------------------------------------
@@ -399,7 +527,11 @@ fn annotate(item, marks) {
 // and aligned to the corner. Usable for any overlay (an inset, a "50 °C" tag).
 fn pin(node, corner) { pin(node, corner, label_inset()) }
 
-fn pin(node, corner, inset) {
+fn pin(node, corner, inset) { pin_in("pin", node, corner, inset) }
+
+// `pin` whose corner came from `who` (a function or hook name), so an unknown
+// corner is reported against what the user actually set (`label_corner(): …`).
+fn pin_in(who, node, corner, inset) {
     if corner == "top-left" { return node.at(inset, inset); }
     let align = #{
         "top-right": ["start", "end"],
@@ -407,7 +539,7 @@ fn pin(node, corner, inset) {
         "bottom-right": ["end", "end"],
     };
     if !align.contains(corner) {
-        throw `pin(): unknown corner "${corner}" (top-left, top-right, bottom-left, bottom-right)`;
+        throw `${who}(): unknown corner "${corner}" (top-left, top-right, bottom-left, bottom-right)`;
     }
     let a = align[corner];
     col([node]).pad(inset).main(a[0]).cross(a[1])

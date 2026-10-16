@@ -729,7 +729,8 @@ mod prelude;
 /// Error positions always refer to `src`: an error raised inside the prelude is
 /// reported at the user's call into the framework, named after that function.
 pub fn eval_script(src: &str) -> Result<RawDocument, ScriptError> {
-    let engine = build_engine();
+    let mut engine = build_engine();
+    prelude::register_style(&mut engine);
     let (ast, origins) =
         prelude::compile_with_prelude(&engine, src).map_err(ScriptError::from_eval)?;
     let value = engine
