@@ -55,9 +55,11 @@ fn measure_own<M: LeafMeasure>(ctx: &Ctx<M>, idx: usize, c: Constraints) -> Size
             cross_axis,
             ..
         } => measure_container(ctx, *axis, children, *spacing, *cross_axis, &node.common, c),
-        NodeType::Stack { children, viewbox } => {
-            measure_stack(ctx, children, viewbox.is_some(), &node.common, c)
-        }
+        NodeType::Stack {
+            children,
+            viewbox,
+            contain,
+        } => measure_stack(ctx, children, viewbox.is_some(), *contain, &node.common, c),
         NodeType::Rect(_) | NodeType::Ellipse(_) => Size::default(),
         // Coordinates live in the content box, so the intrinsic size is the
         // outline's extent from its origin (exact curve bounds, not control
@@ -229,11 +231,14 @@ fn measure_container<M: LeafMeasure>(
 /// padding. Children that fill the stack in arrange contribute their intrinsic
 /// size here, as flex children do in a row/column. In a stack with a viewbox
 /// (`user` offsets) the offsets only make sense against the final box, so they
-/// are ignored: such a stack wraps its largest child.
+/// are ignored: such a stack wraps its largest child. A plain `contain` stack
+/// also counts what hangs off its top/left (negative offsets, anchors), since
+/// it will make room for it.
 fn measure_stack<M: LeafMeasure>(
     ctx: &Ctx<M>,
     children: &[usize],
     user: bool,
+    contain: bool,
     common: &Common,
     c: Constraints,
 ) -> Size {
@@ -244,6 +249,7 @@ fn measure_stack<M: LeafMeasure>(
 
     let mut w = 0.0f32;
     let mut h = 0.0f32;
+    let (mut left, mut top) = (0.0f32, 0.0f32);
     for &child in children {
         // Size/aspect in the stack's frame (swapped for a quarter-turned child).
         let cc = ctx.doc.nodes[child].common.outer();
@@ -266,10 +272,14 @@ fn measure_stack<M: LeafMeasure>(
         };
         w = w.max(x + cc.margin.horizontal() + sz.w);
         h = h.max(y + cc.margin.vertical() + sz.h);
+        if contain {
+            left = left.min(x);
+            top = top.min(y);
+        }
     }
     Size::new(
-        w + common.padding.horizontal(),
-        h + common.padding.vertical(),
+        w - left + common.padding.horizontal(),
+        h - top + common.padding.vertical(),
     )
 }
 

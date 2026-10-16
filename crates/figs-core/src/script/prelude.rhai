@@ -248,6 +248,14 @@ fn plot_aspect() { 4.0 / 3.0 }
 // inset plus one label line. Set it to 0 for plots that are never labelled.
 fn plot_label_room() { label_inset() + base_size() * 1.25 * 1.3 * 2.54 / 72.0 }
 
+// Clear space between a plot's outermost marks (tick labels, axis labels)
+// and its box (cm), so labels never touch the panel edge.
+fn plot_pad() { base_size() * 0.01 }
+
+// The y axis label turned 90° (reading upwards) left of the y tick labels and
+// centred on the axis (true), or horizontal above the axis (false).
+fn ylabel_rotated() { true }
+
 // ---------------------------------------------------------------------------
 // Semantic text
 // ---------------------------------------------------------------------------
@@ -703,14 +711,15 @@ fn spot(cx, cy, r) {
 // lines and bars are `path`s with the same viewbox, markers and ticks are
 // children placed `.at(x, y)` in data units and centred with `.anchor`. So the
 // mapping data -> page is done by the layout, at whatever size the plot ends
-// up, and everything is ordinary core nodes. A series is a map built by
+// up, and everything is ordinary core nodes. Tick and axis labels hang off the
+// area in the same data units, inside a `.contain()` stack that shrinks the
+// area until they fit: every margin is measured by the layout, never guessed
+// from `base_size()`. A series is a map built by
 // `line_plot` / `scatter` / `bars` / `errorbars`; styling comes from the hooks
 // in the Defaults block (`plot_line_width()`, `palette()`, `tick_length()`, …).
 // Lengths are cm, as everywhere in the framework.
 
 // --- numbers ---
-
-fn plot_cm(pt) { pt * 2.54 / 72.0 }
 
 // A finite float (NaN, infinities and non-numbers are not).
 fn plot_finite(v) {
@@ -1149,7 +1158,9 @@ fn plot_norm(x0, x1, y0, y1, p) { [(p[0] - x0) / (x1 - x0), (p[1] - y0) / (y1 - 
 // `plot(series)` / `plot(opts, series)`: axes holding the series (an array, or
 // one series). Options (all optional):
 //   x, y           [lo, hi] ranges (default: the data, widened to whole ticks)
-//   xlabel, ylabel axis labels (the y label sits above the axis, unrotated)
+//   xlabel, ylabel axis labels (the y label turned 90° left of the tick
+//                  labels; horizontal above the axis if `ylabel_rotated()`
+//                  is false)
 //   xscale, yscale "linear" (default) or "log"
 //   xticks, yticks explicit tick values
 //   legend         a corner, "auto", or "" / false for none (default legend_corner())
@@ -1353,9 +1364,14 @@ fn plot(opts, series) {
         area.push(pin(legend_box(series), where, base_size() * 0.03));
     }
 
-    // Tick labels in bands beside the area: a viewbox stack spanning the axis.
+    let parts = [stack(area)];
+
+    // Everything else hangs off the data area in the same data coordinates,
+    // in a `contain` stack: the area shrinks until all of it fits the plot's
+    // box, so each margin is exactly what its labels measure — the widest y
+    // tick label, the tallest x tick label, the half labels overhanging the
+    // axis ends — and nothing spills past the panel.
     let pad = base_size() * 0.012;                 // tick -> label (cm)
-    let lh = plot_cm(base_size() * 1.4);           // one text line, with room (cm)
     let xl = [];
     for i in 0..xa.ticks.len() {
         if xa.ticks[i] >= x0 - 1e-9 && xa.ticks[i] <= x1 + 1e-9 {
@@ -1368,39 +1384,48 @@ fn plot(opts, series) {
             yl.push(plot_text(ya.labels[i]).at(1, ya.ticks[i]).anchor(1, 0.5));
         }
     }
-    let xband_h = tl + pad + lh;
-    // The area's column: [y label, gap, area, x tick labels, x label]; the y
-    // tick labels sit beside the area in a column padded by the same heights.
-    // On top: room for a panel label at its inset (so `panels([plot(..), ..])`
-    // labels sit clear of everything; `plot_label_room()`), then the y label
-    // over the axis, then half a line for the top tick label's overhang.
-    let head = plot_label_room();
-    let right = [rect().height(head)];
+    // Left band, as tall as the area and right-aligned to the axis: the y tick
+    // labels in a viewbox stack spanning the axis (as wide as the widest
+    // label), then room for the ticks — after the y label, when it is rotated
+    // (`ylabel_rotated()`): a quarter turn swaps its footprint, so in the
+    // stretched row it is one line wide and as long as the axis, centred on it.
     let ylabel = plot_opt(opts, "ylabel", "");
-    if ylabel != "" {
-        right.push(col([plot_text(ylabel)]).stretch().height(lh));
-        head += lh;
+    let rotated = ylabel != "" && ylabel_rotated();
+    let yband = [];
+    if rotated {
+        yband.push(plot_text(ylabel).center().rotate(-90));
+        yband.push(rect().width(pad * 2));
     }
-    let above = head + lh * 0.5;
-    right.push(rect().height(lh * 0.5));
-    right.push(stack(area).flex(1));
-    right.push(col([rect().height(tl + pad), stack(xl).viewbox(x0, 0, x1, 1).flex(1)])
-        .stretch().height(xband_h));
-    let below = xband_h;
+    yband.push(stack(yl).viewbox(0, y1, 1, y0));
+    yband.push(rect().width(tl + pad));
+    parts.push(row(yband).stretch().x(x0).anchor(1, 0));
+    // Bottom band, as wide as the area: room for the ticks, the x tick labels
+    // (a viewbox stack spanning the axis), then the x label centred under it.
+    // Categories fill equal slots across the axis, so their labels are cells
+    // of a row instead, one per slot: long names wrap to the slot width rather
+    // than run into each other.
+    let xband = if cats.len() > 0 {
+        let g = pad * 0.5;
+        let cells = [];
+        for c in cats { cells.push(col([plot_text(c).center()]).stretch().pad(g).flex(1)); }
+        [rect().height(tl + pad - g), row(cells)]
+    } else {
+        [rect().height(tl + pad), stack(xl).viewbox(x0, 0, x1, 1)]
+    };
     let xlabel = plot_opt(opts, "xlabel", "");
-    if xlabel != "" {
-        right.push(col([rect().height(pad), plot_text(xlabel).center()]).stretch().height(pad + lh));
-        below += pad + lh;
+    if xlabel != "" { xband += [rect().height(pad), plot_text(xlabel).center()]; }
+    parts.push(col(xband).stretch().y(y0));
+    // An unrotated y label sits above the axis, its bottom edge half its own
+    // height up: clear of the top tick label's overhang (same text size).
+    if ylabel != "" && !rotated {
+        parts.push(plot_text(ylabel).at(x0, y1).anchor(0, 1.5));
     }
-    let left = col([
-        rect().height(above),
-        row([stack(yl).viewbox(0, y1, 1, y0), rect().width(tl + pad)]).stretch().flex(1),
-        rect().height(below),
-    ]).stretch();
-    // Room for the last x label overhanging the area (estimated from its length).
-    let last = if xl.len() > 0 { xa.labels[xa.labels.len() - 1] } else { "" };
-    let rpad = plot_cm(base_size() * 0.3 * last.len().to_float());
-    let node = row([left, col(right).stretch().flex(1), rect().width(rpad)]).stretch();
+
+    // On top: room for a panel label at its inset, so `panels([plot(..), ..])`
+    // labels sit clear of everything (`plot_label_room()`).
+    let body = stack(parts).viewbox(x0, y1, x1, y0).contain().pad(plot_pad()).flex(1);
+    let head = plot_label_room();
+    let node = col(if head > 0.0 { [rect().height(head), body] } else { [body] }).stretch();
     let ar = plot_aspect();
     if ar.to_float() > 0.0 { node = node.aspect(ar); }
     node

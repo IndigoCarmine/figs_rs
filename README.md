@@ -231,6 +231,30 @@ anchor = [0.5, 0.5]
 In scripts: `.viewbox(x0, y0, x1, y1)` and `.anchor(ax, ay)`. The framework's
 [plots](#plots) are built entirely from these.
 
+`contain = true` (script: `.contain()`) on a stack keeps everything its
+children draw inside its box: when a child — or anything nested in one — would
+hang past an edge, the stack shrinks its **content box** by exactly that
+overhang, and offsets, filling children and the viewbox map onto the smaller
+box. The stack's own size doesn't change; its padding box is the limit (so
+`padding` is the clear space kept at the edges). It is how a plot keeps its tick
+labels: the labels hang off the axes in data units, and the axes shrink until
+the widest y label, the tallest x label and the half labels centred on the axis
+ends all fit — measured, never estimated. Overhangs that don't depend on the
+box size (a label centred on an edge) settle at once; others converge in a few
+passes. On a plain stack it also makes room for negative offsets (and counts
+them in its intrinsic size).
+
+```toml
+[nodes.axes]                   # x 0..10; "end" is centred on the right edge
+type = "stack"
+viewbox = [0, 0, 10, 1]
+contain = true                 # -> the content box gives up half its width
+children = ["curve", "end"]
+```
+
+Overhangs are measured on what children actually cover, so a rotated child
+counts with its turned box.
+
 ### Rotation
 
 `rotate` (degrees) turns any node — and its whole subtree — **clockwise on the
@@ -768,8 +792,10 @@ margin — not past 0 — widened to whole ticks), `xlabel` / `ylabel`, `xscale`
 `text("p < 0.05").at(2, 0.9).anchor(0.5, 1)`.
 
 Defaults are journal-style and overridable hooks: open L-shaped axes, outward
-ticks, labels at `base_size()`, the y label horizontal above the axis (text is
-never rotated), and a legend without a box in the emptiest corner.
+ticks, labels at `base_size()`, the y label turned 90° (`.rotate(-90)`, reading
+upwards) left of the tick labels and centred on the axis — or horizontal above
+it with `ylabel_rotated()` false — category names that wrap within their slot,
+and a legend without a box in the emptiest corner.
 
 ```rhai
 fn plot_line_width() { 0.02 }   // axes + ticks, cm (default base_size() * 0.0035 ≈ 0.8 pt)
@@ -783,22 +809,30 @@ fn legend_corner() { "top-left" }  // "auto" (default) / a corner / "" for none
 fn bar_width() { 0.8 }          // fraction of the bar spacing (default 0.7)
 fn plot_aspect() { 1.0 }        // width / height of a plot panel; 0 = size it yourself (default 4:3)
 fn plot_label_room() { 0 }      // band kept free at the top for a panel label, cm
+fn plot_pad() { 0 }             // clear space between the outermost labels and the plot's box, cm (default base_size() * 0.01)
+fn ylabel_rotated() { false }   // y label horizontal above the axis (default true: turned 90° left of the tick labels)
 ```
 
 How it maps data: the plot area is a core `stack` with
 `.viewbox(xlo, yhi, xhi, ylo)`; lines and bars are `path`s with the same
 viewbox, markers, ticks and error-bar caps are children placed `.at(x, y)` in
-data units and centred with `.anchor`, and tick labels sit in narrow viewbox
-stacks beside the area. The layout performs the mapping at the plot's final
-size, so plots stretch, flex and auto-size like any other node — and every
-piece is a plain node you could have written by hand. Ticks are "nice"
+data units and centred with `.anchor`. Around it, in the same data units,
+hang a band of y tick labels (a viewbox stack spanning the axis, as wide as its
+widest label) right-aligned to `x0` with the turned y label before it, and a
+band of x tick labels and the x label below `y0` (category names as equal
+cells, one per slot). All of it sits in one [`contain`](#user-coordinates-viewbox--anchors)
+stack, so the area shrinks until every label fits the plot's box: each margin
+*is* the measured size of its labels — including the half labels overhanging
+the axis ends — and nothing spills past the panel. The layout performs the
+mapping at the plot's final size, so plots stretch, flex and auto-size like any
+other node — and every piece is a plain node you could have written by hand. Ticks are "nice"
 1/2/5 × 10ⁿ steps with at most `max_ticks()` labels and shared decimals
 (`0.0, 0.5, 1.0`, real minus signs); log axes tick each decade (labelled
 `0.01 … 1000`, or `10⁻⁵`-style past that) with minor ticks at 2–9.
 Data outside an explicit range is clipped (lines are cut at the frame,
-markers outside are dropped). Notes: the space for tick labels below the axis
-and the label overhang on the right are estimated from `base_size()`; error
-bars are vertical only.
+markers outside are dropped); a marker or `marks` node reaching past the plot's
+box makes room for itself like a label does. Note: error bars are vertical
+only.
 
 In the editor (`figs-editor`), the **Script** tab is the source of truth: press
 **Evaluate** (Ctrl+Enter) to lower the script into the editable **TOML** tab, the

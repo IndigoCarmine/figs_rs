@@ -69,15 +69,17 @@ pub(crate) fn arrange<M: LeafMeasure>(
                 out,
             );
         }
-        NodeType::Stack { children, viewbox } => {
-            layout_stack(
-                ctx,
-                children,
-                *viewbox,
-                rect.inset(node.common.padding),
-                xf,
-                out,
-            );
+        NodeType::Stack {
+            children,
+            viewbox,
+            contain,
+        } => {
+            let content = rect.inset(node.common.padding);
+            if *contain {
+                layout_stack_contained(ctx, children, *viewbox, content, xf, out);
+            } else {
+                layout_stack(ctx, children, *viewbox, content, xf, out);
+            }
         }
         _ => {}
     }
@@ -148,6 +150,86 @@ fn layout_stack<M: LeafMeasure>(
         let y = content.y + oy - ay * size.h + common.margin.top;
         arrange(ctx, child, Rect::new(x, y, size.w, size.h), xf, out);
     }
+}
+
+/// Passes of [`layout_stack_contained`]: overhangs that don't depend on the
+/// content size (a label centred on an edge) settle in one pass; the rest
+/// converge geometrically, so a few passes leave sub-point residue at most.
+const CONTAIN_PASSES: usize = 6;
+
+/// Overhang (points) below which a contained stack counts as settled.
+const CONTAIN_EPS: f32 = 0.01;
+
+/// A `contain` stack: lay the children out as [`layout_stack`] does, measure
+/// how far the boxes of everything they drew (all descendants) reach past
+/// `bounds`, inset the content box by that much on each side, and repeat until
+/// nothing overhangs. Children placed relative to the content box (offsets,
+/// viewbox mapping, filling children) move inwards; the stack itself keeps its
+/// size. Insets only grow, and never past the box (a collapsed content box
+/// stops shrinking).
+fn layout_stack_contained<M: LeafMeasure>(
+    ctx: &Ctx<M>,
+    children: &[usize],
+    viewbox: Option<ViewBox>,
+    bounds: Rect,
+    xf: Option<Affine>,
+    out: &mut Vec<ComputedNode>,
+) {
+    // Descendants report page-space boxes; measure them in the stack's frame.
+    let to_local = xf.and_then(|t| t.invert());
+    let mut inset = Edges::default();
+    let mut placed = Vec::new();
+    for _ in 0..CONTAIN_PASSES {
+        placed.clear();
+        layout_stack(ctx, children, viewbox, bounds.inset(inset), xf, &mut placed);
+        let Some(ink) = union_of(&placed, to_local) else {
+            break;
+        };
+        let over = Edges {
+            left: (bounds.x - ink.x).max(0.0),
+            top: (bounds.y - ink.y).max(0.0),
+            right: (ink.x + ink.w - (bounds.x + bounds.w)).max(0.0),
+            bottom: (ink.y + ink.h - (bounds.y + bounds.h)).max(0.0),
+        };
+        let room_w = bounds.w - inset.left - inset.right;
+        let room_h = bounds.h - inset.top - inset.bottom;
+        let settled = over.left.max(over.right) < CONTAIN_EPS || room_w <= 0.0;
+        let settled_v = over.top.max(over.bottom) < CONTAIN_EPS || room_h <= 0.0;
+        if settled && settled_v {
+            break;
+        }
+        if !settled {
+            inset.left += over.left;
+            inset.right += over.right;
+        }
+        if !settled_v {
+            inset.top += over.top;
+            inset.bottom += over.bottom;
+        }
+    }
+    out.append(&mut placed);
+}
+
+/// The smallest rect holding every node's (possibly rotated) box in `nodes`,
+/// in the frame that `to_local` maps page points into (`None`: the page);
+/// `None` if there are no nodes.
+fn union_of(nodes: &[ComputedNode], to_local: Option<Affine>) -> Option<Rect> {
+    let mut points = nodes
+        .iter()
+        .flat_map(|n| n.corners())
+        .map(|p| match &to_local {
+            Some(t) => t.apply(p),
+            None => p,
+        });
+    let first = points.next()?;
+    let (mut x0, mut y0, mut x1, mut y1) = (first.x, first.y, first.x, first.y);
+    for p in points {
+        x0 = x0.min(p.x);
+        y0 = y0.min(p.y);
+        x1 = x1.max(p.x);
+        y1 = y1.max(p.y);
+    }
+    Some(Rect::new(x0, y0, x1 - x0, y1 - y0))
 }
 
 /// `content_h`: the container is a column in an unbounded (content-sized)

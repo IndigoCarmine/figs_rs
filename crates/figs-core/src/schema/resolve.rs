@@ -188,10 +188,12 @@ pub enum NodeType {
     },
     /// Children overlap inside the content box, painted in order (later = on
     /// top), each positioned by its own `x`/`y` — in points, or in `viewbox`
-    /// units when set.
+    /// units when set. With `contain`, children that would hang past an edge
+    /// shrink the content box instead (see `RawNode::contain`).
     Stack {
         children: Vec<usize>,
         viewbox: Option<ViewBox>,
+        contain: bool,
     },
     Image(ImageProps),
     Text(TextProps),
@@ -318,6 +320,7 @@ pub fn resolve(raw: RawDocument) -> Result<Document, ResolveError> {
             NodeType::Stack {
                 children,
                 viewbox: Some(_),
+                ..
             } => Some(children.iter().copied()),
             _ => None,
         })
@@ -380,6 +383,13 @@ fn convert_node(
             reason: "values must be finite numbers".into(),
         });
     }
+    if raw.contain && raw.kind != NodeKind::Stack {
+        return Err(ResolveError::InvalidField {
+            node: id.to_string(),
+            field: "contain",
+            reason: "only a stack contains its children".into(),
+        });
+    }
     let viewbox = raw
         .viewbox
         .map(ViewBox::from_array)
@@ -424,6 +434,7 @@ fn convert_node(
         NodeKind::Stack => NodeType::Stack {
             children: resolve_children()?,
             viewbox,
+            contain: raw.contain,
         },
         NodeKind::Image => {
             let src = raw.src.clone().ok_or_else(|| ResolveError::MissingField {

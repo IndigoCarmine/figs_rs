@@ -215,6 +215,7 @@ fn blank_node(kind: NodeKind) -> RawNode {
         anchor: None,
         rotate: None,
         viewbox: None,
+        contain: false,
         children: Vec::new(),
         spacing: 0.0,
         main_axis_alignment: None,
@@ -619,6 +620,14 @@ fn build_engine(base_dir: Option<&Path>) -> Engine {
             Ok(set_node(n, |r| r.viewbox = Some(v)))
         },
     );
+    // Keep what the children draw inside the stack: overhanging children
+    // shrink the content box (and its viewbox mapping) instead.
+    engine.register_fn("contain", |n: ScriptNode| -> NodeResult {
+        if n.node.kind != NodeKind::Stack {
+            return Err(err("`contain` applies to a stack"));
+        }
+        Ok(set_node(n, |r| r.contain = true))
+    });
 
     // Color chainable setters.
     reg_color(&mut engine, "color", |r, c| r.color = Some(c));

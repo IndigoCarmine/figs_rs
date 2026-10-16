@@ -213,6 +213,13 @@ pub struct RawNode {
     /// unit. See [`crate::geom::ViewBox`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub viewbox: Option<[f32; 4]>,
+    /// `stack` only: keep everything the children draw inside the stack's
+    /// (padding-inset) box. Children that would hang past an edge — an anchored
+    /// label centred on the edge, a tick label beside a plot's axis — shrink
+    /// the content box (where offsets and the `viewbox` map) by exactly their
+    /// overhang instead. The stack's own size is unchanged.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub contain: bool,
 
     // ---- container (column / row / stack; spacing & alignment are flex-only) ----
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
