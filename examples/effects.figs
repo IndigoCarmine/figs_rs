@@ -1,0 +1,95 @@
+// PowerPoint-grade effects: drop shadows, glows, group opacity, pixelated
+// images and arrowhead styles — the finishing touches of a conference poster.
+//
+//   shadow(dx, dy, blur, color)  soft drop shadow of the node and its subtree
+//   glow(blur, color)            a halo hugging the silhouette (no offset)
+//   opacity(a)                   the whole subtree composited as one layer
+//   smooth(false)                nearest-neighbour image scaling
+//   head_style / head_width      triangle, stealth, open, barb_left/right
+//
+// All of it is visual only: layout is exactly as without the effects.
+style(#{ base_size: 14, fg: "#e8eefb" });
+
+let ink = "#e8eefb";
+
+// A section bar: gradient fill, thin light border, soft shadow; its title has
+// a dark glow plus a soft shadow of its own.
+fn bar(s) {
+    row([
+        text(s).size(30).color("#ffffff").glow(0.12, "#000000c0").shadow(0.05, 0.06, 0.15, "#00000080"),
+    ])
+        .fill(linear(90, [[0, "#3d4a73"], [0.56, "#181d2d"], [1, "#080a10"]]))
+        .stroke("#caeefb").stroke_width(0.01)
+        .shadow(0.06, 0.07, 0.2, "#00000066")
+        .pad(0.35).main("center")
+}
+
+fn note(s) { text(s).size(13).color("#e8eefb") }
+
+// A bright photo with a white label kept legible by a dark glow, and a
+// translucent caption box over its lower edge.
+let photo = stack([
+    image("img/sunlit.png").fit("cover"),
+    text("Sunlit surface").size(22).bold().color("#ffffff").glow(0.15, "#000000d0").at(0.4, 0.3),
+    col([note("A translucent box: opacity(0.75) on the whole group")])
+        .fill("#0b1020").radius(0.2).pad(0.25).opacity(0.75)
+        .x(0.4).y(4.3),
+]).height(5.6).radius(0.3).clip();
+
+// The same small scan (24 × 16 px) scaled up smoothly and pixelated.
+let scans = row([
+    col([image("img/tile.png").aspect(1.5), note("smooth (default)").center()]).flex(1).spacing(0.15),
+    col([image("img/tile.png").aspect(1.5).smooth(false), note("smooth(false)").center()]).flex(1).spacing(0.15),
+]).spacing(0.4);
+
+// Arrowhead styles, PowerPoint-sized: head length = width = 3 × the shaft.
+fn styled(style, y) {
+    arrow(0, y, 4.2, y).stroke("#ffd36b").stroke_width(0.08)
+        .head_size(0.3).head_width("4x").head_style(style)
+}
+let heads = stack([
+    styled("triangle", 0.3), styled("stealth", 1.0), styled("open", 1.7),
+    styled("barb_left", 2.4), styled("barb_right", 3.1),
+    text("triangle").size(11).color(ink).at(4.6, 0.12),
+    text("stealth").size(11).color(ink).at(4.6, 0.82),
+    text("open").size(11).color(ink).at(4.6, 1.52),
+    text("barb_left").size(11).color(ink).at(4.6, 2.22),
+    text("barb_right").size(11).color(ink).at(4.6, 2.92),
+]).height(3.5);
+
+// A gradient block arrow with a soft shadow, and an equilibrium A ⇌ B.
+let flow = stack([
+    block_arrow(0, 0.9, 6, 0.9, 0.7, 1.6, 1.3).width(6).height(1.8)
+        .fill(linear(0, ["#5ec8ff40", "#5ec8ff", "#ffd36b"]))
+        .shadow(0.08, 0.1, 0.25, "#00000080"),
+    text("A").size(20).bold().color(ink).at(7.0, 0.45),
+    stack([equilibrium(0, 0.4, 2.2, 0.4)]).at(7.7, 0.55),
+    text("B").size(20).bold().color(ink).at(10.2, 0.45),
+]).height(1.9);
+
+// A tilted sticky note: the shadow is cast on the page (it does not turn
+// with the note), so every shadow on the poster falls the same way.
+let card = row([
+    col([text("Shadows stay put when a node turns: the light comes from one side.").size(12).color("#2a2a2a")])
+        .fill("#fff6c9").radius(0.12).pad(0.3)
+        .shadow(0.12, 0.16, 0.3, "#000000a0").rotate(-3).width(8.5),
+    stack([curved_arrow(0, 1.2, 2.6, 0.2, 0.6).stroke("#ffd36b").stroke_width(0.08)
+        .head_size(0.35).head_width(0.35).head_style("stealth")]).width(2.8).height(1.4),
+]).spacing(0.6).cross("center");
+
+fn ink_col(items) { col(items).spacing(0.45).stretch() }
+
+page(30, 17.5,
+    col([
+        bar("1. Effects in the core"),
+        row([
+            ink_col([photo, scans]).flex(1.1),
+            ink_col([
+                flow,
+                note("Every head style follows the curve's tangent; widths are lengths or multiples like \"4x\" of the stroke."),
+                heads,
+                card,
+            ]).flex(1),
+        ]).spacing(0.8).stretch().flex(1),
+    ]).pad(0.8).spacing(0.7).stretch(),
+).unit("cm").background(linear(90, ["#1d2b4f", "#0b1226"]))

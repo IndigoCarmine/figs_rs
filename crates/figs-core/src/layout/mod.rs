@@ -19,7 +19,10 @@
 //! - a column's children — flex or not — take their measured (intrinsic) height,
 //!   like Flutter flex children in an unbounded main axis. `flex` is ignored
 //!   along that axis (there is no free space to share), so a `grid` of equal-flex
-//!   rows gets rows sized by their content instead of equal shares.
+//!   rows gets rows sized by their content instead of equal shares. A column
+//!   whose own height is known — an explicit `height`, or `aspect_ratio` with
+//!   its width decided — is not content-sized: its flex children share that
+//!   height as usual.
 //! - widths are decided as on a fixed page: a stretched cross axis or a flex
 //!   share hands the child a tight width, and `aspect_ratio` derives the height
 //!   from it.
@@ -169,6 +172,14 @@ fn content_sized_heights(doc: &Document) -> Vec<bool> {
         // horizontal one, which is bounded: neither it nor its subtree is
         // content-sized.
         if doc.nodes[i].common.swaps_axes() {
+            continue;
+        }
+        // A node whose height is fixed by an explicit `height` or derived from
+        // its (known) width through `aspect_ratio` is not content-sized: its
+        // children share that height as on a fixed page (so a `flex` child of
+        // an aspect column — a plot as the page root — still fills it).
+        let common = &doc.nodes[i].common;
+        if common.height.is_some() || common.aspect_ratio.is_some_and(|a| a > 0.0) {
             continue;
         }
         if std::mem::replace(&mut marks[i], true) {

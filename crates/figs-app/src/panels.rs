@@ -7,10 +7,10 @@ use std::path::PathBuf;
 
 use eframe::egui::{self, Color32, Rect, RichText, Sense, Stroke};
 use figs_core::geom::{
-    ArrowHead, Color, CrossAxisAlign, Edges, GradientStop, ImageFit, LineCap, LineJoin, LinearDir,
-    MainAxisAlign, Paint, TextAlign,
+    ArrowHead, Color, CrossAxisAlign, Edges, GradientStop, HeadStyle, HeadWidth, ImageFit, LineCap,
+    LineJoin, LinearDir, MainAxisAlign, Paint, TextAlign,
 };
-use figs_core::schema::{NodeKind, PageHeight, RawDocument, RawSegment};
+use figs_core::schema::{NodeKind, PageHeight, RawDocument, RawGlow, RawSegment, RawShadow};
 use figs_core::units::Unit;
 use figs_core::ComputedLayout;
 
@@ -307,6 +307,15 @@ fn inspector(app: &mut FigsApp, ui: &mut egui::Ui, _p: &Palette) {
                         section(ui, "Image");
                         changed |= text_single(ui, "Source", &mut node.src);
                         changed |= fit_seg(ui, "Fit", &mut node.fit);
+                        let mut smooth = node.smooth.unwrap_or(true);
+                        if ui
+                            .checkbox(&mut smooth, "Smooth scaling")
+                            .on_hover_text("Off: nearest-neighbour (blocky pixels)")
+                            .changed()
+                        {
+                            node.smooth = (!smooth).then_some(false);
+                            changed = true;
+                        }
                     }
                     NodeKind::Column | NodeKind::Row => {
                         section(ui, "Container");
@@ -370,6 +379,8 @@ fn inspector(app: &mut FigsApp, ui: &mut egui::Ui, _p: &Palette) {
                         if kind != NodeKind::Ellipse {
                             changed |= head_seg(ui, "Head", &mut node.head);
                             changed |= opt_num(ui, "Head size", &mut node.head_size, 0.25);
+                            changed |= head_width_field(ui, "Head width", &mut node.head_width);
+                            changed |= head_style_combo(ui, "Head style", &mut node.head_style);
                         }
                     }
                 }
@@ -387,6 +398,12 @@ fn inspector(app: &mut FigsApp, ui: &mut egui::Ui, _p: &Palette) {
                         .on_hover_text("Keep the children inside the (rounded) box")
                         .changed();
                 }
+
+                // Shadow / glow / opacity of the node and its subtree.
+                section(ui, "Effects");
+                changed |= opt_num(ui, "Opacity", &mut node.opacity, 0.01);
+                changed |= shadow_fields(ui, &mut node.shadow);
+                changed |= glow_fields(ui, &mut node.glow);
 
                 section(ui, "Layout");
                 changed |= opt_num(ui, "Flex", &mut node.flex, 0.1);
@@ -414,6 +431,97 @@ fn inspector(app: &mut FigsApp, ui: &mut egui::Ui, _p: &Palette) {
 }
 
 // ---- inspector widgets ----------------------------------------------------
+
+/// `shadow`: a checkbox to add/remove it, then offset, blur and colour.
+fn shadow_fields(ui: &mut egui::Ui, v: &mut Option<RawShadow>) -> bool {
+    let mut on = v.is_some();
+    let mut changed = false;
+    if ui.checkbox(&mut on, "Shadow").changed() {
+        *v = on.then(|| RawShadow {
+            dx: 0.1,
+            dy: 0.1,
+            blur: 0.2,
+            ..RawShadow::default()
+        });
+        changed = true;
+    }
+    if let Some(s) = v {
+        changed |= num(ui, "  dx", &mut s.dx, 0.01);
+        changed |= num(ui, "  dy", &mut s.dy, 0.01);
+        changed |= num(ui, "  blur", &mut s.blur, 0.01);
+        changed |= num(ui, "  spread", &mut s.spread, 0.01);
+        changed |= opt_color(ui, "  color", &mut s.color);
+    }
+    changed
+}
+
+/// `glow`: a checkbox to add/remove it, then blur and colour.
+fn glow_fields(ui: &mut egui::Ui, v: &mut Option<RawGlow>) -> bool {
+    let mut on = v.is_some();
+    let mut changed = false;
+    if ui.checkbox(&mut on, "Glow").changed() {
+        *v = on.then(|| RawGlow {
+            blur: 0.1,
+            ..RawGlow::default()
+        });
+        changed = true;
+    }
+    if let Some(g) = v {
+        changed |= num(ui, "  blur", &mut g.blur, 0.01);
+        changed |= opt_color(ui, "  color", &mut g.color);
+    }
+    changed
+}
+
+/// `head_width`: a length; a `"3x"` multiple is shown read-only (edit in TOML).
+fn head_width_field(ui: &mut egui::Ui, label: &str, v: &mut Option<HeadWidth>) -> bool {
+    match v {
+        Some(HeadWidth::PerStroke(k)) => {
+            ui.horizontal(|ui| {
+                ui.label(label);
+                ui.label(format!("{k}x stroke width"));
+            });
+            false
+        }
+        _ => {
+            let mut abs = match v {
+                Some(HeadWidth::Abs(w)) => Some(*w),
+                _ => None,
+            };
+            let changed = opt_num(ui, label, &mut abs, 0.25);
+            if changed {
+                *v = abs.map(HeadWidth::Abs);
+            }
+            changed
+        }
+    }
+}
+
+fn head_style_combo(ui: &mut egui::Ui, label: &str, v: &mut Option<HeadStyle>) -> bool {
+    let options = [
+        (HeadStyle::Triangle, "triangle"),
+        (HeadStyle::Stealth, "stealth"),
+        (HeadStyle::Open, "open"),
+        (HeadStyle::BarbLeft, "barb_left"),
+        (HeadStyle::BarbRight, "barb_right"),
+    ];
+    let cur = v.unwrap_or_default();
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label(label);
+        egui::ComboBox::from_id_salt(label)
+            .selected_text(options.iter().find(|o| o.0 == cur).map_or("", |o| o.1))
+            .show_ui(ui, |ui| {
+                for (style, name) in options {
+                    if ui.selectable_label(cur == style, name).clicked() && cur != style {
+                        *v = (style != HeadStyle::Triangle).then_some(style);
+                        changed = true;
+                    }
+                }
+            });
+    });
+    changed
+}
 
 fn header(ui: &mut egui::Ui, badge: (Color32, &str), title: &str) {
     ui.horizontal(|ui| {
@@ -1223,7 +1331,7 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
                     "stroke_width",
                     "join",
                 ]),
-                Some(NodeKind::Image) => v.extend(["src", "fit"]),
+                Some(NodeKind::Image) => v.extend(["src", "fit", "smooth"]),
                 Some(NodeKind::Rect) => {
                     v.extend(["fill", "stroke", "stroke_width", "corner_radius"])
                 }
@@ -1238,6 +1346,8 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
                     "join",
                     "head",
                     "head_size",
+                    "head_width",
+                    "head_style",
                 ]),
                 Some(NodeKind::Path) => v.extend([
                     "points",
@@ -1252,6 +1362,8 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
                     "join",
                     "head",
                     "head_size",
+                    "head_width",
+                    "head_style",
                 ]),
                 Some(NodeKind::Ellipse) => {
                     v.extend(["fill", "stroke", "stroke_width", "dash", "cap", "join"])
@@ -1283,6 +1395,8 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
                     "join",
                     "head",
                     "head_size",
+                    "head_width",
+                    "head_style",
                 ]),
             }
             v.extend([
@@ -1296,6 +1410,9 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
                 "y",
                 "anchor",
                 "rotate",
+                "shadow",
+                "glow",
+                "opacity",
             ]);
             v
         }
@@ -1310,6 +1427,7 @@ fn enum_values(key: &str) -> Vec<&'static str> {
         ],
         "cap" => vec!["butt", "round", "square"],
         "head" => vec!["none", "start", "end", "both"],
+        "head_style" => vec!["triangle", "stealth", "open", "barb_left", "barb_right"],
         "sweep" => vec!["cw", "ccw"],
         "fit" => vec!["contain", "cover", "fill"],
         "align" => vec!["left", "center", "right", "justify"],

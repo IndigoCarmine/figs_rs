@@ -4,7 +4,8 @@
 //! straight back to a TOML node (needed by the Phase 2 editor).
 
 use crate::geom::{
-    Affine, ArrowHead, Brush, Color, ImageFit, PathSegment, Point, Rect, StrokeStyle, TextAlign,
+    Affine, ArrowHead, Brush, Color, Effects, HeadStyle, ImageFit, PathSegment, Point, Rect,
+    StrokeStyle, TextAlign,
 };
 
 /// A laid-out page: geometry plus a flat list of nodes in paint order
@@ -62,6 +63,14 @@ pub struct ComputedNode {
     /// case) = unclipped. Like `transform`, each node carries its own
     /// accumulated list, independent of paint order.
     pub clips: Vec<ClipRegion>,
+    /// Shadows / glow / group opacity applying to this node **and its whole
+    /// subtree** as one group (`None` = no effect, the common case). Visual
+    /// only: layout ignores them.
+    pub effects: Option<Box<Effects>>,
+    /// Number of nodes of this node's subtree, which directly follow it in
+    /// [`ComputedLayout::nodes`] (pre-order): `nodes[i + 1 ..= i +
+    /// descendants]`. `0` for leaves.
+    pub descendants: usize,
 }
 
 /// A clipping container's region: the rounded box `rect` (corner `radius`)
@@ -159,6 +168,8 @@ pub enum PaintContent {
     Image {
         src: std::path::PathBuf,
         fit: ImageFit,
+        /// `false`: nearest-neighbour scaling (blocky pixels).
+        smooth: bool,
     },
     Text(TextBox),
     /// A polyline/polygon (`line`, `arrow`, `path`).
@@ -213,10 +224,13 @@ pub struct PathPaint {
     pub segments: Vec<PathSegment>,
     pub fill: Option<Brush>,
     pub stroke: Option<StrokeStyle>,
-    /// Arrowheads (filled with the stroke color); ignored when closed.
+    /// Arrowheads (in the stroke color); ignored when closed.
     pub head: ArrowHead,
-    /// Arrowhead length; its base is 0.8x as wide.
+    /// Arrowhead length (tip to base), points.
     pub head_size: f32,
+    /// Arrowhead base width, points.
+    pub head_width: f32,
+    pub head_style: HeadStyle,
 }
 
 impl PathPaint {
@@ -225,10 +239,20 @@ impl PathPaint {
         matches!(self.segments.last(), Some(PathSegment::Close))
     }
 
-    /// The stroked shaft (pulled back into any arrowheads) and the head
-    /// triangles to fill in the stroke color — shared by every backend.
+    /// The stroked shaft (pulled back into any arrowheads), the filled head
+    /// polygons and the stroked open heads, in the stroke color — shared by
+    /// every backend.
     pub fn stroke_geometry(&self) -> crate::path::StrokeGeometry {
-        crate::path::stroke_geometry(&self.segments, self.head, self.head_size)
+        crate::path::stroke_geometry(
+            &self.segments,
+            self.head,
+            crate::path::HeadShape {
+                style: self.head_style,
+                length: self.head_size,
+                width: self.head_width,
+            },
+            self.stroke.as_ref().map_or(0.0, |s| s.width),
+        )
     }
 }
 

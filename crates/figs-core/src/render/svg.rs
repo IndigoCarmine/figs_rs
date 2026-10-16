@@ -29,16 +29,25 @@
 //!   `<g transform>` — so they turn with the node.
 //! - **Clips** are `<g clip-path="url(#…)">` groups around the clipped nodes,
 //!   with the `<clipPath>` outline in page coordinates.
+//! - **Opacity** groups are `<g opacity="…">`.
+//! - **Shadows / glows** are `<image class="figs-shadow">` elements holding
+//!   the same blurred raster the PNG and PDF backends draw
+//!   ([`super::effects`]), rather than an `feGaussianBlur` filter: filter
+//!   regions, resolution and `feMorphology` (square, not round) differ
+//!   between viewers, while the embedded raster looks the same everywhere.
+//! - **`smooth = false` images** carry `image-rendering="optimizeSpeed"` and
+//!   `style="image-rendering:pixelated"`, and are upscaled nearest-neighbour
+//!   (as in PDF) for viewers that ignore both.
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::Path;
 
 use crate::geom::{
-    Affine, Brush, Color, ImageFit, LineCap, LineJoin, PathSegment, Point, Rect, StrokeStyle,
-    TextAlign,
+    Affine, Brush, Color, ImageFit, LineCap, LineJoin, PathSegment, Point, Rect, Shadow,
+    StrokeStyle, TextAlign,
 };
-use crate::layout::{ClipRegion, ComputedLayout, PageGeom, PathPaint, TextBox};
+use crate::layout::{ClipRegion, ComputedLayout, ComputedNode, PageGeom, PathPaint, TextBox};
 use crate::text::{DecorationKind, FontStore, ShapedText};
 
 use super::geometry;
@@ -53,6 +62,8 @@ pub struct SvgRenderer<'a> {
     base_dir: &'a Path,
     width: f32,
     height: f32,
+    /// Page resolution, for shadow rasters.
+    dpi: f32,
     defs: String,
     body: String,
     next_id: usize,
@@ -68,6 +79,7 @@ impl<'a> SvgRenderer<'a> {
             base_dir: opts.base_dir,
             width: 0.0,
             height: 0.0,
+            dpi: crate::schema::resolve::DEFAULT_DPI,
             defs: String::new(),
             body: String::new(),
             next_id: 0,
@@ -135,7 +147,7 @@ impl<'a> SvgRenderer<'a> {
 
     /// Write an image element (and its clip, for `cover`). Returns false when
     /// the image can't be read so the caller draws a placeholder.
-    fn try_image(&mut self, rect: Rect, path: &Path, fit: ImageFit) -> bool {
+    fn try_image(&mut self, rect: Rect, path: &Path, fit: ImageFit, smooth: bool) -> bool {
         let Ok(bytes) = std::fs::read(path) else {
             return false;
         };
@@ -149,7 +161,20 @@ impl<'a> SvgRenderer<'a> {
         if rect.w <= 0.0 || rect.h <= 0.0 {
             return true;
         }
+        let dest = geometry::image_placement(rect, iw as f32, ih as f32, fit);
+        let pixelated = geometry::pixelated_factor(smooth, iw as f32, ih as f32, dest);
         let (mime, payload) = match image::guess_format(&bytes) {
+            _ if pixelated.is_some() => {
+                let up = geometry::upscale_nearest(&decoded.to_rgba8(), pixelated.unwrap_or(1));
+                let mut png = Vec::new();
+                if up
+                    .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+                    .is_err()
+                {
+                    return false;
+                }
+                ("image/png", png)
+            }
             Ok(image::ImageFormat::Png) => ("image/png", bytes),
             Ok(image::ImageFormat::Jpeg) => ("image/jpeg", bytes),
             _ => {
@@ -163,7 +188,6 @@ impl<'a> SvgRenderer<'a> {
                 ("image/png", png)
             }
         };
-        let dest = geometry::image_placement(rect, iw as f32, ih as f32, fit);
         let clip = if fit == ImageFit::Cover {
             let id = self.fresh_id("clip");
             let _ = writeln!(
@@ -178,9 +202,14 @@ impl<'a> SvgRenderer<'a> {
         } else {
             String::new()
         };
+        let rendering = if smooth {
+            ""
+        } else {
+            " image-rendering=\"optimizeSpeed\" style=\"image-rendering:pixelated\""
+        };
         let _ = writeln!(
             self.body,
-            "<image x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" preserveAspectRatio=\"none\"{clip} \
+            "<image x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" preserveAspectRatio=\"none\"{clip}{rendering} \
              xlink:href=\"data:{mime};base64,{}\"/>",
             num(dest.x),
             num(dest.y),
@@ -511,9 +540,44 @@ impl Renderer for SvgRenderer<'_> {
         self.body.push_str("</g>\n");
     }
 
+    fn push_opacity(&mut self, alpha: f32, _group: &[ComputedNode]) {
+        let _ = writeln!(self.body, "<g opacity=\"{}\">", fmt_decimals(alpha, 4));
+    }
+
+    fn pop_opacity(&mut self) {
+        self.body.push_str("</g>\n");
+    }
+
+    fn draw_shadow(&mut self, group: &[ComputedNode], shadow: &Shadow) {
+        let opts = RenderOptions {
+            fonts: self.fonts,
+            base_dir: self.base_dir,
+        };
+        let page = Rect::new(0.0, 0.0, self.width, self.height);
+        let scale = super::effects::vector_scale(shadow, self.dpi);
+        let Some(raster) = super::effects::shadow_raster(group, shadow, page, scale, &opts) else {
+            return;
+        };
+        let Ok(png) = raster.pixmap.encode_png() else {
+            return;
+        };
+        let at = raster.rect();
+        let _ = writeln!(
+            self.body,
+            "<image class=\"figs-shadow\" aria-hidden=\"true\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" \
+             preserveAspectRatio=\"none\" xlink:href=\"data:image/png;base64,{}\"/>",
+            num(at.x),
+            num(at.y),
+            num(at.w),
+            num(at.h),
+            base64(&png)
+        );
+    }
+
     fn begin_page(&mut self, page: &PageGeom) {
         self.width = page.width_pt;
         self.height = page.height_pt;
+        self.dpi = page.dpi;
         // Same default as PNG: white when no background is given.
         let white = Brush::Solid(Color::WHITE);
         let bg = page.background.as_ref().unwrap_or(&white);
@@ -651,9 +715,9 @@ impl Renderer for SvgRenderer<'_> {
         self.decorations(&shaped, rect, text.align, DecorationKind::Strike);
     }
 
-    fn draw_image(&mut self, rect: Rect, src: &Path, fit: ImageFit) {
+    fn draw_image(&mut self, rect: Rect, src: &Path, fit: ImageFit, smooth: bool) {
         let resolved = geometry::resolve_image(self.base_dir, src);
-        if self.try_image(rect, &resolved, fit) {
+        if self.try_image(rect, &resolved, fit, smooth) {
             return;
         }
         tracing::warn!(path = %resolved.display(), "image unavailable; drawing placeholder");
@@ -682,8 +746,12 @@ impl Renderer for SvgRenderer<'_> {
         let geo = path.stroke_geometry();
         self.path_element(&geo.shaft, None, Some(stroke));
         let head = Brush::Solid(stroke.color);
-        for tri in &geo.heads {
-            self.path_element(&geometry::polygon(tri), Some(&head), None);
+        for poly in &geo.heads {
+            self.path_element(&geometry::polygon(poly), Some(&head), None);
+        }
+        let chevron = super::open_head_stroke(stroke);
+        for v in &geo.open_heads {
+            self.path_element(&geometry::polyline(v), None, Some(&chevron));
         }
     }
 

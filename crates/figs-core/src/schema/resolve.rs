@@ -13,8 +13,9 @@
 use std::collections::HashMap;
 
 use crate::geom::{
-    ArcSweep, ArrowHead, Axis, Color, CrossAxisAlign, Edges, ImageFit, LineJoin, MainAxisAlign,
-    Paint, PathSegment, Point, StrokeStyle, TextAlign, ViewBox,
+    ArcSweep, ArrowHead, Axis, Color, CrossAxisAlign, Edges, Effects, HeadStyle, HeadWidth,
+    ImageFit, LineJoin, MainAxisAlign, Paint, PathSegment, Point, Shadow, StrokeStyle, TextAlign,
+    ViewBox,
 };
 use crate::path::arc_to_cubics;
 
@@ -31,6 +32,15 @@ pub const DEFAULT_LINE_HEIGHT: f32 = 1.2;
 pub const DEFAULT_SHAPE_STROKE_WIDTH: f32 = 1.0;
 /// Default arrowhead length as a multiple of the stroke width.
 pub const DEFAULT_HEAD_SIZE_PER_STROKE: f32 = 5.0;
+/// Default arrowhead base width as a multiple of its length.
+pub const DEFAULT_HEAD_WIDTH_PER_SIZE: f32 = 0.8;
+/// Default `shadow` colour: translucent black.
+pub const DEFAULT_SHADOW_COLOR: Color = Color {
+    r: 0.0,
+    g: 0.0,
+    b: 0.0,
+    a: 0.5,
+};
 
 /// Errors produced while resolving a raw document. Each variant names the node
 /// at fault where applicable.
@@ -126,6 +136,8 @@ pub struct Node {
     pub id: String,
     pub common: Common,
     pub kind: NodeType,
+    /// Shadows / glow / group opacity (default: none). Visual only.
+    pub effects: Effects,
 }
 
 /// Layout properties shared by every node type, lengths in points.
@@ -248,6 +260,8 @@ pub struct Decoration {
 pub struct ImageProps {
     pub src: String,
     pub fit: ImageFit,
+    /// Smooth (bilinear) scaling; `false` = nearest neighbour (blocky pixels).
+    pub smooth: bool,
 }
 
 /// A resolved text node: the node-level style plus optional inline spans.
@@ -333,8 +347,11 @@ pub struct PathProps {
     pub stroke: Option<StrokeStyle>,
     /// Ignored when `closed` or when there is no stroke.
     pub head: ArrowHead,
-    /// Arrowhead length in points (its width is 0.8x this).
+    /// Arrowhead length in points.
     pub head_size: f32,
+    /// Arrowhead base width in points (default 0.8 × `head_size`).
+    pub head_width: f32,
+    pub head_style: HeadStyle,
     /// User coordinates of `segments`, mapped onto the content box (`None`:
     /// segments are points from the content-box origin).
     pub viewbox: Option<ViewBox>,
@@ -624,6 +641,7 @@ fn convert_node(
             NodeType::Image(ImageProps {
                 src,
                 fit: raw.fit.unwrap_or_default(),
+                smooth: raw.smooth.unwrap_or(true),
             })
         }
         NodeKind::Text => {
@@ -718,16 +736,30 @@ fn convert_node(
             } else {
                 ArrowHead::None
             };
+            let stroke_w = stroke.as_ref().map_or(0.0, |s| s.width);
             let head_size = match raw.head_size {
                 Some(h) => h * factor,
-                None => stroke.as_ref().map_or(0.0, |s| s.width) * DEFAULT_HEAD_SIZE_PER_STROKE,
+                None => stroke_w * DEFAULT_HEAD_SIZE_PER_STROKE,
             };
+            let head_width = match raw.head_width {
+                Some(HeadWidth::Abs(w)) => w * factor,
+                Some(w @ HeadWidth::PerStroke(_)) => w.resolve(stroke_w),
+                None => head_size * DEFAULT_HEAD_WIDTH_PER_SIZE,
+            };
+            if !head_width.is_finite() || head_width < 0.0 {
+                return Err(invalid(
+                    "head_width",
+                    "must be a non-negative length or multiple like \"3x\"".into(),
+                ));
+            }
             NodeType::Path(PathProps {
                 segments,
                 fill: fill.clone(),
                 stroke,
                 head: raw.head.unwrap_or(default_head),
                 head_size,
+                head_width,
+                head_style: raw.head_style.unwrap_or_default(),
                 viewbox,
             })
         }
@@ -737,11 +769,69 @@ fn convert_node(
         }),
     };
 
+    let effects = effects(id, raw, factor)?;
+    if raw.smooth.is_some() && raw.kind != NodeKind::Image {
+        return Err(ResolveError::InvalidField {
+            node: id.to_string(),
+            field: "smooth",
+            reason: "only an image has smooth/pixelated scaling".into(),
+        });
+    }
     Ok(Node {
         id: id.to_string(),
         common,
         kind,
+        effects,
     })
+}
+
+/// `shadow` / `glow` / `opacity`, validated and converted to points. A glow
+/// is a shadow with no offset whose silhouette is grown by `spread` (default
+/// half its blur) first; it paints over the drop shadow.
+fn effects(id: &str, raw: &RawNode, factor: f32) -> Result<Effects, ResolveError> {
+    let invalid = |field, reason: &str| ResolveError::InvalidField {
+        node: id.to_string(),
+        field,
+        reason: reason.to_string(),
+    };
+    let mut fx = Effects::default();
+    if let Some(o) = raw.opacity {
+        if !(0.0..=1.0).contains(&o) {
+            return Err(invalid("opacity", "must be a number from 0 to 1"));
+        }
+        fx.opacity = o;
+    }
+    if let Some(s) = &raw.shadow {
+        if ![s.dx, s.dy, s.blur, s.spread].iter().all(|v| v.is_finite()) || s.blur < 0.0 {
+            return Err(invalid(
+                "shadow",
+                "dx/dy/spread must be finite numbers and blur >= 0",
+            ));
+        }
+        fx.shadows.push(Shadow {
+            dx: s.dx * factor,
+            dy: s.dy * factor,
+            blur: s.blur * factor,
+            spread: s.spread * factor,
+            color: s.color.unwrap_or(DEFAULT_SHADOW_COLOR),
+        });
+    }
+    if let Some(g) = &raw.glow {
+        let spread = g.spread.unwrap_or(g.blur / 2.0);
+        if !(g.blur.is_finite() && g.blur >= 0.0 && spread.is_finite()) {
+            return Err(invalid("glow", "blur must be >= 0 and spread finite"));
+        }
+        fx.shadows.push(Shadow {
+            dx: 0.0,
+            dy: 0.0,
+            blur: g.blur * factor,
+            spread: spread * factor,
+            color: g.color.unwrap_or(Color::BLACK),
+        });
+    }
+    // A fully transparent shadow paints nothing.
+    fx.shadows.retain(|s| s.color.a > 0.0);
+    Ok(fx)
 }
 
 /// Build the resolved segment list (points, scaled by `factor`) from `points`

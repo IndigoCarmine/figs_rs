@@ -467,6 +467,50 @@ fn circle(r) { ellipse().width(2 * r).height(2 * r) }
 // A circle of radius `r` centered on (cx, cy) of the enclosing `stack`.
 fn circle(cx, cy, r) { circle(r).at(cx - r, cy - r) }
 
+// A block arrow from (x1, y1) to its tip (x2, y2): a shaft `shaft_w` wide,
+// then a triangular head `head_w` across and `head_len` long. One closed
+// `path` (7 corners) filled with `accent()` — chain `.fill(linear(0, [...]))`
+// for a gradient, `.stroke(..)` for an outline, `.shadow(..)` for depth.
+fn block_arrow(x1, y1, x2, y2, shaft_w, head_w, head_len) {
+    let f = chord_frame("block_arrow", x1, y1, x2, y2);
+    let nx = f[0];
+    let ny = f[1];
+    let len = f[2];
+    let hl = head_len.to_float();
+    if hl > len { hl = len; }
+    // Unit along the chord: (-ny, nx); base of the head on the chord.
+    let bx = x2 - (-ny) * hl;
+    let by = y2 - nx * hl;
+    let s = shaft_w / 2.0;
+    let h = head_w / 2.0;
+    path([
+        [x1 + nx * s, y1 + ny * s], [bx + nx * s, by + ny * s], [bx + nx * h, by + ny * h],
+        [x2, y2],
+        [bx - nx * h, by - ny * h], [bx - nx * s, by - ny * s], [x1 - nx * s, y1 - ny * s],
+    ]).closed().fill(accent())
+}
+
+// The equilibrium arrows ⇌ between (x1, y1) and (x2, y2): two harpoons
+// (half-barb heads, `head_style("barb_left")`) `gap` apart (default 4 ×
+// `annotation_width()`), the upper one pointing at (x2, y2), the lower one
+// back at (x1, y1), barbs on the outside. A `stack` of two `arrow`s in
+// `fg()` (black by default), `annotation_width()` wide.
+fn equilibrium(x1, y1, x2, y2) { equilibrium(x1, y1, x2, y2, annotation_width() * 4.0) }
+
+fn equilibrium(x1, y1, x2, y2, gap) {
+    let f = chord_frame("equilibrium", x1, y1, x2, y2);
+    let ox = f[0] * gap / 2.0;
+    let oy = f[1] * gap / 2.0;
+    let w = annotation_width();
+    let fwd = arrow(x1 + ox, y1 + oy, x2 + ox, y2 + oy).head_style("barb_left").stroke_width(w);
+    let back = arrow(x2 - ox, y2 - oy, x1 - ox, y1 - oy).head_style("barb_left").stroke_width(w);
+    if fg() != "" {
+        fwd = fwd.stroke(fg());
+        back = back.stroke(fg());
+    }
+    stack([fwd, back])
+}
+
 // ---------------------------------------------------------------------------
 // Curves (sugar over the core `path` curve builders .quad/.cubic/.arc)
 // ---------------------------------------------------------------------------

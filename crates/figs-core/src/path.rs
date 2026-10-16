@@ -5,7 +5,7 @@
 
 use std::f32::consts::{FRAC_PI_2, TAU};
 
-use crate::geom::{ArrowHead, PathSegment, Point};
+use crate::geom::{ArrowHead, HeadStyle, PathSegment, Point};
 
 const EPS: f32 = 1e-6;
 
@@ -289,48 +289,78 @@ fn pieces(segments: &[PathSegment]) -> Vec<Piece> {
 // Arrowheads
 // ---------------------------------------------------------------------------
 
+/// The shape of the arrowheads of a path: style, length (tip to base) and
+/// base width, in points.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HeadShape {
+    pub style: HeadStyle,
+    pub length: f32,
+    pub width: f32,
+}
+
+impl HeadShape {
+    /// The classic head: a filled triangle `length` long and `0.8 × length`
+    /// wide.
+    pub fn triangle(length: f32) -> Self {
+        HeadShape {
+            style: HeadStyle::Triangle,
+            length,
+            width: 0.8 * length,
+        }
+    }
+}
+
 /// What to stroke and fill for an open path with arrowheads.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StrokeGeometry {
     /// The path to stroke: the input with each headed end pulled back into
-    /// its head (by half the head length, along the curve) so no line cap
-    /// pokes out past the tip.
+    /// its head (along the curve) so no line cap pokes out past the tip.
     pub shaft: Vec<PathSegment>,
-    /// Filled arrowhead triangles `[tip, base corner, base corner]` (paint
-    /// them in the stroke color, solid even when the stroke is dashed).
-    pub heads: Vec<[Point; 3]>,
+    /// Filled head polygons (closed; paint them in the stroke color, solid
+    /// even when the stroke is dashed): a triangle `[tip, base corner, base
+    /// corner]`, a stealth head `[tip, corner, notch, corner]`, or a barb
+    /// `[tip, outer corner, inner base]`.
+    pub heads: Vec<Vec<Point>>,
+    /// Open heads `[corner, tip, corner]`: polylines to stroke in the stroke
+    /// color and width (solid, mitered).
+    pub open_heads: Vec<[Point; 3]>,
 }
 
-/// Split a path into its stroked shaft and arrowhead triangles. Each head
-/// points along the path's tangent at that end (towards the tip from the
-/// nearest distinct control point), is `head_size` long and `0.8 × head_size`
-/// wide at its base. Closed paths, `ArrowHead::None` and non-positive sizes
-/// return the path unchanged with no heads.
+/// Split a path into its stroked shaft and arrowheads. Each head points along
+/// the path's tangent at that end (towards the tip from the nearest distinct
+/// control point) and is `shape.length` long and `shape.width` wide at its
+/// base (see [`HeadStyle`]); `stroke_width` sizes what the shaft needs (a
+/// barb's inner edge, an open head's miter). Closed paths, `ArrowHead::None`
+/// and non-positive lengths return the path unchanged with no heads.
 pub fn stroke_geometry(
     segments: &[PathSegment],
     head: ArrowHead,
-    head_size: f32,
+    shape: HeadShape,
+    stroke_width: f32,
 ) -> StrokeGeometry {
     let unchanged = || StrokeGeometry {
         shaft: segments.to_vec(),
         heads: Vec::new(),
+        open_heads: Vec::new(),
     };
     let closed = segments.iter().any(|s| matches!(s, PathSegment::Close));
     let mut ps = pieces(segments);
-    if closed || head == ArrowHead::None || head_size <= 0.0 || ps.is_empty() {
+    if closed || head == ArrowHead::None || shape.length <= 0.0 || ps.is_empty() {
         return unchanged();
     }
     let mut heads = Vec::new();
+    let mut open_heads = Vec::new();
+    let mut add = |part: Option<HeadPart>| match part {
+        Some(HeadPart::Filled(poly)) => heads.push(poly),
+        Some(HeadPart::Open(v)) => open_heads.push(v),
+        None => {}
+    };
     if head.at_end() {
-        if let Some(tri) = head_at_end(&mut ps, head_size) {
-            heads.push(tri);
-        }
+        add(head_at_end(&mut ps, shape, stroke_width));
     }
     if head.at_start() {
         let mut rev: Vec<Piece> = ps.iter().rev().map(Piece::reversed).collect();
-        if let Some(tri) = head_at_end(&mut rev, head_size) {
-            heads.push(tri);
-        }
+        add(head_at_end(&mut rev, shape, stroke_width));
         ps = rev.iter().rev().map(Piece::reversed).collect();
     }
     let Some(first) = ps.first() else {
@@ -339,12 +369,25 @@ pub fn stroke_geometry(
     let mut shaft = Vec::with_capacity(ps.len() + 1);
     shaft.push(PathSegment::MoveTo(first.start()));
     shaft.extend(ps.iter().map(Piece::segment));
-    StrokeGeometry { shaft, heads }
+    StrokeGeometry {
+        shaft,
+        heads,
+        open_heads,
+    }
 }
+
+/// One arrowhead: a polygon to fill or a chevron to stroke.
+enum HeadPart {
+    Filled(Vec<Point>),
+    Open([Point; 3]),
+}
+
+/// Where a stealth head's notch sits, as a fraction of its length from the tip.
+pub const STEALTH_NOTCH: f32 = 0.6;
 
 /// Arrowhead at the end of `ps`, trimming the last piece back into it.
 /// `None` (and `ps` untouched) when every point coincides with the tip.
-fn head_at_end(ps: &mut Vec<Piece>, len: f32) -> Option<[Point; 3]> {
+fn head_at_end(ps: &mut Vec<Piece>, shape: HeadShape, stroke_width: f32) -> Option<HeadPart> {
     let tip = ps.last()?.end();
     // Tangent: from the nearest distinct point of the control polygon.
     let from = ps
@@ -354,13 +397,65 @@ fn head_at_end(ps: &mut Vec<Piece>, len: f32) -> Option<[Point; 3]> {
         .find(|p| dist(*p, tip) > EPS)?;
     let d = dist(from, tip);
     let (ux, uy) = ((tip.x - from.x) / d, (tip.y - from.y) / d);
-    let base = Point::new(tip.x - ux * len, tip.y - uy * len);
-    let half = 0.4 * len;
-    let tri = [
-        tip,
-        Point::new(base.x - uy * half, base.y + ux * half),
-        Point::new(base.x + uy * half, base.y - ux * half),
-    ];
+    // Left of the direction of travel on a y-down page: (uy, -ux).
+    let (lx, ly) = (uy, -ux);
+    let len = shape.length;
+    let half = shape.width.max(0.0) / 2.0;
+    // `along` back from `apex` towards the tail, `side` to the left.
+    let at = |apex: Point, along: f32, side: f32| {
+        Point::new(
+            apex.x - ux * along + lx * side,
+            apex.y - uy * along + ly * side,
+        )
+    };
+    let (part, back) = match shape.style {
+        HeadStyle::Triangle => (
+            HeadPart::Filled(vec![tip, at(tip, len, -half), at(tip, len, half)]),
+            0.5 * len,
+        ),
+        HeadStyle::Stealth => (
+            HeadPart::Filled(vec![
+                tip,
+                at(tip, len, -half),
+                at(tip, STEALTH_NOTCH * len, 0.0),
+                at(tip, len, half),
+            ]),
+            0.5 * len,
+        ),
+        HeadStyle::Open => {
+            // Pull the chevron back so its mitered apex (half the stroke
+            // width / sin(half angle) past the geometric one) sits on the tip.
+            let hyp = (len * len + half * half).sqrt();
+            let sin = if hyp > EPS { half / hyp } else { 1.0 };
+            let inset = if sin > 0.25 {
+                (stroke_width / 2.0) / sin
+            } else {
+                0.0 // past the miter limit (4) the apex is bevelled
+            };
+            let apex = at(tip, inset, 0.0);
+            (
+                HeadPart::Open([at(apex, len, half), apex, at(apex, len, -half)]),
+                inset,
+            )
+        }
+        HeadStyle::BarbLeft | HeadStyle::BarbRight => {
+            let s = if shape.style == HeadStyle::BarbLeft {
+                1.0
+            } else {
+                -1.0
+            };
+            // The barb's inner base sits on the far edge of the shaft, which
+            // is cut at the base: it ends flush and the tip stays sharp.
+            (
+                HeadPart::Filled(vec![
+                    tip,
+                    at(tip, len, s * half),
+                    at(tip, len, -s * stroke_width / 2.0),
+                ]),
+                len,
+            )
+        }
+    };
 
     // Drop trailing pieces collapsed onto the tip, then pull the last real
     // one back so it ends `back` from the tip (measured straight, found by
@@ -370,8 +465,8 @@ fn head_at_end(ps: &mut Vec<Piece>, len: f32) -> Option<[Point; 3]> {
     }
     let last = *ps.last()?;
     let chord = dist(last.start(), tip);
-    if chord > EPS {
-        let back = (0.5 * len).min(chord);
+    if chord > EPS && back > 0.0 {
+        let back = back.min(chord);
         *ps.last_mut()? = match last {
             // Straight: exact.
             Piece::Line(a, _) => Piece::Line(a, Point::new(tip.x - ux * back, tip.y - uy * back)),
@@ -389,7 +484,7 @@ fn head_at_end(ps: &mut Vec<Piece>, len: f32) -> Option<[Point; 3]> {
             }
         };
     }
-    Some(tri)
+    Some(part)
 }
 
 #[cfg(test)]
@@ -469,9 +564,11 @@ mod tests {
             PathSegment::MoveTo(p(0.0, -10.0)),
             PathSegment::QuadTo(p(10.0, -10.0), p(10.0, 0.0)),
         ];
-        let g = stroke_geometry(&segs, ArrowHead::End, 4.0);
+        let g = stroke_geometry(&segs, ArrowHead::End, HeadShape::triangle(4.0), 1.0);
         assert_eq!(g.heads.len(), 1);
-        let [tip, b1, b2] = g.heads[0];
+        let [tip, b1, b2] = g.heads[0][..] else {
+            panic!("a triangle: {:?}", g.heads);
+        };
         assert_eq!(tip, p(10.0, 0.0));
         // Base is 4 above the tip, horizontal.
         assert!((b1.y + 4.0).abs() < 1e-4 && (b2.y + 4.0).abs() < 1e-4);
@@ -485,7 +582,7 @@ mod tests {
             PathSegment::MoveTo(p(0.0, 0.0)),
             PathSegment::LineTo(p(10.0, 0.0)),
         ];
-        let g = stroke_geometry(&segs, ArrowHead::Both, 2.0);
+        let g = stroke_geometry(&segs, ArrowHead::Both, HeadShape::triangle(2.0), 1.0);
         assert_eq!(g.heads.len(), 2);
         assert_eq!(
             g.shaft,
@@ -504,7 +601,7 @@ mod tests {
             PathSegment::LineTo(p(10.0, 10.0)),
             PathSegment::Close,
         ];
-        let g = stroke_geometry(&segs, ArrowHead::Both, 2.0);
+        let g = stroke_geometry(&segs, ArrowHead::Both, HeadShape::triangle(2.0), 1.0);
         assert!(g.heads.is_empty());
         assert_eq!(g.shaft, segs.to_vec());
     }
