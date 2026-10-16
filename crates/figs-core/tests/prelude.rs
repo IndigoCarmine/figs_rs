@@ -331,6 +331,86 @@ fn page_preset_errors() {
     assert!(e.to_string().contains("page(preset, root)"), "{e}");
 }
 
+// ---- errors point at the user's script ----------------------------------------
+
+/// Evaluate a script that must fail; return (line, column, message).
+fn fail(src: &str) -> (Option<usize>, Option<usize>, String) {
+    let e = eval_script(src).expect_err("script should fail");
+    (e.line, e.column, e.message)
+}
+
+#[test]
+fn prelude_error_reports_user_call_site() {
+    // `grid` throws deep inside prelude.rhai; the error points at the user's call.
+    let (line, col, msg) = fail("let xs = [rect()];\npage(\"single\",\n    grid(0, xs))");
+    assert_eq!((line, col), (Some(3), Some(5)), "{msg}");
+    assert_eq!(
+        msg, "line 3, col 5: grid: ncols must be a positive integer (got 0)",
+        "named after the framework function, no prelude line numbers"
+    );
+}
+
+#[test]
+fn prelude_error_inside_user_fn_reports_the_inner_call() {
+    let src = "fn figure(n) {\n    let cells = [rect(), rect()];\n    grid(n, cells)\n}\npage(\"single\", figure(0))";
+    let (line, col, msg) = fail(src);
+    // The user line that called into the framework, not the outer `figure(0)`.
+    assert_eq!((line, col), (Some(3), Some(5)), "{msg}");
+    assert!(msg.starts_with("line 3, col 5: grid: ncols"), "{msg}");
+    // The user-side call trace is kept.
+    assert!(
+        msg.contains("in call to function 'figure' (line 5, col 16)"),
+        "{msg}"
+    );
+}
+
+#[test]
+fn prelude_errors_name_the_called_function() {
+    let (line, col, msg) = fail("\npage(\"b7\", rect())");
+    assert_eq!((line, col), (Some(2), Some(1)));
+    assert!(
+        msg.starts_with("line 2, col 1: page: unknown preset \"b7\""),
+        "{msg}"
+    );
+
+    // A helper's own `fn(): ` prefix is kept behind the user's entry point.
+    let (_, col, msg) = fail(r#"page("single", hbox(panels("()", [rect()])))"#);
+    assert_eq!(col, Some(21)); // `panels(`
+    assert!(
+        msg.contains("panels: panel_label: style \"()\" has no counter"),
+        "{msg}"
+    );
+
+    // Non-throw errors raised in prelude code are attributed the same way.
+    let (_, col, msg) = fail(r#"page("single", grid(2, [42]))"#);
+    assert_eq!(col, Some(16));
+    assert!(
+        msg.starts_with("line 1, col 16: grid: Function not found: flex"),
+        "{msg}"
+    );
+}
+
+#[test]
+fn error_in_user_hook_called_by_framework_points_at_the_hook() {
+    let src = "fn base_size() { throw \"boom\" }\npage(\"single\", vbox([title(\"T\")]))";
+    let (line, col, msg) = fail(src);
+    assert_eq!((line, col), (Some(1), Some(18)), "{msg}");
+    assert!(msg.contains("boom"), "{msg}");
+    assert!(
+        msg.contains("in call to function 'title' (line 2, col 22)"),
+        "{msg}"
+    );
+}
+
+#[test]
+fn core_errors_keep_rhai_messages() {
+    // Native core builder errors in user code are not rewritten.
+    let (line, col, msg) = fail(r##"page(1, 1, text("x").color("#xyz"))"##);
+    assert_eq!((line, col), (Some(1), Some(22)));
+    assert!(msg.contains("invalid color"), "{msg}");
+    assert!(!msg.contains("text:") && !msg.contains("page:"), "{msg}");
+}
+
 #[test]
 fn core_page_unchanged() {
     // The 3-arg core page keeps its exact semantics (default unit, no presets).
