@@ -146,6 +146,60 @@ Build it like any document (extension selects the front-end):
 figs build poster.figs -o poster.png   # .figs / .rhai → script; .toml → TOML
 ```
 
+### Framework (prelude)
+
+Scripting has **two layers**:
+
+- **Core** — the builders and setters above. Explicit, unopinionated, and
+  1px-precise: nothing is implied, every size and gap is yours.
+- **Framework** — a prelude of standard components with opinionated defaults for
+  ordinary paper figures, so the common case is a few lines. It is plain Rhai
+  ([`prelude.rhai`](crates/figs-core/src/script/prelude.rhai)) built *from* the
+  core builders and merged into every script automatically (no `import`).
+
+All syntactic sugar lives in the framework; the core stays strict. Every
+framework component returns an ordinary core node or page, so you can always
+chain core setters on it (`grid(2, xs).pad(0.5)`, `title("T").size(30)`) or drop
+down to `col`/`row`/`page` wherever the defaults don't fit.
+
+A labeled 2×2 figure for a two-column journal
+([`examples/framework_demo.figs`](examples/framework_demo.figs)):
+
+```rhai
+page("double", grid(2, panels([
+    image("a.png"), image("b.png"),
+    image("c.png"), image("d.png"),
+])))
+```
+
+Components (lengths in cm, font sizes in pt):
+
+| Function | Result |
+|---|---|
+| `page(preset, root)` | Page of a named size, unit `cm`: `"single"` (8.5 cm column), `"double"` (17.5 cm), `"a5"`, `"a4"`, `"a3"`, `"a0"` (poster), `"letter"`; append `-landscape` to swap sides. Journal widths get a 4:3 height. The core `page(w, h, root)` is unchanged. |
+| `paper_size(preset)` | `[w, h]` of a preset, to drop down to core: `let s = paper_size("double"); page(s[0], 5, root).unit("cm")`. |
+| `title(s)` / `caption(s)` / `label(s)` / `body(s)` | Semantic text: 1.5× base bold centered / base centered / 1.25× base bold / base. |
+| `vbox(items)` / `hbox(items)` | `col`/`row` with the default gap, stretched cross axis, and bare strings allowed. |
+| `grid(ncols, items)` / `grid(ncols, gap, items)` | Rows of `ncols` equal-flex cells (rows share height equally); the last row is padded with empty cells so widths stay equal. |
+| `panels(items)` / `panels(style, items)` | Each item overlaid with an auto label at its top-left (via core `stack` + `.at`). `style` is a template whose last `a`/`A`/`1` is the counter: `"(a)"` (default), `"a"`, `"A"`, `"a."`, `"Fig. 1"`. |
+| `labeled(item, s)` / `panel_label(style, i)` | One labeled panel / the `i`-th (0-based) label string. |
+| `nodes(items)` / `as_node(x)` | Bare-string sugar: a string becomes `body(s)`. Use `col(nodes([...]))` to get it in core containers. |
+
+**Bare strings.** Inside framework containers (`vbox`, `hbox`, `grid`, `panels`)
+a string in the children array is a text node: `vbox(["Results", image("a.png")])`.
+Core `col`/`row` deliberately still require nodes (a stray string there is an
+error), and Rhai can't shadow a native function with a script one without
+recursing into itself — so the bridge is explicit: `col(nodes([...]))`.
+
+**Defaults are hooks.** The defaults are prelude functions; define one with the
+same name in your script to override it everywhere:
+
+```rhai
+fn base_size() { 9 }        // pt; all semantic text scales from it (default 8)
+fn gap() { 0.3 }            // cm between siblings in framework containers (default 0.2)
+fn label_style() { "A" }    // panel labels A, B, C … (default "(a)")
+```
+
 In the editor (`figs-editor`), the **Script** tab is the source of truth: press
 **Evaluate** (Ctrl+Enter) to lower the script into the editable **TOML** tab, the
 inspector and the live preview. Authoring flows Rhai → (TOML ↔ GUI) one way; use

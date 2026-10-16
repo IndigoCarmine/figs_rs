@@ -1,0 +1,6 @@
+// A 2x2 labeled figure for a two-column journal page, using the framework
+// prelude: page presets, grid, auto "(a)"-"(d)" labels and default spacing.
+page("double", grid(2, panels([
+    image("a.png"), image("b.png"),
+    image("c.png"), image("d.png"),
+])))

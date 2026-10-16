@@ -437,11 +437,16 @@ fn build_engine() -> Engine {
     engine
 }
 
+mod prelude;
+
 /// Evaluate a Rhai script into a [`RawDocument`]. The script's last expression
-/// must be a `page(width, height, root)` call.
+/// must be a `page(...)` call. The framework prelude is available implicitly.
 pub fn eval_script(src: &str) -> Result<RawDocument, ScriptError> {
     let engine = build_engine();
-    let value = engine.eval::<Dynamic>(src).map_err(ScriptError::from_eval)?;
+    let ast = prelude::compile_with_prelude(&engine, src).map_err(ScriptError::from_eval)?;
+    let value = engine
+        .eval_ast::<Dynamic>(&ast)
+        .map_err(ScriptError::from_eval)?;
     let doc = value
         .try_cast::<ScriptDoc>()
         .ok_or_else(ScriptError::not_a_document)?;
