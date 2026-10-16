@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::geom::{
     ArcSweep, ArrowHead, Color, CrossAxisAlign, Edges, ImageFit, LineCap, LineJoin, MainAxisAlign,
-    TextAlign,
+    Paint, TextAlign,
 };
 use crate::units::Unit;
 
@@ -124,8 +124,10 @@ pub struct RawPage {
     /// Raster resolution for PNG output. Defaults to 300 in resolve.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dpi: Option<f32>,
+    /// Page fill: a colour or a gradient over the whole page (see
+    /// [`crate::paint`]). White when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub background: Option<Color>,
+    pub background: Option<Paint>,
     /// Default font family for text nodes that don't name one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_family: Option<String>,
@@ -220,6 +222,10 @@ pub struct RawNode {
     /// overhang instead. The stack's own size is unchanged.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub contain: bool,
+    /// `column` / `row` / `stack` only: clip the children to the node's
+    /// (rounded) box — inside its border when it has a `stroke`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clip: bool,
 
     // ---- container (column / row / stack; spacing & alignment are flex-only) ----
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -259,8 +265,13 @@ pub struct RawNode {
     pub fit: Option<ImageFit>,
 
     // ---- rect (`stroke` / `stroke_width` are shared with shapes and text) ----
+    /// Fill paint: a colour (`"#rrggbb"`) or a gradient table (see
+    /// [`crate::paint`]). On `rect` / `ellipse` / `path` it fills the shape;
+    /// on `column` / `row` / `stack` it is the container's background,
+    /// painted behind its children (with `stroke` / `stroke_width` /
+    /// `corner_radius` / `dash` as its border).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fill: Option<Color>,
+    pub fill: Option<Paint>,
     /// Outline colour. On a `text` node: the glyph outline, painted *behind*
     /// the fill (SVG `paint-order="stroke"`), so a halo never thins the glyphs.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -269,8 +280,9 @@ pub struct RawNode {
     /// past the glyph edges; it does not change the laid-out box).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stroke_width: Option<f32>,
-    /// Corner radius in the page unit.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Corner radius in the page unit (`rect` and containers; `radius` is
+    /// accepted as an alias).
+    #[serde(alias = "radius", skip_serializing_if = "Option::is_none")]
     pub corner_radius: Option<f32>,
 
     // ---- vector shapes (line / arrow / ellipse / path; `fill`/`stroke`/

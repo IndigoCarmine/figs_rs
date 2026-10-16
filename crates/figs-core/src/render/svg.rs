@@ -23,15 +23,21 @@
 //! - **Rotation**: each rotated node's elements are wrapped in
 //!   `<g transform="matrix(a b c d e f)">` (its absolute IR transform), so the
 //!   elements inside keep their unrotated coordinates.
+//! - **Gradients** are `<linearGradient>` / `<radialGradient>` in `<defs>`
+//!   (unique ids, `gradientUnits="userSpaceOnUse"`): their coordinates are the
+//!   referencing element's user space — the node's local frame inside its
+//!   `<g transform>` — so they turn with the node.
+//! - **Clips** are `<g clip-path="url(#…)">` groups around the clipped nodes,
+//!   with the `<clipPath>` outline in page coordinates.
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::Path;
 
 use crate::geom::{
-    Affine, Color, ImageFit, LineCap, LineJoin, PathSegment, Point, Rect, StrokeStyle,
+    Affine, Brush, Color, ImageFit, LineCap, LineJoin, PathSegment, Point, Rect, StrokeStyle,
 };
-use crate::layout::{ComputedLayout, PageGeom, PathPaint, TextBox};
+use crate::layout::{ClipRegion, ComputedLayout, PageGeom, PathPaint, TextBox};
 use crate::text::FontStore;
 
 use super::geometry;
@@ -171,10 +177,105 @@ impl<'a> SvgRenderer<'a> {
         true
     }
 
+    /// Append the fill and stroke attributes for a brush fill: a gradient is
+    /// defined in `<defs>` (fresh id) and referenced with `url(#…)`.
+    fn push_brush_paint(
+        &mut self,
+        el: &mut String,
+        fill: Option<&Brush>,
+        stroke: Option<&StrokeStyle>,
+    ) {
+        match fill {
+            None => push_fill(el, None),
+            Some(b) => match self.gradient_def(b) {
+                Some(id) => {
+                    let _ = write!(el, " fill=\"url(#{id})\"");
+                }
+                None => push_fill(el, Some(b.as_solid().unwrap_or(b.fallback_color()))),
+            },
+        }
+        push_stroke(el, stroke);
+    }
+
+    /// Define the gradient of `b` in `<defs>`; `None` for a solid brush or a
+    /// degenerate gradient (drawn flat in its fallback colour, as SVG would).
+    fn gradient_def(&mut self, b: &Brush) -> Option<String> {
+        let k = |v: f32| fmt_decimals(v, 6);
+        let open = match b {
+            Brush::Solid(_) => return None,
+            Brush::Linear { start, end, .. } => {
+                if (end.x - start.x).hypot(end.y - start.y) < 1e-6 {
+                    return None;
+                }
+                format!(
+                    "linearGradient gradientUnits=\"userSpaceOnUse\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\"",
+                    num(start.x),
+                    num(start.y),
+                    num(end.x),
+                    num(end.y)
+                )
+            }
+            Brush::Radial {
+                center,
+                focal,
+                radius,
+                transform: t,
+                ..
+            } => {
+                if *radius <= 0.0 || (t.a * t.d - t.b * t.c).abs() < 1e-12 {
+                    return None;
+                }
+                let mut s = format!(
+                    "radialGradient gradientUnits=\"userSpaceOnUse\" cx=\"{}\" cy=\"{}\" r=\"{}\"",
+                    k(center.x),
+                    k(center.y),
+                    k(*radius)
+                );
+                if focal != center {
+                    let _ = write!(s, " fx=\"{}\" fy=\"{}\"", k(focal.x), k(focal.y));
+                }
+                if !t.is_identity() {
+                    let _ = write!(
+                        s,
+                        " gradientTransform=\"matrix({} {} {} {} {} {})\"",
+                        k(t.a),
+                        k(t.b),
+                        k(t.c),
+                        k(t.d),
+                        num(t.e),
+                        num(t.f)
+                    );
+                }
+                s
+            }
+        };
+        let tag = if matches!(b, Brush::Linear { .. }) {
+            "linearGradient"
+        } else {
+            "radialGradient"
+        };
+        let id = self.fresh_id("grad");
+        let _ = writeln!(self.defs, "<{open} id=\"{id}\">");
+        for s in b.stops() {
+            let _ = write!(
+                self.defs,
+                "<stop offset=\"{}\" stop-color=\"{}\"",
+                fmt_decimals(s.offset, 4),
+                hex(s.color)
+            );
+            if s.color.a < 1.0 {
+                let _ = write!(self.defs, " stop-opacity=\"{}\"", num(s.color.a.max(0.0)));
+            }
+            self.defs.push_str("/>\n");
+        }
+        let _ = writeln!(self.defs, "</{tag}>");
+        Some(id)
+    }
+
     fn rect_element(
         &mut self,
         rect: Rect,
-        fill: Option<Color>,
+        fill: Option<&Brush>,
         stroke: Option<&StrokeStyle>,
         radius: f32,
     ) {
@@ -190,7 +291,7 @@ impl<'a> SvgRenderer<'a> {
             let r = num(radius);
             let _ = write!(el, " rx=\"{r}\" ry=\"{r}\"");
         }
-        push_paint(&mut el, fill, stroke);
+        self.push_brush_paint(&mut el, fill, stroke);
         el.push_str("/>\n");
         self.body.push_str(&el);
     }
@@ -198,14 +299,14 @@ impl<'a> SvgRenderer<'a> {
     fn path_element(
         &mut self,
         segs: &[PathSegment],
-        fill: Option<Color>,
+        fill: Option<&Brush>,
         stroke: Option<&StrokeStyle>,
     ) {
         if segs.is_empty() {
             return;
         }
         let mut el = format!("<path d=\"{}\"", path_d(segs));
-        push_paint(&mut el, fill, stroke);
+        self.push_brush_paint(&mut el, fill, stroke);
         el.push_str("/>\n");
         self.body.push_str(&el);
     }
@@ -214,6 +315,12 @@ impl<'a> SvgRenderer<'a> {
 /// Append `fill`/`stroke` presentation attributes (SVG defaults: black fill,
 /// no stroke — so both are always explicit).
 fn push_paint(el: &mut String, fill: Option<Color>, stroke: Option<&StrokeStyle>) {
+    push_fill(el, fill);
+    push_stroke(el, stroke);
+}
+
+/// A solid `fill` (with opacity) or `fill="none"`.
+fn push_fill(el: &mut String, fill: Option<Color>) {
     match fill {
         Some(c) => {
             let _ = write!(el, " fill=\"{}\"", hex(c));
@@ -223,6 +330,10 @@ fn push_paint(el: &mut String, fill: Option<Color>, stroke: Option<&StrokeStyle>
         }
         None => el.push_str(" fill=\"none\""),
     }
+}
+
+/// Stroke attributes (nothing for `None`: SVG's default is no stroke).
+fn push_stroke(el: &mut String, stroke: Option<&StrokeStyle>) {
     if let Some(s) = stroke {
         let _ = write!(
             el,
@@ -390,15 +501,41 @@ impl Renderer for SvgRenderer<'_> {
         self.width = page.width_pt;
         self.height = page.height_pt;
         // Same default as PNG: white when no background is given.
-        let bg = page.background.unwrap_or(Color::WHITE);
+        let white = Brush::Solid(Color::WHITE);
+        let bg = page.background.as_ref().unwrap_or(&white);
         let r = Rect::new(0.0, 0.0, page.width_pt, page.height_pt);
         self.rect_element(r, Some(bg), None, 0.0);
+    }
+
+    fn push_clip(&mut self, clip: &ClipRegion) {
+        let id = self.fresh_id("clip");
+        let _ = writeln!(
+            self.defs,
+            "<clipPath id=\"{id}\"><path d=\"{}\"/></clipPath>",
+            path_d(&clip.page_outline())
+        );
+        let _ = writeln!(self.body, "<g clip-path=\"url(#{id})\">");
+    }
+
+    fn pop_clip(&mut self) {
+        self.body.push_str("</g>\n");
+    }
+
+    fn draw_shape(
+        &mut self,
+        segs: &[PathSegment],
+        fill: Option<&Brush>,
+        stroke: Option<&StrokeStyle>,
+    ) {
+        if fill.is_some() || stroke.is_some() {
+            self.path_element(segs, fill, stroke);
+        }
     }
 
     fn fill_rect(
         &mut self,
         rect: Rect,
-        fill: Option<Color>,
+        fill: Option<&Brush>,
         stroke: Option<Color>,
         stroke_width: f32,
         corner_radius: f32,
@@ -483,7 +620,7 @@ impl Renderer for SvgRenderer<'_> {
         let (fill, border) = geometry::placeholder_colors();
         self.fill_rect(
             rect,
-            Some(fill),
+            Some(&Brush::Solid(fill)),
             Some(border),
             geometry::PLACEHOLDER_BORDER,
             0.0,
@@ -494,7 +631,7 @@ impl Renderer for SvgRenderer<'_> {
         if path.segments.len() < 2 {
             return;
         }
-        if let Some(fill) = path.fill {
+        if let Some(fill) = &path.fill {
             self.path_element(&path.segments, Some(fill), None);
         }
         let Some(stroke) = &path.stroke else {
@@ -504,12 +641,13 @@ impl Renderer for SvgRenderer<'_> {
         // stroke color (geometry shared with every backend).
         let geo = path.stroke_geometry();
         self.path_element(&geo.shaft, None, Some(stroke));
+        let head = Brush::Solid(stroke.color);
         for tri in &geo.heads {
-            self.path_element(&geometry::polygon(tri), Some(stroke.color), None);
+            self.path_element(&geometry::polygon(tri), Some(&head), None);
         }
     }
 
-    fn draw_ellipse(&mut self, rect: Rect, fill: Option<Color>, stroke: Option<&StrokeStyle>) {
+    fn draw_ellipse(&mut self, rect: Rect, fill: Option<&Brush>, stroke: Option<&StrokeStyle>) {
         if rect.w <= 0.0 || rect.h <= 0.0 || (fill.is_none() && stroke.is_none()) {
             return;
         }
@@ -520,7 +658,7 @@ impl Renderer for SvgRenderer<'_> {
             num(rect.w / 2.0),
             num(rect.h / 2.0)
         );
-        push_paint(&mut el, fill, stroke);
+        self.push_brush_paint(&mut el, fill, stroke);
         el.push_str("/>\n");
         self.body.push_str(&el);
     }

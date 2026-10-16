@@ -22,6 +22,21 @@
 //! [`Renderer::pop_transform`], and the drawing calls in between use the
 //! node's local (unrotated) coordinates unchanged — so text, image and shape
 //! code never needs to know about rotation.
+//!
+//! **Paints**: fills are [`Brush`]es — a colour or a linear / radial gradient
+//! already placed in the node's local frame (see [`crate::paint`]). Backends
+//! map them to native gradients (tiny-skia shaders, krilla shadings, SVG
+//! `<linearGradient>` / `<radialGradient>` in `userSpaceOnUse`), drawn under
+//! the node transform like the shape itself, so gradients turn with it.
+//!
+//! **Container decoration** ([`PaintContent::Frame`]) is drawn here from the
+//! shared outlines of [`FramePaint`] through [`Renderer::draw_shape`].
+//!
+//! **Clipping** (`clip = true` containers): every node carries its clip
+//! regions ([`ComputedNode::clips`](crate::layout::ComputedNode::clips));
+//! [`paint`] brackets each run of nodes with the same list by
+//! [`Renderer::push_clip`] / [`Renderer::pop_clip`] (outside any node
+//! transform; clip outlines are page-space).
 
 pub mod geometry;
 pub mod outline;
@@ -37,8 +52,10 @@ pub use svg::{render_svg, SvgRenderer};
 
 use std::path::Path;
 
-use crate::geom::{Affine, Color, ImageFit, Rect, StrokeStyle};
-use crate::layout::{ComputedLayout, PageGeom, PaintContent, PathPaint, TextBox};
+use crate::geom::{Affine, Brush, Color, ImageFit, PathSegment, Rect, StrokeStyle};
+use crate::layout::{
+    ClipRegion, ComputedLayout, FramePaint, PageGeom, PaintContent, PathPaint, TextBox,
+};
 use crate::text::FontStore;
 
 /// Options shared by every render entry point.
@@ -69,7 +86,7 @@ pub trait Renderer {
     fn fill_rect(
         &mut self,
         rect: Rect,
-        fill: Option<Color>,
+        fill: Option<&Brush>,
         stroke: Option<Color>,
         stroke_width: f32,
         corner_radius: f32,
@@ -88,7 +105,25 @@ pub trait Renderer {
     fn draw_path(&mut self, _path: &PathPaint) {}
 
     /// Fill/stroke the ellipse inscribed in `rect`. Default: no-op.
-    fn draw_ellipse(&mut self, _rect: Rect, _fill: Option<Color>, _stroke: Option<&StrokeStyle>) {}
+    fn draw_ellipse(&mut self, _rect: Rect, _fill: Option<&Brush>, _stroke: Option<&StrokeStyle>) {}
+
+    /// Fill and/or stroke a closed outline (local frame, shared geometry) —
+    /// a container's background and border. Default: no-op.
+    fn draw_shape(
+        &mut self,
+        _segs: &[PathSegment],
+        _fill: Option<&Brush>,
+        _stroke: Option<&StrokeStyle>,
+    ) {
+    }
+
+    /// Clip everything drawn until the matching [`Renderer::pop_clip`] to
+    /// `clip` (intersected with any clip already pushed). Pushed outside any
+    /// node transform: use [`ClipRegion::page_outline`]. Default: no-op.
+    fn push_clip(&mut self, _clip: &ClipRegion) {}
+
+    /// End the clip started by [`Renderer::push_clip`].
+    fn pop_clip(&mut self) {}
 
     /// Draw everything until the matching [`Renderer::pop_transform`] under
     /// the page-space transform `t` (points → points): the node's coordinates
@@ -107,7 +142,23 @@ pub trait Renderer {
 /// Walk a computed layout in paint order, dispatching each node to the renderer.
 pub fn paint<R: Renderer>(layout: &ComputedLayout, r: &mut R) {
     r.begin_page(&layout.page);
+    let mut active: &[ClipRegion] = &[];
     for node in &layout.nodes {
+        if node.clips[..] != *active {
+            // Keep the shared outer clips; swap the rest.
+            let keep = active
+                .iter()
+                .zip(&node.clips)
+                .take_while(|(a, b)| a == b)
+                .count();
+            for _ in keep..active.len() {
+                r.pop_clip();
+            }
+            for c in &node.clips[keep..] {
+                r.push_clip(c);
+            }
+            active = &node.clips;
+        }
         // Containers paint nothing, so they need no transform either.
         let xf = node
             .transform
@@ -118,21 +169,45 @@ pub fn paint<R: Renderer>(layout: &ComputedLayout, r: &mut R) {
         }
         match &node.content {
             PaintContent::Container => {}
+            PaintContent::Frame(frame) => draw_frame(r, node.rect, frame),
             PaintContent::Rect {
                 fill,
                 stroke,
                 stroke_width,
                 corner_radius,
-            } => r.fill_rect(node.rect, *fill, *stroke, *stroke_width, *corner_radius),
+            } => r.fill_rect(
+                node.rect,
+                fill.as_ref(),
+                *stroke,
+                *stroke_width,
+                *corner_radius,
+            ),
             PaintContent::Text(tb) => r.draw_text(node.rect, tb),
             PaintContent::Image { src, fit } => r.draw_image(node.rect, src, *fit),
             PaintContent::Path(path) => r.draw_path(path),
             PaintContent::Ellipse { fill, stroke } => {
-                r.draw_ellipse(node.rect, *fill, stroke.as_ref())
+                r.draw_ellipse(node.rect, fill.as_ref(), stroke.as_ref())
             }
         }
         if xf.is_some() {
             r.pop_transform();
         }
+    }
+    for _ in 0..active.len() {
+        r.pop_clip();
+    }
+}
+
+/// A container's background, then its border on top (both from the shared
+/// [`FramePaint`] outlines).
+fn draw_frame<R: Renderer>(r: &mut R, rect: Rect, frame: &FramePaint) {
+    if rect.w <= 0.0 || rect.h <= 0.0 {
+        return;
+    }
+    if let Some(fill) = &frame.fill {
+        r.draw_shape(&frame.fill_outline(rect), Some(fill), None);
+    }
+    if let Some(segs) = frame.stroke_outline(rect) {
+        r.draw_shape(&segs, None, frame.stroke.as_ref());
     }
 }

@@ -202,7 +202,7 @@ fn vector_shapes_round_trip() {
             (n2.cap, n2.head, n2.head_size),
             "{id}"
         );
-        assert_eq!((n1.fill, n1.stroke), (n2.fill, n2.stroke), "{id}");
+        assert_eq!((&n1.fill, n1.stroke), (&n2.fill, n2.stroke), "{id}");
     }
     assert_eq!(raw2.nodes["l"].points, vec![[0.0, 0.0], [3.0, 2.5]]);
     let d1 = resolve(raw1).expect("resolve 1");

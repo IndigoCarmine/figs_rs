@@ -1,0 +1,86 @@
+// Conference-poster framing (a section of an A0 poster made in PowerPoint):
+// a dark navy gradient page, section header bars with a gradient fill, a thin
+// light border and rounded corners, content blocks framed by thin white
+// rounded borders (solid and dashed), dashed separators, a thick gradient
+// arrow, and a rounded "photo" frame that clips what it holds.
+//
+// Every frame is the container itself — `col(…).fill(…).stroke(…).radius(…)`
+// — no `stack([rect(), content])` wrappers. Gradient geometry is relative to
+// each box, so it follows the layout.
+style("poster");
+
+// Section header: a rounded bar, lighter at the top-left.
+fn header(s) {
+    row([text(s).size(40).bold().color("#ffffff")])
+        .fill(linear(90, [[0, "#3d6fb6"], [1, "#16305e"]]))
+        .stroke("#bcd4ff").stroke_width(0.06).radius(0.6)
+        .pad(0.45).main("center")
+}
+
+// A content block: thin white rounded border on a faint translucent fill.
+fn block(items) {
+    col(items).fill("#ffffff0d")
+        .stroke("#ffffffd9").stroke_width(0.05).radius(0.7)
+        .pad(0.9).spacing(0.6).stretch()
+}
+
+// The same block with a dashed border.
+fn dashed_block(items) { block(items).dash([0.35, 0.22]) }
+
+fn para(s) { body(s).color("#e8eefb") }
+
+// A dashed horizontal separator spanning its parent.
+fn separator() { line(0, 0, 1, 0).viewbox(0, 0, 1, 1).height(0.05).stroke("#9db7e6").stroke_width(0.04).dash([0.3, 0.2]) }
+
+// A thick right-pointing block arrow with a left → right gradient.
+fn fat_arrow() {
+    path([[0, 0.3], [0.62, 0.3], [0.62, 0], [1, 0.5], [0.62, 1], [0.62, 0.7], [0, 0.7]])
+        .closed().viewbox(0, 0, 1, 1)
+        .fill(linear(0, ["#5ec8ff00", "#5ec8ff", "#ffd36b"]))
+        .width(5).height(2.6)
+}
+
+// A rounded frame that clips its content: the gradient "sky" and the sun
+// overhang the frame, and are cut at its rounded inner edge.
+fn photo() {
+    stack([
+        rect().fill(linear(90, ["#ffb36b", "#d9547a", "#3a2a78"])).width(60).height(14).at(-2, -2),
+        ellipse().fill(radial(["#fff6c9", "#ffd36b", "#ffd36b00"])).width(7).height(7).at(14, 4),
+        path([[0, 12], [6, 6], [10, 9], [16, 3], [24, 9], [30, 5], [42, 12]]).closed().fill("#1b1440").at(-1, 1),
+    ]).height(9).stroke("#ffffff").stroke_width(0.12).radius(1.2).clip()
+}
+
+page(84.1, 59.4,
+    col([
+        text("Gradient Paints & Container Decoration").size(64).bold().center().color("#ffffff"),
+        para("figs_rs · Department of Layout Engines · 2026").center(),
+        row([
+            col([
+                header("1. Background"),
+                block([
+                    para("Every fill accepts a colour or a gradient: linear (angle or two points) or radial, with colour stops that may carry alpha."),
+                    separator(),
+                    para("Coordinates are fractions of the node's own box, so a gradient stretches with the layout."),
+                ]),
+                dashed_block([
+                    para("Columns, rows and stacks paint their own background and border — solid or dashed — behind their children."),
+                    row([fat_arrow(), para("no wrapper rects").flex(1)]).spacing(0.8).cross("center"),
+                ]).flex(1),
+            ]).flex(1).spacing(1.0).stretch(),
+            col([
+                header("2. Results"),
+                block([
+                    photo(),
+                    para("With clip(), children are cut to the rounded box inside the border."),
+                ]),
+                block([
+                    para("Radial gradients take a centre, a radius and an optional focal point."),
+                    row([
+                        ellipse().fill(radial([0.5, 0.5], 0.5, ["#ffffff", "#5ec8ff", "#16305e"]).focal(0.35, 0.3)).width(4).height(4),
+                        rect().fill(radial(["#ffd36b", "#ffd36b00"])).width(8).height(4).radius(0.5),
+                    ]).spacing(1.0).main("center"),
+                ]).flex(1),
+            ]).flex(1).spacing(1.0).stretch(),
+        ]).flex(1).spacing(1.5).stretch(),
+    ]).spacing(0.8).pad(2.0).stretch(),
+).unit("cm").dpi(60).background(linear(90, ["#0b1a3a", "#1d3b6e"]))

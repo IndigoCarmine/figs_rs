@@ -60,11 +60,17 @@ You provide: hierarchy, style, content, and constraints (`flex`, `aspect_ratio`,
   (`start`/`center`/`end`/`space_between`/`space_around`/`space_evenly`),
   `cross_axis_alignment` (`start`/`center`/`end`/`stretch`).
 - **stack**: `children`, `viewbox` (plus the shared `padding`).
+- **Decoration** (`column`/`row`/`stack`): `fill` (colour or gradient),
+  `stroke`, `stroke_width`, `corner_radius` (alias `radius`), `dash`, `clip` —
+  a background and border painted behind the children (see
+  [Gradients & frames](#gradients--frames)).
 - **text**: `content`, `font_size` (pt), `font_family`, `font_weight`, `color`,
   `align`, `line_height` (multiple of font size), and an outline: `stroke`,
   `stroke_width`, `join` (see [Text outline](#text-outline)).
 - **image**: `src`, `fit` (`contain`/`cover`/`fill`).
 - **rect**: `fill`, `stroke`, `stroke_width`, `corner_radius`.
+  Every `fill` (rect, ellipse, path, containers) and `page.background` takes a
+  colour *or a gradient* (see [Gradients & frames](#gradients--frames)).
 - **line** / **arrow** / **path**: `points`, `segments` (curves), `viewbox`, `stroke`,
   `stroke_width`, `dash`, `cap`, `join`, `head`, `head_size`; **path** adds `fill`,
   `closed`.
@@ -107,6 +113,81 @@ stroke_width = 0.07    # cm here: the rim reaches 0.035 cm past the glyphs
 In Rhai: `text("(a)").bold().stroke("#ffffff").stroke_width(0.07)` (`.join(..)`
 to change the join). The framework's `halo(t, color, r)` is exactly this with
 `stroke_width = 2r`.
+
+### Gradients & frames
+
+Anywhere a fill is accepted — `rect` / `ellipse` / `path` `fill`, container
+`fill`, `page.background` — you can write a colour or a **gradient**:
+
+```toml
+fill = "#ff0000"                                                  # solid, as before
+fill = { linear = 90, stops = [[0, "#0b1a3a"], [1, "#1d3b6e"]] }  # top → bottom
+fill = { linear = [[0, 0], [1, 1]], stops = ["#ffffff", "#000000"] }  # corner to corner
+fill = { radial = [0.5, 0.5], radius = 0.5, focal = [0.35, 0.3],
+         stops = [[0, "#ffffffcc"], [1, "#ffffff00"]] }
+```
+
+- **Coordinates are relative to the node's border box** (`0..1` fractions of
+  its width/height), so a gradient stretches with the layout. Add
+  `absolute = true` to give points and `radius` in the page unit from the box's
+  top-left corner instead (an absolute radial gradient needs a `radius`).
+- `linear = <degrees>` runs **clockwise from left → right**: `0` = left →
+  right, `90` = top → bottom (PowerPoint's convention, matching `rotate`). The
+  line passes through the box centre and spans it corner to corner, as in CSS.
+  `linear = [[x1, y1], [x2, y2]]` runs from the first point to the second;
+  colour bands stay perpendicular to that line on the page.
+- `radial = [cx, cy]` is the centre; `radius` defaults to `0.5`, `focal`
+  (where offset 0 sits) to the centre. Box-relative, the circle scales with the
+  box — an ellipse touching all four edges at `radius = 0.5` in a non-square
+  box (SVG's `objectBoundingBox`); `absolute = true` makes it a true circle.
+- `stops` are `[offset, colour]` pairs (offsets `0..1`, non-decreasing; colours
+  may carry alpha, `#rrggbbaa`) or bare colours, which are spaced evenly (the
+  first defaults to 0, the last to 1, as in CSS). Beyond the ends the end
+  colours continue (pad).
+- Gradients are drawn in the node's own frame, so they **turn with `rotate`**.
+  Strokes stay solid colours (a thick gradient arrow is a closed `path` with a
+  gradient `fill` — see [`examples/poster_frame.figs`](examples/poster_frame.figs)).
+
+**Container decoration.** `column` / `row` / `stack` take `fill`, `stroke`,
+`stroke_width` (default 1 pt once `stroke` is set), `corner_radius` (`radius`),
+and `dash` — a background over the whole rounded box and a border drawn
+**inside** it (its outer edge is the box edge, outer corner radius =
+`corner_radius`), both painted behind the children. That replaces the
+`stack([rect()…, content])` wrapper:
+
+```toml
+[nodes.header]
+type = "row"
+children = ["title"]
+padding = 0.4
+fill = { linear = 90, stops = ["#3d6fb6", "#16305e"] }
+stroke = "#bcd4ff"
+stroke_width = 0.06
+radius = 0.6
+```
+
+`clip = true` keeps the children inside the box — inside the border, with the
+corner radius reduced by the stroke width — e.g. an image or plot in a rounded
+frame. Clips nest (a child clipped twice shows only where both regions
+overlap), and follow rotation. The clip is exact in every backend: PDF clip
+path, SVG `clipPath`, PNG via a canvas snapshot restored outside an
+anti-aliased mask (one canvas copy per clipped container).
+
+Box shadows are not supported: a blur has no native PDF equivalent, so the
+backends could not agree.
+
+In Rhai: `.fill("#…")` or `.fill(linear(90, ["#0b1a3a", "#1d3b6e"]))`,
+`linear([x1, y1], [x2, y2], stops)`, `radial(stops)`,
+`radial([cx, cy], r, stops)`, refined with `.focal(fx, fy)` / `.absolute()`;
+on containers `.fill(…) .stroke(hex) .stroke_width(n) .radius(n) .dash([…])
+.clip()`; `page(…).background(linear(…))`. The editor's inspector edits solid
+fills and a gradient's stop colours (direction and offsets in TOML), and shows
+a **Decoration** section for containers.
+
+See [`examples/poster_frame.figs`](examples/poster_frame.figs): a conference
+poster's framing — dark gradient page, gradient section header bars with a
+light rounded border, solid and dashed framed blocks, a dashed separator, a
+gradient block arrow, and a clipped rounded "photo" frame.
 
 ### Auto page height
 
@@ -499,7 +580,14 @@ setters:
   `.join("round"|"miter"|"bevel")` (see [Text outline](#text-outline)).
 - **container** (`col`/`row`): `.spacing(n)`, `.main("space_between"|…)`,
   `.cross("start"|"center"|"end"|"stretch")` / `.stretch()`.
-- **rect**: `.fill(hex)`, `.stroke(hex)`, `.stroke_width(n)`, `.radius(n)`.
+- **decoration** (`col`/`row`/`stack`): `.fill(hex | gradient)`, `.stroke(hex)`,
+  `.stroke_width(n)`, `.radius(n)`, `.dash([on, off, …])`, `.clip()` — see
+  [Gradients & frames](#gradients--frames).
+- **gradients** (for any `.fill` / `.background`): `linear(deg, stops)`,
+  `linear([x1, y1], [x2, y2], stops)`, `radial(stops)`,
+  `radial([cx, cy], r, stops)`, `.focal(fx, fy)`, `.absolute()`; `stops` are
+  `[[0, "#…"], [1, "#…"]]` or `["#…", "#…"]`.
+- **rect**: `.fill(hex | gradient)`, `.stroke(hex)`, `.stroke_width(n)`, `.radius(n)`.
 - **shapes** (`line`/`arrow`/`ellipse`/`path`): `.stroke(hex)`, `.stroke_width(n)`,
   `.fill(hex)` (path/ellipse), `.dash([on, off, …])`, `.cap("butt"|"round"|"square")`,
   `.join("miter"|"round"|"bevel")`,
@@ -510,7 +598,7 @@ setters:
   `.arc(r, x, y, #{ sweep, large, rotation })` (`r` a number or `[rx, ry]`) —
   see [Curves](#curves).
 - **image**: `.fit("contain"|"cover"|"fill")`.
-- **page**: `.unit("cm"|…)`, `.background(hex)`, `.dpi(n)`, `.font(name)`.
+- **page**: `.unit("cm"|…)`, `.background(hex | gradient)`, `.dpi(n)`, `.font(name)`.
 
 Build it like any document (extension selects the front-end):
 
@@ -958,6 +1046,8 @@ the vector formats keep that exactness at any zoom.
 | Text `stroke` | glyph outlines stroked (tiny-skia), glyphs blended on top | vector path under the text (text layer unchanged) | one stroked `<path>` before the glyph group |
 | Images | resampled | JPEG passed through untouched; other formats embedded losslessly | base64 `data:` URI (PNG/JPEG bytes verbatim) |
 | `cover` | clipped | clip path | `clipPath` |
+| Gradients | tiny-skia linear / two-point radial shaders | axial / radial shadings (soft mask for translucent stops) | `<linearGradient>` / `<radialGradient>` in `<defs>`, `userSpaceOnUse` |
+| `clip = true` | canvas snapshot restored outside an AA mask | `W n` clip path | `<g clip-path>` |
 | Missing image | gray placeholder | same placeholder | same placeholder |
 
 - Coordinates are points throughout. The IR's top-left origin is kept in SVG

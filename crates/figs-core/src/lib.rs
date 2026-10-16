@@ -11,6 +11,7 @@
 pub mod deps;
 pub mod geom;
 pub mod layout;
+pub mod paint;
 pub mod path;
 pub mod render;
 pub mod schema;

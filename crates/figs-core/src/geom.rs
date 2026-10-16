@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+pub use crate::paint::{Brush, GradientStop, LinearDir, Paint};
+
 /// A width/height pair, in points.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Size {

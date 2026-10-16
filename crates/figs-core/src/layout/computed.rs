@@ -4,7 +4,7 @@
 //! straight back to a TOML node (needed by the Phase 2 editor).
 
 use crate::geom::{
-    Affine, ArrowHead, Color, ImageFit, PathSegment, Point, Rect, StrokeStyle, TextAlign,
+    Affine, ArrowHead, Brush, Color, ImageFit, PathSegment, Point, Rect, StrokeStyle, TextAlign,
 };
 
 /// A laid-out page: geometry plus a flat list of nodes in paint order
@@ -22,7 +22,8 @@ pub struct PageGeom {
     /// height computed by layout, so renderers and the editor just use it.
     pub height_pt: f32,
     pub dpi: f32,
-    pub background: Option<Color>,
+    /// Page fill placed over the page box (white when `None`).
+    pub background: Option<Brush>,
     /// True when `height_pt` was derived from the content (`height = "auto"`).
     pub auto_height: bool,
 }
@@ -56,6 +57,33 @@ pub struct ComputedNode {
     /// independent of paint order.
     pub transform: Option<Affine>,
     pub content: PaintContent,
+    /// Clip regions of every `clip = true` ancestor (outermost first): what
+    /// the node paints is visible only inside all of them. Empty (the common
+    /// case) = unclipped. Like `transform`, each node carries its own
+    /// accumulated list, independent of paint order.
+    pub clips: Vec<ClipRegion>,
+}
+
+/// A clipping container's region: the rounded box `rect` (corner `radius`)
+/// in the frame that `transform` maps onto the page (`None` = page space) —
+/// the container's own local frame.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClipRegion {
+    pub rect: Rect,
+    pub radius: f32,
+    pub transform: Option<Affine>,
+}
+
+impl ClipRegion {
+    /// The clip outline in page coordinates (points): the rounded box,
+    /// transformed (affine maps keep Béziers exact).
+    pub fn page_outline(&self) -> Vec<PathSegment> {
+        let segs = crate::render::geometry::rounded_rect(self.rect, self.radius);
+        match &self.transform {
+            Some(t) => segs.iter().map(|s| s.mapped(|p| t.apply(p))).collect(),
+            None => segs,
+        }
+    }
 }
 
 impl ComputedNode {
@@ -110,7 +138,8 @@ impl ComputedNode {
     }
 }
 
-/// What a node paints. Containers paint nothing themselves.
+/// What a node paints. Plain containers paint nothing themselves; a
+/// decorated one (`fill` / `stroke`) is a [`PaintContent::Frame`].
 ///
 /// Text currently carries its resolved properties; once the text backend lands
 /// (M3) this variant will instead hold fully shaped glyph runs so PNG and PDF
@@ -118,8 +147,11 @@ impl ComputedNode {
 #[derive(Debug, Clone)]
 pub enum PaintContent {
     Container,
+    /// A decorated `column` / `row` / `stack`: its background and border,
+    /// painted before (behind) its children.
+    Frame(FramePaint),
     Rect {
-        fill: Option<Color>,
+        fill: Option<Brush>,
         stroke: Option<Color>,
         stroke_width: f32,
         corner_radius: f32,
@@ -133,9 +165,42 @@ pub enum PaintContent {
     Path(PathPaint),
     /// An ellipse inscribed in the node rect.
     Ellipse {
-        fill: Option<Color>,
+        fill: Option<Brush>,
         stroke: Option<StrokeStyle>,
     },
+}
+
+/// A container's background and border in its local frame, filling the node
+/// rect. The border lies *inside* the rect (its outer edge is the rect edge,
+/// outer corner radius `corner_radius`); the fill covers the whole rounded
+/// rect, under the border.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FramePaint {
+    pub fill: Option<Brush>,
+    pub stroke: Option<StrokeStyle>,
+    pub corner_radius: f32,
+}
+
+impl FramePaint {
+    /// Outline to fill: the rounded node rect.
+    pub fn fill_outline(&self, rect: Rect) -> Vec<PathSegment> {
+        crate::render::geometry::rounded_rect(rect, self.corner_radius)
+    }
+
+    /// Centre line of the border: the rect inset by half the stroke width,
+    /// its radius reduced to match (`None` without a stroke).
+    pub fn stroke_outline(&self, rect: Rect) -> Option<Vec<PathSegment>> {
+        let s = self.stroke.as_ref()?;
+        let h = s.width / 2.0;
+        let inner = Rect::new(rect.x + h, rect.y + h, rect.w - s.width, rect.h - s.width);
+        if inner.w < 0.0 || inner.h < 0.0 {
+            return None;
+        }
+        Some(crate::render::geometry::rounded_rect(
+            inner,
+            (self.corner_radius - h).max(0.0),
+        ))
+    }
 }
 
 /// A placed vector outline (`line`, `arrow`, `path`). Unlike other content it
@@ -146,7 +211,7 @@ pub struct PathPaint {
     /// One subpath: a leading `MoveTo`, then `LineTo` / `QuadTo` / `CubicTo`,
     /// then optionally a trailing `Close` (arcs are already cubics).
     pub segments: Vec<PathSegment>,
-    pub fill: Option<Color>,
+    pub fill: Option<Brush>,
     pub stroke: Option<StrokeStyle>,
     /// Arrowheads (filled with the stroke color); ignored when closed.
     pub head: ArrowHead,

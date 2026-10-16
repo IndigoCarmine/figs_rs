@@ -820,7 +820,7 @@ fn scalebar_cm_bottom_right_layout() {
     assert_xywh(rect_of(&l, &bar_id(&d)), 65.0, 71.0, 30.0, 4.0);
     assert_xywh(label_rect(&src, "1 um"), 70.0, 59.0, TEXT_W, TEXT_H);
     // Default colour: white bar and label.
-    assert_eq!(d.nodes[&bar_id(&d)].fill, hex("#ffffff"));
+    assert_eq!(d.nodes[&bar_id(&d)].fill, hex("#ffffff").map(Into::into));
     assert_eq!(text_node(&d, "1 um").color, hex("#ffffff"));
 }
 

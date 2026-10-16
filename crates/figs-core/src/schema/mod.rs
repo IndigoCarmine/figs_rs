@@ -11,6 +11,6 @@ pub mod resolve;
 
 pub use parse::{ArcRadius, NodeKind, PageHeight, RawDocument, RawNode, RawPage, RawSegment};
 pub use resolve::{
-    Common, Document, EllipseProps, ImageProps, Node, NodeType, PageInfo, PathProps, RectProps,
-    ResolveError, TextProps,
+    Common, Decoration, Document, EllipseProps, ImageProps, Node, NodeType, PageInfo, PathProps,
+    RectProps, ResolveError, TextProps,
 };

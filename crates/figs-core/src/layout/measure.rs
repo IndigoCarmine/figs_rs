@@ -59,6 +59,7 @@ fn measure_own<M: LeafMeasure>(ctx: &Ctx<M>, idx: usize, c: Constraints) -> Size
             children,
             viewbox,
             contain,
+            ..
         } => measure_stack(ctx, children, viewbox.is_some(), *contain, &node.common, c),
         NodeType::Rect(_) | NodeType::Ellipse(_) => Size::default(),
         // Coordinates live in the content box, so the intrinsic size is the

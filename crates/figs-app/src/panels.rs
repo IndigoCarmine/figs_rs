@@ -7,7 +7,8 @@ use std::path::PathBuf;
 
 use eframe::egui::{self, Color32, Rect, RichText, Sense, Stroke};
 use figs_core::geom::{
-    ArrowHead, Color, CrossAxisAlign, Edges, ImageFit, LineCap, LineJoin, MainAxisAlign, TextAlign,
+    ArrowHead, Color, CrossAxisAlign, Edges, GradientStop, ImageFit, LineCap, LineJoin, LinearDir,
+    MainAxisAlign, Paint, TextAlign,
 };
 use figs_core::schema::{NodeKind, PageHeight, RawDocument, RawSegment};
 use figs_core::units::Unit;
@@ -258,7 +259,7 @@ fn inspector(app: &mut FigsApp, ui: &mut egui::Ui, _p: &Palette) {
             changed |= unit_combo(ui, "Unit", &mut app.model.page.unit);
             changed |= opt_num(ui, "DPI", &mut app.model.page.dpi, 1.0);
             section(ui, "Appearance");
-            changed |= opt_color(ui, "Background", &mut app.model.page.background);
+            changed |= opt_paint(ui, "Background", &mut app.model.page.background);
             section(ui, "Typography");
             changed |= font_combo(
                 ui,
@@ -297,7 +298,7 @@ fn inspector(app: &mut FigsApp, ui: &mut egui::Ui, _p: &Palette) {
                     }
                     NodeKind::Rect => {
                         section(ui, "Rectangle");
-                        changed |= opt_color(ui, "Fill", &mut node.fill);
+                        changed |= opt_paint(ui, "Fill", &mut node.fill);
                         changed |= opt_color(ui, "Stroke", &mut node.stroke);
                         changed |= opt_num(ui, "Stroke width", &mut node.stroke_width, 0.25);
                         changed |= opt_num(ui, "Corner radius", &mut node.corner_radius, 0.5);
@@ -359,7 +360,7 @@ fn inspector(app: &mut FigsApp, ui: &mut egui::Ui, _p: &Palette) {
                             changed |= ui.checkbox(&mut node.closed, "Closed").changed();
                         }
                         if matches!(kind, NodeKind::Path | NodeKind::Ellipse) {
-                            changed |= opt_color(ui, "Fill", &mut node.fill);
+                            changed |= opt_paint(ui, "Fill", &mut node.fill);
                         }
                         changed |= opt_color(ui, "Stroke", &mut node.stroke);
                         changed |= opt_num(ui, "Stroke width", &mut node.stroke_width, 0.25);
@@ -371,6 +372,20 @@ fn inspector(app: &mut FigsApp, ui: &mut egui::Ui, _p: &Palette) {
                             changed |= opt_num(ui, "Head size", &mut node.head_size, 0.25);
                         }
                     }
+                }
+
+                if matches!(kind, NodeKind::Column | NodeKind::Row | NodeKind::Stack) {
+                    // Background + border painted behind the children.
+                    section(ui, "Decoration");
+                    changed |= opt_paint(ui, "Fill", &mut node.fill);
+                    changed |= opt_color(ui, "Stroke", &mut node.stroke);
+                    changed |= opt_num(ui, "Stroke width", &mut node.stroke_width, 0.25);
+                    changed |= opt_num(ui, "Corner radius", &mut node.corner_radius, 0.5);
+                    changed |= dash_field(ui, "Dash", &mut node.dash);
+                    changed |= ui
+                        .checkbox(&mut node.clip, "Clip children")
+                        .on_hover_text("Keep the children inside the (rounded) box")
+                        .changed();
                 }
 
                 section(ui, "Layout");
@@ -547,6 +562,80 @@ fn opt_color(ui: &mut egui::Ui, label: &str, v: &mut Option<Color>) -> bool {
             ui.label(RichText::new(c.to_hex()).monospace().small());
         }
     });
+    changed
+}
+
+/// An optional fill paint. A solid colour gets a colour button (and a
+/// "gradient" button seeding a vertical two-stop gradient from it); a
+/// gradient shows its kind and one colour button per stop — its geometry is
+/// edited in TOML — plus a "solid" button flattening it to its first colour.
+fn opt_paint(ui: &mut egui::Ui, label: &str, v: &mut Option<Paint>) -> bool {
+    let mut changed = false;
+    let mut replace = None;
+    ui.horizontal(|ui| {
+        ui.label(label);
+        let mut on = v.is_some();
+        if ui.checkbox(&mut on, "").changed() {
+            *v = on.then_some(Paint::Solid(Color::BLACK));
+            changed = true;
+        }
+        match v {
+            None => {}
+            Some(Paint::Solid(c)) => {
+                let mut c32 = col_to_c32(*c);
+                if ui.color_edit_button_srgba(&mut c32).changed() {
+                    *c = c32_to_col(c32);
+                    changed = true;
+                }
+                ui.label(RichText::new(c.to_hex()).monospace().small());
+                if ui
+                    .small_button("gradient")
+                    .on_hover_text("Turn into a top → bottom gradient (edit it in TOML)")
+                    .clicked()
+                {
+                    replace = Some(Paint::Linear {
+                        dir: LinearDir::Angle(90.0),
+                        stops: vec![GradientStop::new(0.0, *c), GradientStop::new(1.0, *c)],
+                        absolute: false,
+                    });
+                }
+            }
+            Some(p) => {
+                let kind = match p {
+                    Paint::Linear { .. } => "linear",
+                    _ => "radial",
+                };
+                ui.label(RichText::new(kind).monospace().small());
+                if let Some(stops) = p.stops_mut() {
+                    for s in stops.iter_mut() {
+                        let mut c32 = col_to_c32(s.color);
+                        if ui
+                            .color_edit_button_srgba(&mut c32)
+                            .on_hover_text(format!("stop at {:.2}", s.offset))
+                            .changed()
+                        {
+                            s.color = c32_to_col(c32);
+                            changed = true;
+                        }
+                    }
+                }
+                if ui
+                    .small_button("solid")
+                    .on_hover_text("Replace the gradient with its first colour")
+                    .clicked()
+                {
+                    replace = Some(Paint::Solid(p.primary_color()));
+                }
+            }
+        }
+    });
+    if let Some(p) = replace {
+        *v = Some(p);
+        changed = true;
+    }
+    if v.as_ref().is_some_and(|p| p.stops().is_some()) {
+        ui.weak("gradient direction & offsets: edit in TOML");
+    }
     changed
 }
 
@@ -1105,8 +1194,23 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
                     "spacing",
                     "main_axis_alignment",
                     "cross_axis_alignment",
+                    "fill",
+                    "stroke",
+                    "stroke_width",
+                    "corner_radius",
+                    "dash",
+                    "clip",
                 ]),
-                Some(NodeKind::Stack) => v.extend(["children", "viewbox"]),
+                Some(NodeKind::Stack) => v.extend([
+                    "children",
+                    "viewbox",
+                    "fill",
+                    "stroke",
+                    "stroke_width",
+                    "corner_radius",
+                    "dash",
+                    "clip",
+                ]),
                 Some(NodeKind::Text) => v.extend([
                     "content",
                     "font_size",

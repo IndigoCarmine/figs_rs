@@ -34,7 +34,10 @@ pub mod arrange;
 pub mod computed;
 pub mod measure;
 
-pub use computed::{ComputedLayout, ComputedNode, PageGeom, PaintContent, PathPaint, TextBox};
+pub use computed::{
+    ClipRegion, ComputedLayout, ComputedNode, FramePaint, PageGeom, PaintContent, PathPaint,
+    TextBox,
+};
 
 use crate::geom::{Axis, Size};
 use crate::schema::{Document, ImageProps, TextProps};
@@ -225,12 +228,16 @@ pub fn layout<M: LeafMeasure>(doc: &Document, measurer: &M) -> ComputedLayout {
         width_pt: doc.page.width_pt,
         height_pt,
         dpi: doc.page.dpi,
-        background: doc.page.background,
+        background: None,
         auto_height: auto,
     };
 
     // The root fills the whole page, inset by its own margin.
     let page_rect = crate::geom::Rect::new(0.0, 0.0, page.width_pt, page.height_pt);
+    let page = PageGeom {
+        background: doc.page.background.as_ref().map(|p| p.place(page_rect)),
+        ..page
+    };
     let root_box = page_rect.inset(root.common.margin);
 
     let mut nodes = Vec::with_capacity(doc.nodes.len());

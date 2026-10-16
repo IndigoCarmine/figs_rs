@@ -14,7 +14,7 @@ use std::collections::HashMap;
 
 use crate::geom::{
     ArcSweep, ArrowHead, Axis, Color, CrossAxisAlign, Edges, ImageFit, LineJoin, MainAxisAlign,
-    PathSegment, Point, StrokeStyle, TextAlign, ViewBox,
+    Paint, PathSegment, Point, StrokeStyle, TextAlign, ViewBox,
 };
 use crate::path::arc_to_cubics;
 
@@ -66,7 +66,8 @@ pub struct PageInfo {
     /// `page.height_pt` carries the final value).
     pub height_pt: Option<f32>,
     pub dpi: f32,
-    pub background: Option<Color>,
+    /// Page fill (absolute gradient lengths in points), over the page box.
+    pub background: Option<Paint>,
     /// Default font family for text nodes that don't name one.
     pub font_family: Option<String>,
 }
@@ -185,6 +186,8 @@ pub enum NodeType {
         spacing: f32,
         main_axis: MainAxisAlign,
         cross_axis: CrossAxisAlign,
+        /// Background / border / clip (`None` = a plain container).
+        decoration: Option<Box<Decoration>>,
     },
     /// Children overlap inside the content box, painted in order (later = on
     /// top), each positioned by its own `x`/`y` — in points, or in `viewbox`
@@ -194,6 +197,8 @@ pub enum NodeType {
         children: Vec<usize>,
         viewbox: Option<ViewBox>,
         contain: bool,
+        /// Background / border / clip (`None` = a plain stack).
+        decoration: Option<Box<Decoration>>,
     },
     Image(ImageProps),
     Text(TextProps),
@@ -204,6 +209,16 @@ pub enum NodeType {
 }
 
 impl NodeType {
+    /// The decoration of a container (`column`/`row`/`stack`), if any.
+    pub fn decoration(&self) -> Option<&Decoration> {
+        match self {
+            NodeType::Container { decoration, .. } | NodeType::Stack { decoration, .. } => {
+                decoration.as_deref()
+            }
+            _ => None,
+        }
+    }
+
     /// Child indices of a container (`column`/`row`/`stack`); empty for leaves.
     pub fn children(&self) -> &[usize] {
         match self {
@@ -211,6 +226,21 @@ impl NodeType {
             _ => &[],
         }
     }
+}
+
+/// A container's own painting: a background `fill` and a border `stroke`
+/// with rounded corners, both inside the node's border box and behind its
+/// children; `clip` keeps the children inside the box (within the border).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Decoration {
+    /// Background paint over the whole (rounded) border box.
+    pub fill: Option<Paint>,
+    /// Border, drawn *inside* the box: its outer edge is the box edge.
+    pub stroke: Option<StrokeStyle>,
+    /// Outer corner radius, points.
+    pub corner_radius: f32,
+    /// Clip the children to the box inside the border.
+    pub clip: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -237,7 +267,7 @@ pub struct TextProps {
 
 #[derive(Debug, Clone)]
 pub struct RectProps {
-    pub fill: Option<Color>,
+    pub fill: Option<Paint>,
     pub stroke: Option<Color>,
     pub stroke_width: f32,
     pub corner_radius: f32,
@@ -253,7 +283,7 @@ pub struct PathProps {
     /// entry — arcs already converted to cubics — and a trailing `Close` when
     /// `closed`. See [`PathSegment`].
     pub segments: Vec<PathSegment>,
-    pub fill: Option<Color>,
+    pub fill: Option<Paint>,
     pub stroke: Option<StrokeStyle>,
     /// Ignored when `closed` or when there is no stroke.
     pub head: ArrowHead,
@@ -267,7 +297,7 @@ pub struct PathProps {
 /// An ellipse inscribed in the node's border box.
 #[derive(Debug, Clone)]
 pub struct EllipseProps {
-    pub fill: Option<Color>,
+    pub fill: Option<Paint>,
     pub stroke: Option<StrokeStyle>,
 }
 
@@ -335,11 +365,19 @@ pub fn resolve(raw: RawDocument) -> Result<Document, ResolveError> {
     let root = index_of[raw.page.root.as_str()];
     detect_cycle(&nodes, root)?;
 
+    if let Some(bg) = &raw.page.background {
+        bg.validate().map_err(|reason| ResolveError::InvalidField {
+            node: "page".to_string(),
+            field: "background",
+            reason,
+        })?;
+    }
+
     let page = PageInfo {
         width_pt: factor * raw.page.width,
         height_pt: raw.page.height.fixed().map(|h| factor * h),
         dpi: raw.page.dpi.unwrap_or(DEFAULT_DPI),
-        background: raw.page.background,
+        background: raw.page.background.clone().map(|p| p.scaled(factor)),
         font_family: raw.page.font_family.clone(),
     };
 
@@ -383,6 +421,45 @@ fn convert_node(
             reason: "values must be finite numbers".into(),
         });
     }
+    let is_container = matches!(raw.kind, NodeKind::Column | NodeKind::Row | NodeKind::Stack);
+    if raw.clip && !is_container {
+        return Err(ResolveError::InvalidField {
+            node: id.to_string(),
+            field: "clip",
+            reason: "only a column/row/stack clips its children".into(),
+        });
+    }
+    let fill = match &raw.fill {
+        Some(p) => {
+            p.validate().map_err(|reason| ResolveError::InvalidField {
+                node: id.to_string(),
+                field: "fill",
+                reason,
+            })?;
+            Some(p.clone().scaled(factor))
+        }
+        None => None,
+    };
+    let decoration = || -> Result<Option<Box<Decoration>>, ResolveError> {
+        let stroke = shape_stroke(id, raw, factor, false)?;
+        let corner_radius = raw.corner_radius.unwrap_or(0.0) * factor;
+        if !corner_radius.is_finite() || corner_radius < 0.0 {
+            return Err(ResolveError::InvalidField {
+                node: id.to_string(),
+                field: "corner_radius",
+                reason: "must be a non-negative number".into(),
+            });
+        }
+        if fill.is_none() && stroke.is_none() && !raw.clip {
+            return Ok(None);
+        }
+        Ok(Some(Box::new(Decoration {
+            fill: fill.clone(),
+            stroke,
+            corner_radius,
+            clip: raw.clip,
+        })))
+    };
     if raw.contain && raw.kind != NodeKind::Stack {
         return Err(ResolveError::InvalidField {
             node: id.to_string(),
@@ -429,12 +506,14 @@ fn convert_node(
                 spacing: raw.spacing * factor,
                 main_axis: raw.main_axis_alignment.unwrap_or_default(),
                 cross_axis: raw.cross_axis_alignment.unwrap_or_default(),
+                decoration: decoration()?,
             }
         }
         NodeKind::Stack => NodeType::Stack {
             children: resolve_children()?,
             viewbox,
             contain: raw.contain,
+            decoration: decoration()?,
         },
         NodeKind::Image => {
             let src = raw.src.clone().ok_or_else(|| ResolveError::MissingField {
@@ -471,7 +550,7 @@ fn convert_node(
             })
         }
         NodeKind::Rect => NodeType::Rect(RectProps {
-            fill: raw.fill,
+            fill: fill.clone(),
             stroke: raw.stroke,
             stroke_width: raw.stroke_width.unwrap_or(0.0) * factor,
             corner_radius: raw.corner_radius.unwrap_or(0.0) * factor,
@@ -538,7 +617,7 @@ fn convert_node(
             };
             NodeType::Path(PathProps {
                 segments,
-                fill: raw.fill,
+                fill: fill.clone(),
                 stroke,
                 head: raw.head.unwrap_or(default_head),
                 head_size,
@@ -546,7 +625,7 @@ fn convert_node(
             })
         }
         NodeKind::Ellipse => NodeType::Ellipse(EllipseProps {
-            fill: raw.fill,
+            fill: fill.clone(),
             stroke: shape_stroke(id, raw, factor, raw.fill.is_none())?,
         }),
     };

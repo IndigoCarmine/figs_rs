@@ -17,6 +17,10 @@
 //!   the node rect. Unreadable images get the same placeholder box as PNG.
 //! - **Rotation**: a rotated node is drawn inside a `q … cm … Q` block
 //!   (krilla `push_transform` / `pop`), so rotated text stays real text.
+//! - **Gradients** are krilla linear / radial gradients (PDF shadings, with a
+//!   soft mask when a stop is translucent), defined in the current user space
+//!   — the node's local frame under its transform.
+//! - **Clips** are `W n` clip paths (krilla `push_clip_path`) in page space.
 
 use std::collections::HashMap;
 use std::ops::Range;
@@ -27,15 +31,18 @@ use krilla::geom::{Path as KPath, PathBuilder, Point as KPoint, Size as KSize, T
 use krilla::image::Image;
 use krilla::num::NormalizedF32;
 use krilla::page::PageSettings;
-use krilla::paint::{Fill, FillRule, LineCap as KLineCap, LineJoin, Stroke, StrokeDash};
+use krilla::paint::{
+    Fill, FillRule, LineCap as KLineCap, LineJoin, LinearGradient, RadialGradient, SpreadMethod,
+    Stop, Stroke, StrokeDash,
+};
 use krilla::surface::Surface;
 use krilla::text::{Font, Glyph, GlyphId};
 use krilla::Document;
 
 use crate::geom::{
-    Affine, Color, ImageFit, LineCap, LineJoin as GLineJoin, PathSegment, Rect, StrokeStyle,
+    Affine, Brush, Color, ImageFit, LineCap, LineJoin as GLineJoin, PathSegment, Rect, StrokeStyle,
 };
-use crate::layout::{ComputedLayout, PageGeom, PathPaint, TextBox};
+use crate::layout::{ClipRegion, ComputedLayout, PageGeom, PathPaint, TextBox};
 use crate::text::FontStore;
 
 use super::geometry;
@@ -66,6 +73,8 @@ pub struct PdfRenderer<'s, 'a> {
     image_cache: HashMap<PathBuf, Option<(Image, f32, f32)>>,
     /// Glyph outlines, for text strokes.
     outlines: OutlineCache,
+    /// Number of open `push_clip`s (each one krilla push).
+    open_clips: usize,
 }
 
 impl<'s, 'a> PdfRenderer<'s, 'a> {
@@ -79,6 +88,7 @@ impl<'s, 'a> PdfRenderer<'s, 'a> {
             font_cache: HashMap::new(),
             image_cache: HashMap::new(),
             outlines: OutlineCache::new(),
+            open_clips: 0,
         }
     }
 
@@ -101,6 +111,24 @@ impl<'s, 'a> PdfRenderer<'s, 'a> {
             return;
         };
         self.surface.set_fill(fill.map(k_fill));
+        self.surface.set_stroke(stroke.map(k_stroke));
+        self.surface.draw_path(&path);
+    }
+
+    /// Fill (colour or gradient) and/or stroke a shared-geometry outline.
+    fn draw_brush_segs(
+        &mut self,
+        segs: &[PathSegment],
+        fill: Option<&Brush>,
+        stroke: Option<&StrokeStyle>,
+    ) {
+        if fill.is_none() && stroke.is_none() {
+            return; // krilla would default to a black fill
+        }
+        let Some(path) = k_path(segs) else {
+            return;
+        };
+        self.surface.set_fill(fill.map(k_brush_fill));
         self.surface.set_stroke(stroke.map(k_stroke));
         self.surface.draw_path(&path);
     }
@@ -194,6 +222,69 @@ fn k_stroke(s: &StrokeStyle) -> Stroke {
     }
 }
 
+/// A krilla fill for a brush. Gradient coordinates are user space (the
+/// node's local frame); a degenerate gradient becomes its fallback colour.
+fn k_brush_fill(b: &Brush) -> Fill {
+    let stops = || -> Vec<Stop> {
+        b.stops()
+            .iter()
+            .map(|s| Stop {
+                offset: NormalizedF32::new(s.offset.clamp(0.0, 1.0)).unwrap_or(NormalizedF32::ZERO),
+                color: k_color(s.color).into(),
+                opacity: k_opacity(s.color.a),
+            })
+            .collect()
+    };
+    let paint: krilla::paint::Paint = match b {
+        Brush::Solid(c) => return k_fill(*c),
+        Brush::Linear { start, end, .. } => {
+            if (end.x - start.x).hypot(end.y - start.y) < 1e-6 {
+                return k_fill(b.fallback_color());
+            }
+            LinearGradient {
+                x1: start.x,
+                y1: start.y,
+                x2: end.x,
+                y2: end.y,
+                transform: Transform::identity(),
+                spread_method: SpreadMethod::Pad,
+                stops: stops(),
+                anti_alias: false,
+            }
+            .into()
+        }
+        Brush::Radial {
+            center,
+            focal,
+            radius,
+            transform: t,
+            ..
+        } => {
+            if *radius <= 0.0 || (t.a * t.d - t.b * t.c).abs() < 1e-12 {
+                return k_fill(b.fallback_color());
+            }
+            RadialGradient {
+                fx: focal.x,
+                fy: focal.y,
+                fr: 0.0,
+                cx: center.x,
+                cy: center.y,
+                cr: *radius,
+                transform: Transform::from_row(t.a, t.b, t.c, t.d, t.e, t.f),
+                spread_method: SpreadMethod::Pad,
+                stops: stops(),
+                anti_alias: false,
+            }
+            .into()
+        }
+    };
+    Fill {
+        paint,
+        opacity: NormalizedF32::ONE,
+        rule: FillRule::NonZero,
+    }
+}
+
 /// Solid stroke of `width` (rect borders).
 fn plain_stroke(color: Color, width: f32) -> StrokeStyle {
     StrokeStyle {
@@ -282,15 +373,41 @@ impl Renderer for PdfRenderer<'_, '_> {
 
     fn begin_page(&mut self, page: &PageGeom) {
         // Same default as PNG: white when no background is given.
-        let bg = page.background.unwrap_or(Color::WHITE);
+        let white = Brush::Solid(Color::WHITE);
+        let bg = page.background.as_ref().unwrap_or(&white);
         let r = Rect::new(0.0, 0.0, page.width_pt, page.height_pt);
-        self.draw_segs(&geometry::rounded_rect(r, 0.0), Some(bg), None);
+        self.draw_brush_segs(&geometry::rounded_rect(r, 0.0), Some(bg), None);
+    }
+
+    fn push_clip(&mut self, clip: &ClipRegion) {
+        match k_path(&clip.page_outline()) {
+            Some(path) => self.surface.push_clip_path(&path, &FillRule::NonZero),
+            // Degenerate region: nothing inside shows.
+            None => self.surface.push_opacity(NormalizedF32::ZERO),
+        }
+        self.open_clips += 1;
+    }
+
+    fn pop_clip(&mut self) {
+        if self.open_clips > 0 {
+            self.open_clips -= 1;
+            self.surface.pop();
+        }
+    }
+
+    fn draw_shape(
+        &mut self,
+        segs: &[PathSegment],
+        fill: Option<&Brush>,
+        stroke: Option<&StrokeStyle>,
+    ) {
+        self.draw_brush_segs(segs, fill, stroke);
     }
 
     fn fill_rect(
         &mut self,
         rect: Rect,
-        fill: Option<Color>,
+        fill: Option<&Brush>,
         stroke: Option<Color>,
         stroke_width: f32,
         corner_radius: f32,
@@ -302,7 +419,7 @@ impl Renderer for PdfRenderer<'_, '_> {
         let stroke = stroke
             .filter(|_| stroke_width > 0.0)
             .map(|c| plain_stroke(c, stroke_width));
-        self.draw_segs(&segs, fill, stroke.as_ref());
+        self.draw_brush_segs(&segs, fill, stroke.as_ref());
     }
 
     fn draw_text(&mut self, rect: Rect, text: &TextBox) {
@@ -371,7 +488,7 @@ impl Renderer for PdfRenderer<'_, '_> {
             let (fill, border) = geometry::placeholder_colors();
             self.fill_rect(
                 rect,
-                Some(fill),
+                Some(&Brush::Solid(fill)),
                 Some(border),
                 geometry::PLACEHOLDER_BORDER,
                 0.0,
@@ -405,8 +522,8 @@ impl Renderer for PdfRenderer<'_, '_> {
         if path.segments.len() < 2 {
             return;
         }
-        if let Some(fill) = path.fill {
-            self.draw_segs(&path.segments, Some(fill), None);
+        if let Some(fill) = &path.fill {
+            self.draw_brush_segs(&path.segments, Some(fill), None);
         }
         let Some(stroke) = &path.stroke else {
             return;
@@ -420,11 +537,11 @@ impl Renderer for PdfRenderer<'_, '_> {
         }
     }
 
-    fn draw_ellipse(&mut self, rect: Rect, fill: Option<Color>, stroke: Option<&StrokeStyle>) {
+    fn draw_ellipse(&mut self, rect: Rect, fill: Option<&Brush>, stroke: Option<&StrokeStyle>) {
         if rect.w <= 0.0 || rect.h <= 0.0 {
             return;
         }
-        self.draw_segs(&geometry::ellipse(rect), fill, stroke);
+        self.draw_brush_segs(&geometry::ellipse(rect), fill, stroke);
     }
 }
 

@@ -9,7 +9,7 @@ use crate::geom::{
 };
 use crate::schema::{Common, NodeType, RectProps, TextProps};
 
-use super::computed::{ComputedNode, PaintContent, PathPaint, TextBox};
+use super::computed::{ClipRegion, ComputedNode, FramePaint, PaintContent, PathPaint, TextBox};
 use super::measure::{
     measure, stack_child_avail, stack_child_constraints, stack_child_size, tighten,
 };
@@ -42,7 +42,11 @@ pub(crate) fn arrange<M: LeafMeasure>(
         rect,
         transform: xf,
         content: paint_content(&node.kind, &node.common, rect),
+        clips: Vec::new(),
     });
+    // Everything pushed after this node, until it returns, is its subtree
+    // (pre-order): a clipping container hands its region to all of it.
+    let subtree_start = out.len();
 
     match &node.kind {
         NodeType::Container {
@@ -51,6 +55,7 @@ pub(crate) fn arrange<M: LeafMeasure>(
             spacing,
             main_axis,
             cross_axis,
+            ..
         } => {
             let content = rect.inset(node.common.padding);
             // A column whose height is content-derived (auto-height page) gives
@@ -73,6 +78,7 @@ pub(crate) fn arrange<M: LeafMeasure>(
             children,
             viewbox,
             contain,
+            ..
         } => {
             let content = rect.inset(node.common.padding);
             if *contain {
@@ -83,6 +89,37 @@ pub(crate) fn arrange<M: LeafMeasure>(
         }
         _ => {}
     }
+
+    if let Some(region) = node
+        .kind
+        .decoration()
+        .and_then(|d| clip_region(d, rect, xf))
+    {
+        for n in &mut out[subtree_start..] {
+            // Ancestors finish later, so inserting at the front keeps the
+            // list outermost-first.
+            n.clips.insert(0, region.clone());
+        }
+    }
+}
+
+/// The region a `clip` decoration keeps its children in: the box inside
+/// the border (inset by the stroke width, radius reduced to match), in the
+/// container's local frame.
+fn clip_region(
+    d: &crate::schema::Decoration,
+    rect: Rect,
+    xf: Option<Affine>,
+) -> Option<ClipRegion> {
+    if !d.clip {
+        return None;
+    }
+    let sw = d.stroke.as_ref().map_or(0.0, |s| s.width);
+    Some(ClipRegion {
+        rect: rect.inset(Edges::all(sw)),
+        radius: (d.corner_radius - sw).max(0.0),
+        transform: xf,
+    })
 }
 
 /// The local box and accumulated transform of a node rotated by `degrees`
@@ -445,14 +482,21 @@ fn cross_axis_offset(align: CrossAxisAlign, content_cross: f32, child_cross: f32
 
 fn paint_content(kind: &NodeType, common: &Common, rect: Rect) -> PaintContent {
     match kind {
-        NodeType::Container { .. } | NodeType::Stack { .. } => PaintContent::Container,
+        NodeType::Container { .. } | NodeType::Stack { .. } => match kind.decoration() {
+            Some(d) if d.fill.is_some() || d.stroke.is_some() => PaintContent::Frame(FramePaint {
+                fill: d.fill.as_ref().map(|p| p.place(rect)),
+                stroke: d.stroke.clone(),
+                corner_radius: d.corner_radius,
+            }),
+            _ => PaintContent::Container,
+        },
         NodeType::Rect(RectProps {
             fill,
             stroke,
             stroke_width,
             corner_radius,
         }) => PaintContent::Rect {
-            fill: *fill,
+            fill: fill.as_ref().map(|p| p.place(rect)),
             stroke: *stroke,
             stroke_width: *stroke_width,
             corner_radius: *corner_radius,
@@ -493,14 +537,14 @@ fn paint_content(kind: &NodeType, common: &Common, rect: Rect) -> PaintContent {
                         None => s.translated(origin.x, origin.y),
                     })
                     .collect(),
-                fill: props.fill,
+                fill: props.fill.as_ref().map(|p| p.place(rect)),
                 stroke: props.stroke.clone(),
                 head: props.head,
                 head_size: props.head_size,
             })
         }
         NodeType::Ellipse(props) => PaintContent::Ellipse {
-            fill: props.fill,
+            fill: props.fill.as_ref().map(|p| p.place(rect)),
             stroke: props.stroke.clone(),
         },
     }

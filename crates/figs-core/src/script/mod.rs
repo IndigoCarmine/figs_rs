@@ -23,6 +23,18 @@
 //! ).unit("cm").background("#ffffff")
 //! ```
 //!
+//! Fills take a colour string or a gradient built with `linear(angle, stops)`
+//! / `linear([x1, y1], [x2, y2], stops)` / `radial(stops)` /
+//! `radial([cx, cy], radius, stops)` (box-relative; `.focal(fx, fy)` and
+//! `.absolute()` refine them), where `stops` is `[[0, "#…"], [1, "#…"]]` or
+//! just `["#…", "#…"]`. Containers take `.fill` / `.stroke` /
+//! `.stroke_width` / `.radius` / `.dash` / `.clip()` as their background and
+//! border:
+//!
+//! ```text
+//! col([...]).fill(linear(90, ["#0b1a3a", "#1d3b6e"])).stroke("#ffffff").radius(0.4).clip()
+//! ```
+//!
 //! [`eval_script`] then lowers the tree into a flat, id-keyed [`RawDocument`].
 
 use std::collections::HashMap;
@@ -31,8 +43,8 @@ use std::path::Path;
 use rhai::{Array, Dynamic, Engine, EvalAltResult, Map, NativeCallContext, Position};
 
 use crate::geom::{
-    ArcSweep, ArrowHead, Color, CrossAxisAlign, Edges, ImageFit, LineCap, LineJoin, MainAxisAlign,
-    TextAlign,
+    ArcSweep, ArrowHead, Color, CrossAxisAlign, Edges, ImageFit, LineCap, LineJoin, LinearDir,
+    MainAxisAlign, Paint, TextAlign,
 };
 use crate::schema::{ArcRadius, NodeKind, PageHeight, RawDocument, RawNode, RawPage, RawSegment};
 use crate::units::Unit;
@@ -218,6 +230,7 @@ fn blank_node(kind: NodeKind) -> RawNode {
         rotate: None,
         viewbox: None,
         contain: false,
+        clip: false,
         children: Vec::new(),
         spacing: 0.0,
         main_axis_alignment: None,
@@ -435,6 +448,64 @@ fn page_fn(
     })
 }
 
+/// Parse a colour string for the setter `name`.
+fn parse_color(name: &str, hex: &str) -> Result<Color, Box<EvalAltResult>> {
+    Color::parse_hex(hex).map_err(|_| {
+        err(format!(
+            "`{name}`: invalid color `{hex}` (expected hex like #rrggbb)"
+        ))
+    })
+}
+
+/// Gradient stops from `[[offset, "#…"], …]` or bare colours `["#…", …]`
+/// (automatic offsets, see [`crate::paint::auto_offsets`]).
+fn cast_stops(
+    name: &str,
+    stops: Array,
+) -> Result<Vec<crate::geom::GradientStop>, Box<EvalAltResult>> {
+    let bad = || {
+        err(format!(
+            r##"`{name}`: stops are [[offset, "#rrggbb"], …] or ["#rrggbb", …]"##
+        ))
+    };
+    let mut raw = Vec::with_capacity(stops.len());
+    for s in stops {
+        if s.is_string() {
+            let hex = s.into_string().map_err(|_| bad())?;
+            raw.push((None, parse_color(name, &hex)?));
+            continue;
+        }
+        let pair = s.try_cast::<Array>().ok_or_else(bad)?;
+        match pair.as_slice() {
+            [o, c] => {
+                let o = dyn_to_f32(o).ok_or_else(bad)?;
+                let hex = c.clone().into_string().map_err(|_| bad())?;
+                raw.push((Some(o), parse_color(name, &hex)?));
+            }
+            _ => return Err(bad()),
+        }
+    }
+    Ok(crate::paint::auto_offsets(&raw))
+}
+
+/// `[x, y]` -> a point, for the gradient builder `name`.
+fn cast_xy(name: &str, v: Array) -> Result<[f32; 2], Box<EvalAltResult>> {
+    let bad = || err(format!("`{name}` expects [x, y] number pairs"));
+    match v.as_slice() {
+        [x, y] => Ok([
+            dyn_to_f32(x).ok_or_else(bad)?,
+            dyn_to_f32(y).ok_or_else(bad)?,
+        ]),
+        _ => Err(bad()),
+    }
+}
+
+/// Validate a built gradient, reporting under the builder's name.
+fn checked_paint(name: &str, p: Paint) -> Result<Paint, Box<EvalAltResult>> {
+    p.validate().map_err(|e| err(format!("`{name}`: {e}")))?;
+    Ok(p)
+}
+
 /// Register a numeric chainable setter that accepts integer or float.
 fn reg_num(engine: &mut Engine, name: &'static str, set: fn(&mut RawNode, f32)) {
     engine.register_fn(
@@ -547,7 +618,8 @@ fn build_engine(base_dir: Option<&Path>) -> Engine {
 
     engine
         .register_type_with_name::<ScriptNode>("Node")
-        .register_type_with_name::<ScriptDoc>("Doc");
+        .register_type_with_name::<ScriptDoc>("Doc")
+        .register_type_with_name::<Paint>("Paint");
 
     // Constructors.
     engine.register_fn("text", |content: &str| {
@@ -676,8 +748,112 @@ fn build_engine(base_dir: Option<&Path>) -> Engine {
 
     // Color chainable setters.
     reg_color(&mut engine, "color", |r, c| r.color = Some(c));
-    reg_color(&mut engine, "fill", |r, c| r.fill = Some(c));
+    reg_color(&mut engine, "fill", |r, c| r.fill = Some(c.into()));
     reg_color(&mut engine, "stroke", |r, c| r.stroke = Some(c));
+    // `.fill(linear(…))` / `.fill(radial(…))`.
+    engine.register_fn("fill", |n: ScriptNode, p: Paint| {
+        set_node(n, |r| r.fill = Some(p))
+    });
+
+    // Gradient builders (box-relative geometry; see `crate::paint`).
+    engine.register_fn(
+        "linear",
+        |angle: Dynamic, stops: Array| -> Result<Paint, Box<EvalAltResult>> {
+            let a = dyn_to_f32(&angle)
+                .ok_or_else(|| err("`linear` expects an angle in degrees, or two [x, y] points"))?;
+            let stops = cast_stops("linear", stops)?;
+            checked_paint(
+                "linear",
+                Paint::Linear {
+                    dir: LinearDir::Angle(a),
+                    stops,
+                    absolute: false,
+                },
+            )
+        },
+    );
+    engine.register_fn(
+        "linear",
+        |from: Array, to: Array, stops: Array| -> Result<Paint, Box<EvalAltResult>> {
+            let dir = LinearDir::Points(cast_xy("linear", from)?, cast_xy("linear", to)?);
+            let stops = cast_stops("linear", stops)?;
+            checked_paint(
+                "linear",
+                Paint::Linear {
+                    dir,
+                    stops,
+                    absolute: false,
+                },
+            )
+        },
+    );
+    engine.register_fn(
+        "radial",
+        |stops: Array| -> Result<Paint, Box<EvalAltResult>> {
+            let stops = cast_stops("radial", stops)?;
+            checked_paint(
+                "radial",
+                Paint::Radial {
+                    center: [0.5, 0.5],
+                    radius: None,
+                    focal: None,
+                    stops,
+                    absolute: false,
+                },
+            )
+        },
+    );
+    engine.register_fn(
+        "radial",
+        |center: Array, radius: Dynamic, stops: Array| -> Result<Paint, Box<EvalAltResult>> {
+            let center = cast_xy("radial", center)?;
+            let r = dyn_to_f32(&radius).ok_or_else(|| err("`radial`: radius must be a number"))?;
+            let stops = cast_stops("radial", stops)?;
+            checked_paint(
+                "radial",
+                Paint::Radial {
+                    center,
+                    radius: Some(r),
+                    focal: None,
+                    stops,
+                    absolute: false,
+                },
+            )
+        },
+    );
+    // Where offset 0 of a radial gradient sits (default: its centre).
+    engine.register_fn(
+        "focal",
+        |mut p: Paint, fx: Dynamic, fy: Dynamic| -> Result<Paint, Box<EvalAltResult>> {
+            let [fx, fy] = nums("focal", "fx, fy", [fx, fy])?;
+            match &mut p {
+                Paint::Radial { focal, .. } => *focal = Some([fx, fy]),
+                _ => return Err(err("`focal` applies to a radial gradient")),
+            }
+            checked_paint("focal", p)
+        },
+    );
+    // Gradient points/radius in page units from the box's top-left corner.
+    engine.register_fn(
+        "absolute",
+        |mut p: Paint| -> Result<Paint, Box<EvalAltResult>> {
+            match &mut p {
+                Paint::Linear { absolute, .. } | Paint::Radial { absolute, .. } => *absolute = true,
+                Paint::Solid(_) => return Err(err("`absolute` applies to a gradient")),
+            }
+            checked_paint("absolute", p)
+        },
+    );
+    // Containers: clip the children to the (rounded) box inside the border.
+    engine.register_fn("clip", |n: ScriptNode| -> NodeResult {
+        if !matches!(
+            n.node.kind,
+            NodeKind::Column | NodeKind::Row | NodeKind::Stack
+        ) {
+            return Err(err("`clip` applies to a col/row/stack"));
+        }
+        Ok(set_node(n, |r| r.clip = true))
+    });
 
     // Enum chainable setters.
     reg_enum(&mut engine, "align", parse_text_align, |r, v| {
@@ -801,9 +977,12 @@ fn build_engine(base_dir: Option<&Path>) -> Engine {
         |d: ScriptDoc, hex: &str| -> Result<ScriptDoc, Box<EvalAltResult>> {
             let c = Color::parse_hex(hex)
                 .map_err(|_| err(format!("`background`: invalid color `{hex}`")))?;
-            Ok(set_doc(d, |pg| pg.background = Some(c)))
+            Ok(set_doc(d, |pg| pg.background = Some(c.into())))
         },
     );
+    engine.register_fn("background", |d: ScriptDoc, p: Paint| {
+        set_doc(d, |pg| pg.background = Some(p))
+    });
     engine.register_fn(
         "dpi",
         |d: ScriptDoc, v: Dynamic| -> Result<ScriptDoc, Box<EvalAltResult>> {

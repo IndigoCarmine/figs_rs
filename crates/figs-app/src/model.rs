@@ -25,6 +25,7 @@ fn blank(kind: NodeKind) -> RawNode {
         rotate: None,
         viewbox: None,
         contain: false,
+        clip: false,
         children: Vec::new(),
         spacing: 0.0,
         main_axis_alignment: None,
@@ -62,7 +63,7 @@ pub fn new_node(kind: NodeKind) -> RawNode {
             n.font_size = Some(16.0);
         }
         NodeKind::Rect => {
-            n.fill = Some(Color::parse_hex("#6ea8fe").unwrap());
+            n.fill = Some(Color::parse_hex("#6ea8fe").unwrap().into());
             n.corner_radius = Some(8.0);
         }
         NodeKind::Image => {
@@ -78,14 +79,14 @@ pub fn new_node(kind: NodeKind) -> RawNode {
             n.stroke_width = Some(2.0);
         }
         NodeKind::Ellipse => {
-            n.fill = Some(Color::parse_hex("#6ea8fe").unwrap());
+            n.fill = Some(Color::parse_hex("#6ea8fe").unwrap().into());
             n.width = Some(120.0);
             n.height = Some(80.0);
         }
         NodeKind::Path => {
             n.points = vec![[0.0, 60.0], [60.0, 0.0], [120.0, 60.0]];
             n.closed = true;
-            n.fill = Some(Color::parse_hex("#3ddc97").unwrap());
+            n.fill = Some(Color::parse_hex("#3ddc97").unwrap().into());
         }
     }
     n
@@ -125,7 +126,7 @@ pub fn default_document() -> RawDocument {
             unit: Unit::Pt,
             root: "root".to_string(),
             dpi: Some(96.0),
-            background: Some(Color::parse_hex("#faf7f0").unwrap()),
+            background: Some(Color::parse_hex("#faf7f0").unwrap().into()),
             font_family: None,
         },
         nodes,

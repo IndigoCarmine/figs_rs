@@ -2,21 +2,31 @@
 //! `dpi / 72`; the page background, rectangles, vector shapes, text glyphs and
 //! images are rasterized with anti-aliasing and the pixmap is encoded to PNG or read back
 //! as straight RGBA for on-screen preview.
+//!
+//! Gradient fills are tiny-skia `LinearGradient` / `RadialGradient` shaders
+//! in pixel space (the brush's local coordinates × dpi/72), so the fill's
+//! node transform turns them with the shape. Clipping (`clip = true`) is done
+//! by snapshot: [`Renderer::push_clip`] saves the canvas and rasterizes the
+//! clip outline into an anti-aliased mask; [`Renderer::pop_clip`] restores
+//! every pixel outside it (blending by coverage at the edge). That clips all
+//! drawing — glyph blits included — without threading a mask through every
+//! draw call, at the cost of one canvas copy per clipped container.
 
 use std::collections::HashMap;
 use std::path::Path;
 
 use cosmic_text::{CacheKey, CacheKeyFlags, SwashCache, SwashContent, SwashImage};
 use tiny_skia::{
-    ColorU8, FillRule, FilterQuality, IntSize, LineCap as SkLineCap, LineJoin as SkLineJoin, Mask,
-    Paint, PathBuilder, Pixmap, PixmapPaint, PremultipliedColorU8, Rect as SkRect, Stroke,
-    StrokeDash, Transform,
+    ColorU8, FillRule, FilterQuality, GradientStop as SkStop, IntSize, LineCap as SkLineCap,
+    LineJoin as SkLineJoin, LinearGradient as SkLinear, Mask, Paint, PathBuilder, Pixmap,
+    PixmapPaint, Point as SkPoint, PremultipliedColorU8, RadialGradient as SkRadial,
+    Rect as SkRect, Shader, SpreadMode, Stroke, StrokeDash, Transform,
 };
 
 use crate::geom::{
-    Affine, Color, ImageFit, LineCap, LineJoin, PathSegment, Point, Rect, StrokeStyle,
+    Affine, Brush, Color, ImageFit, LineCap, LineJoin, PathSegment, Point, Rect, StrokeStyle,
 };
-use crate::layout::{ComputedLayout, PageGeom, PathPaint, TextBox};
+use crate::layout::{ClipRegion, ComputedLayout, PageGeom, PathPaint, TextBox};
 use crate::text::FontStore;
 
 use super::geometry;
@@ -62,6 +72,9 @@ pub struct TinySkiaRenderer<'a> {
     /// Glyph outlines in font units (y up) plus units-per-em, per face and
     /// glyph, for text drawn under a rotation (`None` = no outline).
     glyph_paths: HashMap<(FaceId, u16), Option<(tiny_skia::Path, f32)>>,
+    /// Open clips: the canvas as it was at each `push_clip` and the clip's
+    /// coverage mask (`None` = degenerate clip, hides everything).
+    clips: Vec<(Pixmap, Option<Mask>)>,
 }
 
 type FaceId = cosmic_text::fontdb::ID;
@@ -82,6 +95,7 @@ impl<'a> TinySkiaRenderer<'a> {
             base_dir: opts.base_dir,
             xf: None,
             glyph_paths: HashMap::new(),
+            clips: Vec::new(),
         })
     }
 
@@ -225,6 +239,56 @@ impl<'a> TinySkiaRenderer<'a> {
 
     fn sk_rect(&self, r: Rect) -> Option<SkRect> {
         SkRect::from_xywh(self.px(r.x), self.px(r.y), self.px(r.w), self.px(r.h))
+    }
+
+    /// The tiny-skia shader for `brush`, in pixel space; a degenerate
+    /// gradient (zero-length line, empty box) falls back to a flat colour.
+    fn shader(&self, brush: &Brush) -> Shader<'static> {
+        let s = self.scale;
+        let stops = || -> Vec<SkStop> {
+            brush
+                .stops()
+                .iter()
+                .map(|st| SkStop::new(st.offset, sk_color(st.color)))
+                .collect()
+        };
+        let shader = match brush {
+            Brush::Solid(c) => return Shader::SolidColor(sk_color(*c)),
+            Brush::Linear { start, end, .. } => SkLinear::new(
+                SkPoint::from_xy(start.x * s, start.y * s),
+                SkPoint::from_xy(end.x * s, end.y * s),
+                stops(),
+                SpreadMode::Pad,
+                Transform::identity(),
+            ),
+            Brush::Radial {
+                center,
+                focal,
+                radius,
+                transform: t,
+                ..
+            } => SkRadial::new(
+                SkPoint::from_xy(focal.x, focal.y),
+                SkPoint::from_xy(center.x, center.y),
+                *radius,
+                stops(),
+                SpreadMode::Pad,
+                // Gradient space -> local points -> pixels.
+                Transform::from_row(t.a * s, t.b * s, t.c * s, t.d * s, t.e * s, t.f * s),
+            ),
+        };
+        shader.unwrap_or_else(|| Shader::SolidColor(sk_color(brush.fallback_color())))
+    }
+
+    /// Anti-aliased fill of `path` with `brush` (colour or gradient).
+    fn fill_brush(&mut self, path: &tiny_skia::Path, brush: &Brush) {
+        let paint = Paint {
+            shader: self.shader(brush),
+            anti_alias: true,
+            ..Paint::default()
+        };
+        self.pixmap
+            .fill_path(path, &paint, FillRule::Winding, self.sk_xf(), None);
     }
 
     /// Anti-aliased solid fill of `path`.
@@ -379,6 +443,22 @@ fn sk_color(c: Color) -> tiny_skia::Color {
     .unwrap_or(tiny_skia::Color::BLACK)
 }
 
+/// `old` + (`new` − `old`) × `cov`/255 per premultiplied channel (clip edges).
+fn lerp_px(old: PremultipliedColorU8, new: PremultipliedColorU8, cov: u8) -> PremultipliedColorU8 {
+    let k = cov as u32;
+    let mix = |n: u8, o: u8| ((n as u32 * k + o as u32 * (255 - k) + 127) / 255) as u8;
+    let a = mix(new.alpha(), old.alpha());
+    // Keep the premultiplied invariant (channel <= alpha) despite rounding.
+    let c = |n: u8, o: u8| mix(n, o).min(a);
+    PremultipliedColorU8::from_rgba(
+        c(new.red(), old.red()),
+        c(new.green(), old.green()),
+        c(new.blue(), old.blue()),
+        a,
+    )
+    .unwrap_or(new)
+}
+
 fn to_u8(v: f32) -> u8 {
     (v.clamp(0.0, 1.0) * 255.0).round() as u8
 }
@@ -512,14 +592,69 @@ impl Renderer for TinySkiaRenderer<'_> {
 
     fn begin_page(&mut self, page: &PageGeom) {
         // Default to white when no background is given (print-friendly).
-        let bg = page.background.unwrap_or(Color::WHITE);
-        self.pixmap.fill(sk_color(bg));
+        match &page.background {
+            None => self.pixmap.fill(tiny_skia::Color::WHITE),
+            Some(Brush::Solid(c)) => self.pixmap.fill(sk_color(*c)),
+            Some(bg) => {
+                self.pixmap.fill(tiny_skia::Color::TRANSPARENT);
+                let r = Rect::new(0.0, 0.0, page.width_pt, page.height_pt);
+                if let Some(path) = self.sk_path(&geometry::rounded_rect(r, 0.0)) {
+                    self.fill_brush(&path, bg);
+                }
+            }
+        }
+    }
+
+    fn push_clip(&mut self, clip: &ClipRegion) {
+        let mask = Mask::new(self.pixmap.width(), self.pixmap.height()).and_then(|mut m| {
+            let path = self.sk_path(&clip.page_outline())?;
+            m.fill_path(&path, FillRule::Winding, true, Transform::identity());
+            Some(m)
+        });
+        self.clips.push((self.pixmap.clone(), mask));
+    }
+
+    fn pop_clip(&mut self) {
+        let Some((saved, mask)) = self.clips.pop() else {
+            return;
+        };
+        let Some(mask) = mask else {
+            self.pixmap = saved; // degenerate clip: nothing shows
+            return;
+        };
+        // Outside the clip, put the saved pixels back; at its anti-aliased
+        // edge, blend by coverage (premultiplied, so a straight lerp).
+        let pixels = self.pixmap.pixels_mut().iter_mut().zip(saved.pixels());
+        for ((dst, old), &m) in pixels.zip(mask.data()) {
+            match m {
+                255 => {}
+                0 => *dst = *old,
+                m => *dst = lerp_px(*old, *dst, m),
+            }
+        }
+    }
+
+    fn draw_shape(
+        &mut self,
+        segs: &[PathSegment],
+        fill: Option<&Brush>,
+        stroke: Option<&StrokeStyle>,
+    ) {
+        let Some(path) = self.sk_path(segs) else {
+            return;
+        };
+        if let Some(fill) = fill {
+            self.fill_brush(&path, fill);
+        }
+        if let Some(stroke) = stroke {
+            self.stroke_shape(&path, stroke);
+        }
     }
 
     fn fill_rect(
         &mut self,
         rect: Rect,
-        fill: Option<Color>,
+        fill: Option<&Brush>,
         stroke: Option<Color>,
         stroke_width: f32,
         corner_radius: f32,
@@ -538,11 +673,7 @@ impl Renderer for TinySkiaRenderer<'_> {
         };
 
         if let Some(fill) = fill {
-            let mut paint = Paint::default();
-            paint.set_color(sk_color(fill));
-            paint.anti_alias = true;
-            self.pixmap
-                .fill_path(&path, &paint, FillRule::Winding, self.sk_xf(), None);
+            self.fill_brush(&path, fill);
         }
         if let Some(stroke) = stroke {
             if stroke_width > 0.0 {
@@ -606,9 +737,9 @@ impl Renderer for TinySkiaRenderer<'_> {
         if path.segments.len() < 2 {
             return;
         }
-        if let Some(fill) = path.fill {
+        if let Some(fill) = &path.fill {
             if let Some(p) = self.sk_path(&path.segments) {
-                self.fill_shape(&p, fill);
+                self.fill_brush(&p, fill);
             }
         }
         let Some(stroke) = &path.stroke else {
@@ -627,12 +758,12 @@ impl Renderer for TinySkiaRenderer<'_> {
         }
     }
 
-    fn draw_ellipse(&mut self, rect: Rect, fill: Option<Color>, stroke: Option<&StrokeStyle>) {
+    fn draw_ellipse(&mut self, rect: Rect, fill: Option<&Brush>, stroke: Option<&StrokeStyle>) {
         let Some(path) = self.sk_rect(rect).and_then(PathBuilder::from_oval) else {
             return;
         };
         if let Some(fill) = fill {
-            self.fill_shape(&path, fill);
+            self.fill_brush(&path, fill);
         }
         if let Some(stroke) = stroke {
             self.stroke_shape(&path, stroke);
@@ -650,7 +781,7 @@ impl Renderer for TinySkiaRenderer<'_> {
         let (fill, border) = geometry::placeholder_colors();
         self.fill_rect(
             rect,
-            Some(fill),
+            Some(&Brush::Solid(fill)),
             Some(border),
             geometry::PLACEHOLDER_BORDER,
             0.0,
