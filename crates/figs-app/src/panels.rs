@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use eframe::egui::{self, Color32, Rect, RichText, Sense, Stroke};
 use figs_core::geom::{
-    ArrowHead, Color, CrossAxisAlign, Edges, ImageFit, LineCap, MainAxisAlign, TextAlign,
+    ArrowHead, Color, CrossAxisAlign, Edges, ImageFit, LineCap, LineJoin, MainAxisAlign, TextAlign,
 };
 use figs_core::schema::{NodeKind, PageHeight, RawDocument, RawSegment};
 use figs_core::units::Unit;
@@ -289,6 +289,11 @@ fn inspector(app: &mut FigsApp, ui: &mut egui::Ui, _p: &Palette) {
                         changed |= opt_color(ui, "Color", &mut node.color);
                         changed |= align_seg(ui, "Align", &mut node.align);
                         changed |= opt_num(ui, "Line height", &mut node.line_height, 0.05);
+                        // Glyph outline (halo), painted behind the fill.
+                        section(ui, "Outline");
+                        changed |= opt_color(ui, "Stroke", &mut node.stroke);
+                        changed |= opt_num(ui, "Stroke width", &mut node.stroke_width, 0.01);
+                        changed |= join_seg(ui, "Join", &mut node.join, LineJoin::Round);
                     }
                     NodeKind::Rect => {
                         section(ui, "Rectangle");
@@ -360,6 +365,7 @@ fn inspector(app: &mut FigsApp, ui: &mut egui::Ui, _p: &Palette) {
                         changed |= opt_num(ui, "Stroke width", &mut node.stroke_width, 0.25);
                         changed |= dash_field(ui, "Dash", &mut node.dash);
                         changed |= cap_seg(ui, "Cap", &mut node.cap);
+                        changed |= join_seg(ui, "Join", &mut node.join, LineJoin::Miter);
                         if kind != NodeKind::Ellipse {
                             changed |= head_seg(ui, "Head", &mut node.head);
                             changed |= opt_num(ui, "Head size", &mut node.head_size, 0.25);
@@ -793,6 +799,26 @@ fn cap_seg(ui: &mut egui::Ui, label: &str, v: &mut Option<LineCap>) -> bool {
     changed
 }
 
+/// Line-join picker; `default` is what an unset join resolves to.
+fn join_seg(ui: &mut egui::Ui, label: &str, v: &mut Option<LineJoin>, default: LineJoin) -> bool {
+    let mut changed = false;
+    let cur = v.unwrap_or(default);
+    ui.horizontal(|ui| {
+        ui.label(label);
+        for (a, t) in [
+            (LineJoin::Miter, "miter"),
+            (LineJoin::Round, "round"),
+            (LineJoin::Bevel, "bevel"),
+        ] {
+            if ui.selectable_label(cur == a, t).clicked() {
+                *v = Some(a);
+                changed = true;
+            }
+        }
+    });
+    changed
+}
+
 fn head_seg(ui: &mut egui::Ui, label: &str, v: &mut Option<ArrowHead>) -> bool {
     let mut changed = false;
     ui.horizontal(|ui| {
@@ -1087,6 +1113,9 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
                     "color",
                     "align",
                     "line_height",
+                    "stroke",
+                    "stroke_width",
+                    "join",
                 ]),
                 Some(NodeKind::Image) => v.extend(["src", "fit"]),
                 Some(NodeKind::Rect) => {
@@ -1100,6 +1129,7 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
                     "stroke_width",
                     "dash",
                     "cap",
+                    "join",
                     "head",
                     "head_size",
                 ]),
@@ -1113,11 +1143,12 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
                     "stroke_width",
                     "dash",
                     "cap",
+                    "join",
                     "head",
                     "head_size",
                 ]),
                 Some(NodeKind::Ellipse) => {
-                    v.extend(["fill", "stroke", "stroke_width", "dash", "cap"])
+                    v.extend(["fill", "stroke", "stroke_width", "dash", "cap", "join"])
                 }
                 None => v.extend([
                     "content",
@@ -1143,6 +1174,7 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
                     "closed",
                     "dash",
                     "cap",
+                    "join",
                     "head",
                     "head_size",
                 ]),

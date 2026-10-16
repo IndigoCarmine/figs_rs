@@ -45,6 +45,7 @@ fn blank(kind: NodeKind) -> RawNode {
         closed: false,
         dash: Vec::new(),
         cap: None,
+        join: None,
         head: None,
         head_size: None,
     }

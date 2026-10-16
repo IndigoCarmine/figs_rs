@@ -7,15 +7,17 @@ use std::path::Path;
 
 use cosmic_text::{CacheKey, CacheKeyFlags, SwashCache, SwashContent, SwashImage};
 use tiny_skia::{
-    ColorU8, FillRule, FilterQuality, IntSize, LineCap as SkLineCap, Mask, Paint, PathBuilder,
-    Pixmap, PixmapPaint, PremultipliedColorU8, Rect as SkRect, Stroke, StrokeDash, Transform,
+    ColorU8, FillRule, FilterQuality, IntSize, LineCap as SkLineCap, LineJoin as SkLineJoin, Mask,
+    Paint, PathBuilder, Pixmap, PixmapPaint, PremultipliedColorU8, Rect as SkRect, Stroke,
+    StrokeDash, Transform,
 };
 
-use crate::geom::{Color, ImageFit, LineCap, PathSegment, Point, Rect, StrokeStyle};
+use crate::geom::{Color, ImageFit, LineCap, LineJoin, PathSegment, Point, Rect, StrokeStyle};
 use crate::layout::{ComputedLayout, PageGeom, PathPaint, TextBox};
 use crate::text::FontStore;
 
 use super::geometry;
+use super::outline::OutlineCache;
 use super::{paint, RenderOptions, Renderer};
 
 /// Errors from raster rendering.
@@ -47,6 +49,8 @@ pub struct TinySkiaRenderer<'a> {
     fonts: Option<&'a FontStore>,
     /// Glyph bitmap cache.
     swash: SwashCache,
+    /// Glyph outlines, for text strokes.
+    outlines: OutlineCache,
     /// Resolves relative image `src` paths.
     base_dir: &'a Path,
 }
@@ -63,6 +67,7 @@ impl<'a> TinySkiaRenderer<'a> {
             scale,
             fonts: opts.fonts,
             swash: SwashCache::new(),
+            outlines: OutlineCache::new(),
             base_dir: opts.base_dir,
         })
     }
@@ -122,6 +127,11 @@ impl<'a> TinySkiaRenderer<'a> {
                 LineCap::Butt => SkLineCap::Butt,
                 LineCap::Round => SkLineCap::Round,
                 LineCap::Square => SkLineCap::Square,
+            },
+            line_join: match style.join {
+                LineJoin::Miter => SkLineJoin::Miter,
+                LineJoin::Round => SkLineJoin::Round,
+                LineJoin::Bevel => SkLineJoin::Bevel,
             },
             dash,
             ..Stroke::default()
@@ -381,6 +391,16 @@ impl Renderer for TinySkiaRenderer<'_> {
         };
         let shaped = fonts.shape(&geometry::text_props(text), rect.w);
         let scale = self.scale;
+
+        // Outline first, as one path along the exact (unhinted) glyph
+        // outlines; the glyph bitmaps are then blended on top, so the stroke
+        // never eats into the glyph shapes.
+        if let Some(stroke) = &text.stroke {
+            let segs = self.outlines.text_outline(fonts, &shaped, rect, text.align);
+            if let Some(p) = self.sk_path(&segs) {
+                self.stroke_shape(&p, stroke);
+            }
+        }
 
         for line in &shaped.lines {
             let align_off = geometry::align_offset(text.align, line.width, rect.w);

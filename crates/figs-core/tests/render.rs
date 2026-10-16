@@ -214,3 +214,89 @@ fn auto_height_page_renders_at_content_height() {
     assert_pixel(&p, 50, 35, (255, 255, 255));
     assert_pixel(&p, 50, 50, (0, 0, 255));
 }
+
+/// A 72-dpi page with one big black "H" (white background), optionally
+/// outlined by the TOML lines in `stroke`. Returns the pixmap and the text
+/// node's rect.
+fn render_h(stroke: &str) -> (Pixmap, figs_core::geom::Rect) {
+    let src = format!(
+        r##"
+        [page]
+        width = 120
+        height = 100
+        unit = "pt"
+        dpi = 72
+        background = "#ffffff"
+        root = "root"
+        [nodes.root]
+        type = "stack"
+        children = ["t"]
+        [nodes.t]
+        type = "text"
+        content = "H"
+        font_size = 60
+        font_weight = 700
+        color = "#000000"
+        x = 30
+        y = 15
+        {stroke}
+    "##
+    );
+    let doc = Document::from_toml(&src).expect("resolve");
+    let fonts = FontStore::new();
+    let computed = layout(&doc, &fonts);
+    let rect = computed.nodes.iter().find(|n| n.id == "t").unwrap().rect;
+    let opts = RenderOptions {
+        fonts: Some(&fonts),
+        base_dir: std::path::Path::new("."),
+    };
+    let bytes = render_png(&computed, &opts).expect("render png");
+    (Pixmap::decode_png(&bytes).expect("decode png"), rect)
+}
+
+#[test]
+fn text_stroke_paints_behind_the_fill() {
+    let (plain, plain_rect) = render_h("");
+    let (outlined, rect) = render_h("stroke = \"#ff0000\"\nstroke_width = 6");
+    // Purely visual: the laid-out box is unchanged.
+    assert_eq!(rect, plain_rect);
+
+    let rgb = |p: &Pixmap, x: u32, y: u32| {
+        let c = p.pixel(x, y).unwrap();
+        (c.red(), c.green(), c.blue())
+    };
+    let is_black = |c: (u8, u8, u8)| c.0 < 10 && c.1 < 10 && c.2 < 10;
+    let is_white = |c: (u8, u8, u8)| c.0 > 250 && c.1 > 250 && c.2 > 250;
+    let (w, h) = (plain.width(), plain.height());
+    let near_ink = |x: u32, y: u32| {
+        (x.saturating_sub(2)..=(x + 2).min(w - 1)).any(|nx| {
+            (y.saturating_sub(2)..=(y + 2).min(h - 1)).any(|ny| is_black(rgb(&plain, nx, ny)))
+        })
+    };
+    let (mut interior, mut rim) = (0, 0);
+    for y in 0..h {
+        for x in 0..w {
+            let before = rgb(&plain, x, y);
+            let after = rgb(&outlined, x, y);
+            if is_black(before) {
+                // The glyph interior keeps the fill colour (stroke underneath).
+                assert!(is_black(after), "interior ({x},{y}) became {after:?}");
+                interior += 1;
+            } else if is_white(before) && near_ink(x, y) {
+                // Just outside the glyph edge (within 2 px, inside the 3 pt
+                // reach): the outline colour.
+                assert!(
+                    after.0 > 200 && after.1 < 60 && after.2 < 60,
+                    "rim ({x},{y}) is {after:?}, expected red"
+                );
+                rim += 1;
+            }
+        }
+    }
+    assert!(
+        interior > 200 && rim > 100,
+        "interior {interior}, rim {rim}"
+    );
+    // Far from the glyph the page is untouched.
+    assert_pixel(&outlined, 2, 2, (255, 255, 255));
+}

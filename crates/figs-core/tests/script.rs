@@ -259,6 +259,39 @@ fn error_syntax_reports_position() {
     assert!(e.line.is_some(), "expected a line number, got: {e}");
 }
 
+#[test]
+fn text_stroke_setters() {
+    use figs_core::geom::LineJoin;
+    // The shape setters `.stroke` / `.stroke_width` outline text too (page
+    // units); joins default to round on text, `.join` overrides.
+    let d = doc(r##"page(10, 5, col([
+            text("A").stroke("#ff0000").stroke_width(0.1),
+            text("B").stroke("#00ff00").join("miter"),
+            text("C"),
+            path([[0, 0], [1, 1], [2, 0]]).join("bevel"),
+        ])).unit("cm")"##);
+    let a = text_of(&d, "A").stroke.as_ref().expect("A outlined");
+    assert_eq!(a.color, Color::parse_hex("#ff0000").unwrap());
+    approx(a.width, 0.1 * Unit::Cm.to_pt());
+    assert_eq!(a.join, LineJoin::Round);
+    let b = text_of(&d, "B").stroke.as_ref().expect("B outlined");
+    approx(b.width, 1.0); // default width: 1 pt, as for shapes
+    assert_eq!(b.join, LineJoin::Miter);
+    assert!(text_of(&d, "C").stroke.is_none());
+    let path = d
+        .nodes
+        .iter()
+        .find_map(|n| match &n.kind {
+            NodeType::Path(p) => p.stroke.as_ref(),
+            _ => None,
+        })
+        .expect("path stroke");
+    assert_eq!(path.join, LineJoin::Bevel);
+
+    let e = eval_script(r#"page(1, 1, text("x").join("pointy"))"#).unwrap_err();
+    assert!(e.to_string().contains("`join`"), "{e}");
+}
+
 // ---- sandbox ---------------------------------------------------------------
 
 #[test]

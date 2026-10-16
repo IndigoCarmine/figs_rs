@@ -35,6 +35,7 @@ fn text(content: &str, font_size: f32) -> TextProps {
         color: figs_core::geom::Color::BLACK,
         align: figs_core::geom::TextAlign::Left,
         line_height: 1.2,
+        stroke: None,
     }
 }
 

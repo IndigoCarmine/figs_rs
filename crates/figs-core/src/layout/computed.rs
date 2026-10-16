@@ -101,4 +101,9 @@ pub struct TextBox {
     pub color: Color,
     pub align: TextAlign,
     pub line_height: f32,
+    /// Glyph outline painted *behind* the fill (paint order stroke → fill, as
+    /// SVG `paint-order="stroke"`), so the visible glyph shapes are unchanged
+    /// and only the outer half of the stroke shows. It may overhang `rect` by
+    /// `width / 2`; layout ignores it.
+    pub stroke: Option<StrokeStyle>,
 }

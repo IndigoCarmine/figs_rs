@@ -63,7 +63,8 @@ fn label_pad() { style_get("label_pad", base_size() * 0.01) }
 // ones. "" draws a bare label. See `halo`.
 fn label_halo() { style_get("label_halo", "#ffffff") }
 
-// Halo width (cm): 0.035 cm (~1 pt) at the default 10 pt label.
+// Halo width (cm): how far the rim reaches past the glyph edges — 0.035 cm
+// (~1 pt) at the default 10 pt label.
 fn label_halo_width() { style_get("label_halo_width", label_size() * 0.0035) }
 
 // Space between a panel and its caption in captioned panels (cm). Tighter than
@@ -104,8 +105,8 @@ fn scalebar_corner() { style_get("scalebar_corner", "bottom-right") }
 // Distance from the panel corner to the scale bar (cm); follows the label inset.
 fn scalebar_inset() { style_get("scalebar_inset", label_inset()) }
 
-// Thin outline around the bar and drop shadow under its label, for contrast on
-// bright image regions; "" draws neither.
+// Thin outline around the bar and its label, for contrast on bright image
+// regions; "" draws neither.
 fn scalebar_halo() { style_get("scalebar_halo", "#000000a0") }
 
 // Side inset of a field-scaled `scalebar(len, field, s)` as a fraction of the
@@ -263,21 +264,12 @@ fn caption(s) { text(s).size(base_size()).center() }
 // Panel label ("(a)"): `label_size()` (1.25x base), bold.
 fn label(s) { text(s).size(label_size()).bold() }
 
-// `t` (a text node) over a halo: twelve copies of it in `color`, offset `r`
-// (cm) around it every 30° and painted first — a text outline made of core
-// text nodes, legible on any background (eight copies leave visible steps at
-// stroke ends). A negative margin of `r` cancels the halo's extent, so the
-// result lays out exactly like `t` alone (same box, same corner placement).
-// Works for any overlay text: `halo(body("50 °C"), "#000000", 0.03)`.
-fn halo(t, color, r) {
-    let parts = [];
-    for i in 0..12 {
-        let a = i * PI() / 6.0;
-        parts.push(t.color(color).at(r + r * a.cos(), r + r * a.sin()));
-    }
-    parts.push(t.at(r, r));
-    stack(parts).margin(-r)
-}
+// `t` (a text node) with a halo: the core text outline (`stroke`) in `color`,
+// reaching `r` (cm) past the glyph edges with round joins. The outline is
+// painted behind the glyphs, so they keep their exact shape, and it is purely
+// visual: the result lays out exactly like `t` alone (same box, same corner
+// placement). Works for any overlay text: `halo(body("50 °C"), "#000000", 0.03)`.
+fn halo(t, color, r) { t.stroke(color).stroke_width(2.0 * r) }
 
 // ---------------------------------------------------------------------------
 // Bare-string sugar
@@ -589,14 +581,12 @@ fn pin_in(who, node, corner, inset) {
 }
 
 // The scale bar's label: bold, base size, centered, in `scalebar_color()`,
-// over a drop shadow in `scalebar_halo()` (both copies span the label's box;
-// the shadow is nudged down via its `y` offset, so centring is preserved).
+// outlined in `scalebar_halo()` (a `halo` reaching a quarter of the bar
+// thickness past the glyphs).
 fn scalebar_label(s) {
     let fg = text(s).size(base_size()).bold().center().color(scalebar_color());
-    let halo = scalebar_halo();
-    if halo == "" { return fg; }
-    let shadow = text(s).size(base_size()).bold().center().color(halo);
-    stack([shadow.y(scalebar_thickness() * 0.25), fg.y(0)])
+    let h = scalebar_halo();
+    if h == "" { fg } else { halo(fg, h, scalebar_thickness() * 0.25) }
 }
 
 // The bar itself: a filled rect `scalebar_thickness()` tall, outlined in

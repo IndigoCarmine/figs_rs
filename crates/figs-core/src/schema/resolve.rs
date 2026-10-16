@@ -13,8 +13,8 @@
 use std::collections::HashMap;
 
 use crate::geom::{
-    ArcSweep, ArrowHead, Axis, Color, CrossAxisAlign, Edges, ImageFit, MainAxisAlign, PathSegment,
-    Point, StrokeStyle, TextAlign, ViewBox,
+    ArcSweep, ArrowHead, Axis, Color, CrossAxisAlign, Edges, ImageFit, LineJoin, MainAxisAlign,
+    PathSegment, Point, StrokeStyle, TextAlign, ViewBox,
 };
 use crate::path::arc_to_cubics;
 
@@ -197,6 +197,10 @@ pub struct TextProps {
     pub align: TextAlign,
     /// Multiple of `font_size`.
     pub line_height: f32,
+    /// Glyph outline, painted behind the fill (paint order: stroke, then
+    /// fill). Purely visual: it never affects measurement, and may overhang
+    /// the text box by half its width. Joins default to round.
+    pub stroke: Option<StrokeStyle>,
 }
 
 #[derive(Debug, Clone)]
@@ -411,6 +415,10 @@ fn convert_node(
                 color: raw.color.unwrap_or(Color::BLACK),
                 align: raw.align.unwrap_or_default(),
                 line_height: raw.line_height.unwrap_or(DEFAULT_LINE_HEIGHT),
+                stroke: shape_stroke(id, raw, factor, false)?.map(|s| StrokeStyle {
+                    join: raw.join.unwrap_or(LineJoin::Round),
+                    ..s
+                }),
             })
         }
         NodeKind::Rect => NodeType::Rect(RectProps {
@@ -577,7 +585,8 @@ fn path_segments(
 
 /// The stroke of a vector shape: `stroke` (or black when `default_black` and
 /// unset), `stroke_width` (default [`DEFAULT_SHAPE_STROKE_WIDTH`] pt), the dash
-/// pattern (validated, scaled, odd lists repeated) and the cap. `None` when
+/// pattern (validated, scaled, odd lists repeated), the cap and the join
+/// (default miter; text overrides it to round). `None` when
 /// there is no color or the width is zero.
 fn shape_stroke(
     id: &str,
@@ -614,6 +623,7 @@ fn shape_stroke(
         width,
         dash,
         cap: raw.cap.unwrap_or_default(),
+        join: raw.join.unwrap_or_default(),
     }))
 }
 

@@ -31,7 +31,8 @@ use std::path::Path;
 use rhai::{Array, Dynamic, Engine, EvalAltResult, Map, Position};
 
 use crate::geom::{
-    ArcSweep, ArrowHead, Color, CrossAxisAlign, Edges, ImageFit, LineCap, MainAxisAlign, TextAlign,
+    ArcSweep, ArrowHead, Color, CrossAxisAlign, Edges, ImageFit, LineCap, LineJoin, MainAxisAlign,
+    TextAlign,
 };
 use crate::schema::{ArcRadius, NodeKind, PageHeight, RawDocument, RawNode, RawPage, RawSegment};
 use crate::units::Unit;
@@ -168,6 +169,14 @@ fn parse_cap(s: &str) -> Option<LineCap> {
         _ => return None,
     })
 }
+fn parse_join(s: &str) -> Option<LineJoin> {
+    Some(match s {
+        "miter" => LineJoin::Miter,
+        "round" => LineJoin::Round,
+        "bevel" => LineJoin::Bevel,
+        _ => return None,
+    })
+}
 fn parse_head(s: &str) -> Option<ArrowHead> {
     Some(match s {
         "none" => ArrowHead::None,
@@ -227,6 +236,7 @@ fn blank_node(kind: NodeKind) -> RawNode {
         closed: false,
         dash: Vec::new(),
         cap: None,
+        join: None,
         head: None,
         head_size: None,
     }
@@ -623,6 +633,8 @@ fn build_engine(base_dir: Option<&Path>) -> Engine {
     });
     reg_enum(&mut engine, "fit", parse_fit, |r, v| r.fit = Some(v));
     reg_enum(&mut engine, "cap", parse_cap, |r, v| r.cap = Some(v));
+    // Outline corner join (shapes and text strokes).
+    reg_enum(&mut engine, "join", parse_join, |r, v| r.join = Some(v));
     reg_enum(&mut engine, "head", parse_head, |r, v| r.head = Some(v));
 
     // Shape stroke dash pattern (page units) and polygon closing.

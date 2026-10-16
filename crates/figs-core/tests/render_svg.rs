@@ -384,3 +384,73 @@ fn curves_are_emitted_as_svg_curves() {
         Some("M0 50 Q20 0 40 50 C50 100 70 0 80 50")
     );
 }
+
+#[test]
+fn text_stroke_is_one_outline_path_under_the_glyphs() {
+    let doc = Document::from_toml(
+        r##"
+        [page]
+        width = 200
+        height = 80
+        unit = "pt"
+        root = "t"
+        [nodes.t]
+        type = "text"
+        content = "Halo"
+        font_size = 40
+        color = "#123456"
+        stroke = "#ffffff80"
+        stroke_width = 2
+        "##,
+    )
+    .unwrap();
+    let fonts = FontStore::new();
+    let svg = svg_with(&doc, &fonts, Path::new("."));
+    let xml = roxmltree::Document::parse(&svg).unwrap();
+    let outline = elements(&xml, "path")
+        .into_iter()
+        .find(|p| p.attribute("stroke").is_some())
+        .expect("outline path");
+    assert_eq!(outline.attribute("stroke"), Some("#ffffff"));
+    assert_eq!(outline.attribute("stroke-width"), Some("2"));
+    assert_eq!(outline.attribute("stroke-opacity"), Some("0.502"));
+    assert_eq!(outline.attribute("stroke-linejoin"), Some("round"));
+    assert_eq!(outline.attribute("fill"), Some("none"));
+    assert_eq!(outline.attribute("aria-hidden"), Some("true"));
+    // One contour per inked glyph at least (all glyphs in a single path) …
+    let d = outline.attribute("d").unwrap();
+    assert!(d.matches('M').count() >= 4, "{d}");
+    // … painted before (under) the glyph group, which stays fill-only.
+    let group = elements(&xml, "g")
+        .into_iter()
+        .find(|g| g.attribute("aria-label") == Some("Halo"))
+        .expect("text group");
+    assert!(outline.range().end <= group.range().start);
+    assert_eq!(group.attribute("fill"), Some("#123456"));
+    assert_eq!(group.attribute("stroke"), None);
+    // Exactly one outline: no per-glyph strokes.
+    let stroked = elements(&xml, "path")
+        .into_iter()
+        .filter(|p| p.attribute("stroke").is_some())
+        .count();
+    assert_eq!(stroked, 1);
+}
+
+#[test]
+fn shape_join_is_written() {
+    let svg = svg_of(
+        r##"
+        [page]
+        width = 100
+        height = 100
+        unit = "pt"
+        root = "p"
+        [nodes.p]
+        type = "path"
+        points = [[0, 0], [50, 50], [100, 0]]
+        stroke = "#000000"
+        join = "bevel"
+        "##,
+    );
+    assert!(svg.contains("stroke-linejoin=\"bevel\""), "{svg}");
+}

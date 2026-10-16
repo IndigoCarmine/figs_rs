@@ -59,8 +59,8 @@ fn order(id: &str) -> usize {
     id.strip_prefix("node").map_or(0, |n| n.parse().unwrap())
 }
 
-/// Id of the topmost (last-painted) text node with this content. Halos and
-/// shadows paint copies of a text *under* it, so this is the foreground.
+/// Id of the topmost (last-painted) text node with this content (a label
+/// background box paints under its text, so this is the foreground).
 fn text_id(d: &RawDocument, content: &str) -> String {
     d.nodes
         .iter()
@@ -76,7 +76,7 @@ fn text_node<'a>(d: &'a RawDocument, content: &str) -> &'a RawNode {
 }
 
 /// Id of the foreground text of a label tag node: the node itself when it is
-/// a bare text, else the last child of its halo / background stack.
+/// a (possibly outlined) text, else the last child of its background stack.
 fn tag_text(d: &RawDocument, id: &str) -> String {
     let n = &d.nodes[id];
     match n.kind {
@@ -298,7 +298,7 @@ fn panels_overlay_labels_top_left() {
         let kids = children(&d, sid);
         assert_eq!(kids.len(), 2, "panel + label");
         assert_eq!(kids[0].1.kind, NodeKind::Rect);
-        // The label tag (by default a halo stack) is pinned at the inset.
+        // The label tag (by default an outlined text) is pinned at the inset.
         assert_eq!(kids[1].1.x, Some(0.16));
         assert_eq!(kids[1].1.y, Some(0.16));
         let fg = tag_text(&d, kids[1].0);
@@ -846,7 +846,8 @@ fn scalebar_corner_and_no_label() {
 
 #[test]
 fn scalebar_halo_defaults() {
-    // Default halo: an outlined bar and a label over a nudged-down shadow copy.
+    // Default halo: an outlined bar and a single label text outlined (core
+    // text stroke) in the halo colour, reaching thickness / 4 past the glyphs.
     let d = raw(r#"page("double", annotate(rect(), scalebar(2, "5 um")))"#);
     let bar = &d.nodes[&bar_id(&d)];
     approx(bar.width.unwrap(), 2.0);
@@ -857,18 +858,14 @@ fn scalebar_halo_defaults() {
         .values()
         .filter(|n| n.content.as_deref() == Some("5 um"))
         .collect();
-    assert_eq!(texts.len(), 2, "label + shadow");
-    assert!(texts
-        .iter()
-        .all(|t| t.font_weight == Some(700) && t.font_size == Some(8.0)));
-    let mut ys: Vec<f32> = texts.iter().map(|t| t.y.unwrap()).collect();
-    ys.sort_by(f32::total_cmp);
-    approx(ys[0], 0.0);
-    approx(ys[1], 0.02); // thickness / 4
-    assert!(
-        texts.iter().all(|t| t.x.is_none()),
-        "both span the label box"
-    );
+    assert_eq!(texts.len(), 1, "one label node, no shadow copy");
+    let t = texts[0];
+    assert_eq!((t.font_weight, t.font_size), (Some(700), Some(8.0)));
+    assert_eq!(t.color, hex("#ffffff"));
+    assert_eq!(t.stroke, hex("#000000a0"));
+    approx(t.stroke_width.unwrap(), 0.04); // 2 x thickness / 4
+    assert_eq!((t.x, t.y), (None, None));
+    assert_eq!(bar.stroke, t.stroke);
 }
 
 #[test]
@@ -1224,29 +1221,37 @@ fn style_is_reset_per_evaluation() {
 #[test]
 fn label_halo_structure() {
     let d = raw(r#"page("single", labeled(rect(), "(a)"))"#);
-    let (hid, h) = children(&d, "root")[1];
-    // A stack of 12 halo copies under the label, cancelled by a negative margin.
-    assert_eq!(h.kind, NodeKind::Stack);
+    // The label is a single text node carrying a core outline (`stroke`) in
+    // the halo colour, reaching `r` past the glyphs: width 2r, round joins by
+    // default (resolve), no copies, no margins.
+    let (_, t) = children(&d, "root")[1];
+    assert_eq!(t.kind, NodeKind::Text);
+    assert_eq!(t.content.as_deref(), Some("(a)"));
+    assert_eq!(t.color, None, "the label keeps the default text colour");
+    assert_eq!(t.stroke, hex("#ffffff"));
     let r = 10.0 * 0.0035; // label_size() * 0.0035
-    for m in [h.margin.left, h.margin.top, h.margin.right, h.margin.bottom] {
-        approx(m, -r);
-    }
-    let parts = children(&d, hid);
-    assert_eq!(parts.len(), 13);
-    let (copies, fg) = parts.split_at(12);
-    let fg = fg[0].1;
-    assert_eq!(fg.content.as_deref(), Some("(a)"));
-    assert_eq!(fg.color, None, "the label keeps the default text colour");
-    approx(fg.x.unwrap(), r);
-    approx(fg.y.unwrap(), r);
-    for (_, c) in copies {
-        assert_eq!(c.content.as_deref(), Some("(a)"));
-        assert_eq!(c.color, hex("#ffffff"));
-        assert_eq!((c.font_size, c.font_weight), (fg.font_size, fg.font_weight));
-        // Every copy sits `r` from the label, so the rim is even all round.
-        let (dx, dy) = (c.x.unwrap() - r, c.y.unwrap() - r);
-        approx((dx * dx + dy * dy).sqrt(), r);
-    }
+    approx(t.stroke_width.unwrap(), 2.0 * r);
+    assert_eq!(t.join, None);
+    assert!(t.margin.is_zero());
+    assert_eq!(
+        d.nodes
+            .values()
+            .filter(|n| n.content.as_deref() == Some("(a)"))
+            .count(),
+        1
+    );
+    let doc = Document::from_script(r#"page("single", labeled(rect(), "(a)"))"#).unwrap();
+    let props = doc
+        .nodes
+        .iter()
+        .find_map(|n| match &n.kind {
+            figs_core::schema::NodeType::Text(t) => Some(t),
+            _ => None,
+        })
+        .unwrap();
+    let s = props.stroke.as_ref().expect("resolved outline");
+    assert_eq!(s.join, figs_core::geom::LineJoin::Round);
+    approx(s.width, 2.0 * r * Unit::Cm.to_pt());
 
     // "" draws a bare label; a background box replaces the halo.
     let d = raw(r#"fn label_halo() { "" } page("single", labeled(rect(), "(a)"))"#);
@@ -1260,8 +1265,8 @@ fn label_halo_structure() {
 
 #[test]
 fn halo_lays_out_like_the_bare_label() {
-    // The halo's negative margin cancels its extent: the label lands exactly
-    // where a bare label would, in every corner — also with an integer width.
+    // The outline is purely visual: the label lands exactly where a bare
+    // label would, in every corner — also with an integer width.
     for corner in ["top-left", "top-right", "bottom-left", "bottom-right"] {
         let src = |halo: &str| {
             format!(
@@ -1275,11 +1280,9 @@ fn halo_lays_out_like_the_bare_label() {
             let src = src(halo);
             let r = label_rect(&src, "(a)");
             assert_xywh(r, bare.x, bare.y, bare.w, bare.h);
-            // … and the halo stack hugs it, `w` larger on every side.
+            // … carrying an outline reaching `w` past the glyphs.
             let d = raw(&src);
-            let tag = find_id(&d, |n| n.kind == NodeKind::Stack && n.margin.left < 0.0);
-            let t = rect_of(&lay_fixed(&src), &tag);
-            assert_xywh(t, r.x - w, r.y - w, r.w + 2.0 * w, r.h + 2.0 * w);
+            approx(text_node(&d, "(a)").stroke_width.unwrap(), 2.0 * w);
         }
     }
 }

@@ -106,6 +106,7 @@ pub fn text_props(text: &TextBox) -> TextProps {
         color: text.color,
         align: text.align,
         line_height: text.line_height,
+        stroke: text.stroke.clone(),
     }
 }
 

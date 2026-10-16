@@ -10,7 +10,8 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::geom::{
-    ArcSweep, ArrowHead, Color, CrossAxisAlign, Edges, ImageFit, LineCap, MainAxisAlign, TextAlign,
+    ArcSweep, ArrowHead, Color, CrossAxisAlign, Edges, ImageFit, LineCap, LineJoin, MainAxisAlign,
+    TextAlign,
 };
 use crate::units::Unit;
 
@@ -231,6 +232,8 @@ pub struct RawNode {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub align: Option<TextAlign>,
     /// Line height as a multiple of `font_size` (unitless). Defaults to 1.2.
+    /// (`stroke` / `stroke_width` / `join` below also apply to text: an
+    /// outline painted behind the glyph fill.)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line_height: Option<f32>,
 
@@ -240,12 +243,15 @@ pub struct RawNode {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fit: Option<ImageFit>,
 
-    // ---- rect ----
+    // ---- rect (`stroke` / `stroke_width` are shared with shapes and text) ----
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fill: Option<Color>,
+    /// Outline colour. On a `text` node: the glyph outline, painted *behind*
+    /// the fill (SVG `paint-order="stroke"`), so a halo never thins the glyphs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stroke: Option<Color>,
-    /// Stroke width in the page unit.
+    /// Stroke width in the page unit (on text the outline reaches half of it
+    /// past the glyph edges; it does not change the laid-out box).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stroke_width: Option<f32>,
     /// Corner radius in the page unit.
@@ -273,6 +279,11 @@ pub struct RawNode {
     /// Line cap for open ends (`butt` / `round` / `square`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cap: Option<LineCap>,
+    /// Line join at outline corners (`miter` / `round` / `bevel`): shapes
+    /// default to `miter`, text outlines to `round`. Rect borders are always
+    /// mitered.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub join: Option<LineJoin>,
     /// Arrowhead placement (`none` / `start` / `end` / `both`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub head: Option<ArrowHead>,
