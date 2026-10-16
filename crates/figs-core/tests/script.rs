@@ -256,6 +256,16 @@ fn error_not_a_document() {
 }
 
 #[test]
+fn error_inside_user_fn_points_at_failing_line() {
+    // The position is the failing line inside `f`, not the outer `f()` call;
+    // rhai's message (with its call trace) is kept as-is.
+    let e = eval_script("fn f() {\n  text(\"x\").color(\"#xyz\")\n}\npage(1, 1, f())").unwrap_err();
+    assert_eq!((e.line, e.column), (Some(2), Some(13)), "{e}");
+    assert!(e.message.contains("invalid color"), "{e}");
+    assert!(e.message.contains("in call to function 'f'"), "{e}");
+}
+
+#[test]
 fn error_syntax_reports_position() {
     let e = eval_script("page(10, 10, ").unwrap_err();
     assert!(e.line.is_some(), "expected a line number, got: {e}");

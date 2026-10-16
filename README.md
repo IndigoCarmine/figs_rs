@@ -328,6 +328,18 @@ page("double", grid(2, panels(
 )))
 ```
 
+**Errors point at your script.** An error raised inside the framework is
+reported at *your* call into it, named after the function you called — never at
+a line of `prelude.rhai`:
+
+```text
+line 3, col 5: grid: ncols must be a positive integer (got 0)
+in call to function 'figure' (line 5, col 16)
+```
+
+If the call is inside one of your own functions, the position is that inner
+line and the trailing lines trace your calls outward.
+
 In the editor (`figs-editor`), the **Script** tab is the source of truth: press
 **Evaluate** (Ctrl+Enter) to lower the script into the editable **TOML** tab, the
 inspector and the live preview. Authoring flows Rhai → (TOML ↔ GUI) one way; use

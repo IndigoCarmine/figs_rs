@@ -91,7 +91,7 @@ fn grid(ncols, items) { grid(ncols, gap(), items) }
 
 fn grid(ncols, g, items) {
     if type_of(ncols) != "i64" || ncols < 1 {
-        throw "grid(): ncols must be a positive integer";
+        throw `grid(): ncols must be a positive integer (got ${ncols})`;
     }
     let rows = [];
     let cells = [];

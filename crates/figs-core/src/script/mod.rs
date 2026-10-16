@@ -555,12 +555,16 @@ mod prelude;
 
 /// Evaluate a Rhai script into a [`RawDocument`]. The script's last expression
 /// must be a `page(...)` call. The framework prelude is available implicitly.
+///
+/// Error positions always refer to `src`: an error raised inside the prelude is
+/// reported at the user's call into the framework, named after that function.
 pub fn eval_script(src: &str) -> Result<RawDocument, ScriptError> {
     let engine = build_engine();
-    let ast = prelude::compile_with_prelude(&engine, src).map_err(ScriptError::from_eval)?;
+    let (ast, origins) =
+        prelude::compile_with_prelude(&engine, src).map_err(ScriptError::from_eval)?;
     let value = engine
         .eval_ast::<Dynamic>(&ast)
-        .map_err(ScriptError::from_eval)?;
+        .map_err(|e| origins.script_error(e))?;
     let doc = value
         .try_cast::<ScriptDoc>()
         .ok_or_else(ScriptError::not_a_document)?;
