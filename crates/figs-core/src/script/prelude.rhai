@@ -137,19 +137,31 @@ fn scalebar_frac_inset() { style_get("scalebar_frac_inset", 0.025) }
 //   rsc      7 pt text, 8 pt "(a)" labels, 8.3 / 17.1 cm columns.
 //   poster   24 pt body (readable from ~2 m), 60 pt titles, 1 cm gaps; strokes,
 //            insets and halos scale up with the text.
+//   dark     the default sizes on a dark background: white text and plot
+//            lines (`fg`), `dark_palette()` series colours, a dark navy
+//            (#0f1a2e) page for `page(preset, root)`, black label halos and
+//            marker rings.
+//   poster-dark  poster sizes + the dark theme (slides, dark posters).
 // Line widths need no key of their own: annotation strokes follow the base
 // size (7 pt -> 0.035 cm ~ 1 pt, inside the usual 0.25-1.5 pt range).
 
 // Preset name -> style map ("default" is the built-in hook defaults).
 fn style_presets() {
     let journal = #{ font_family: "Arial", base_size: 7, label_size: 8 };
+    let poster = #{ base_size: 24, title_size: 60, gap: 1.0 };
+    let dark = #{
+        fg: "#ffffff", palette: dark_palette(), page_bg: "#0f1a2e",
+        label_halo: "#000000", marker_ring: "#0f1a2e",
+    };
     #{
         "default": #{},   // quoted: `default` is reserved in Rhai
         nature: journal + #{ label_style: "a", single_width: 8.9, double_width: 18.3 },
         science: journal + #{ label_style: "A", single_width: 5.7, double_width: 18.3 },
         acs: journal + #{ label_style: "(a)", single_width: 8.25, double_width: 17.78 },
         rsc: journal + #{ label_style: "(a)", single_width: 8.3, double_width: 17.1 },
-        poster: #{ base_size: 24, title_size: 60, gap: 1.0 },
+        poster: poster,
+        dark: dark,
+        "poster-dark": poster + dark,
     }
 }
 
@@ -162,6 +174,13 @@ fn style_keys() {
         "single_width", "double_width", "accent", "annotation_width",
         "annotation_dash", "scalebar_color", "scalebar_thickness",
         "scalebar_corner", "scalebar_inset", "scalebar_halo", "scalebar_frac_inset",
+        // plots
+        "plot_line_width", "series_width", "palette", "tick_length", "tick_direction",
+        "minor_ticks", "max_ticks", "marker_size", "marker_open", "marker_stroke_width",
+        "marker_ring", "plot_frame", "legend_corner", "legend_style", "bar_width",
+        "plot_aspect", "plot_label_room", "plot_pad", "ylabel_rotated", "plot_title_size",
+        // colours (theme)
+        "fg", "plot_fg", "plot_bg", "page_bg",
     ]
 }
 
@@ -208,69 +227,148 @@ fn list_names(xs) {
 // --- Plots (see the "Plots" section below) ---
 
 // Stroke width of plot axes and ticks (cm): ~0.8 pt at the default 8 pt.
-fn plot_line_width() { base_size() * 0.0035 }
+fn plot_line_width() { style_get("plot_line_width", base_size() * 0.0035) }
 
 // Width of data lines (cm): ~1.4 pt at the default 8 pt.
-fn series_width() { plot_line_width() * 1.75 }
+fn series_width() { style_get("series_width", plot_line_width() * 1.75) }
 
 // Series colours, assigned in order to series without an explicit colour:
 // Okabe–Ito, distinguishable with the common colour-vision deficiencies and
-// legible in print. Yellow and black come last.
+// legible in print. Yellow and black come last. (`dark_palette()` is the
+// variant for dark backgrounds that the "dark" presets switch to.)
 fn palette() {
-    ["#0072B2", "#E69F00", "#009E73", "#D55E00", "#56B4E9", "#CC79A7", "#F0E442", "#000000"]
+    style_get("palette",
+        ["#0072B2", "#E69F00", "#009E73", "#D55E00", "#56B4E9", "#CC79A7", "#F0E442", "#000000"])
 }
 
-// Length of the (outward) tick marks (cm): 0.12 cm at the default 8 pt.
-fn tick_length() { base_size() * 0.015 }
+// Length of the tick marks (cm): 0.12 cm at the default 8 pt.
+fn tick_length() { style_get("tick_length", base_size() * 0.015) }
+
+// Ticks point "out" of the data area (default, the journal convention) or
+// "in" (into it, the instrument-software look).
+fn tick_direction() { style_get("tick_direction", "out") }
+
+// Unlabelled minor ticks between the labelled ones on linear axes: this many
+// intervals per step (e.g. 2 halves it, 5 for fifths); 0 (default) for none.
+// Log axes always get their 2–9 × 10ⁿ minor ticks.
+fn minor_ticks() { style_get("minor_ticks", 0) }
 
 // At most this many labelled ticks per axis; steps are 1, 2 or 5 x 10^n.
-fn max_ticks() { 7 }
+fn max_ticks() { style_get("max_ticks", 7) }
 
 // Marker diameter (cm): 0.16 cm (~4.5 pt) at the default 8 pt.
-fn marker_size() { base_size() * 0.02 }
+fn marker_size() { style_get("marker_size", base_size() * 0.02) }
+
+// Default for the series option `open`: hollow markers (an outline in the
+// series colour) instead of filled ones.
+fn marker_open() { style_get("marker_open", false) }
+
+// Outline width of hollow markers (cm): ~1 pt at the default 8 pt, a little
+// heavier than the axes so open circles stay visible over a fit line.
+fn marker_stroke_width() { style_get("marker_stroke_width", plot_line_width() * 1.25) }
+
+// Ring around filled markers, in the background colour, so overlapping
+// markers stay apart; "" for none.
+fn marker_ring() { style_get("marker_ring", "#ffffff") }
 
 // Plot frame: "open" (left + bottom axes, the usual journal style), "box"
 // (all four sides) or "none".
-fn plot_frame() { "open" }
+fn plot_frame() { style_get("plot_frame", "open") }
 
 // Legend placement when series are labelled: "auto" (the corner with the
 // least data in it), a corner name ("top-right", …), or "" for no legend.
-fn legend_corner() { "auto" }
+fn legend_corner() { style_get("legend_corner", "auto") }
+
+// Legend look: "swatch" (a line/marker key before each label) or "text" (the
+// labels alone, each in its series colour — the poster/slide convention).
+fn legend_style() { style_get("legend_style", "swatch") }
 
 // Bar width as a fraction of the spacing between bars (or categories).
-fn bar_width() { 0.7 }
+fn bar_width() { style_get("bar_width", 0.7) }
 
 // Width / height of a whole plot panel (axes and labels included), so plots
 // get a height on auto-height pages; 0 leaves the size to the layout.
-fn plot_aspect() { 4.0 / 3.0 }
+fn plot_aspect() { style_get("plot_aspect", 4.0 / 3.0) }
 
 // Empty band at the top of a plot that a panel label fits in (cm): the label
 // inset plus one label line. Set it to 0 for plots that are never labelled.
-fn plot_label_room() { label_inset() + base_size() * 1.25 * 1.3 * 2.54 / 72.0 }
+fn plot_label_room() {
+    style_get("plot_label_room", label_inset() + base_size() * 1.25 * 1.3 * 2.54 / 72.0)
+}
 
 // Clear space between a plot's outermost marks (tick labels, axis labels)
 // and its box (cm), so labels never touch the panel edge.
-fn plot_pad() { base_size() * 0.01 }
+fn plot_pad() { style_get("plot_pad", base_size() * 0.01) }
 
 // The y axis label turned 90° (reading upwards) left of the y tick labels and
 // centred on the axis (true), or horizontal above the axis (false).
-fn ylabel_rotated() { true }
+fn ylabel_rotated() { style_get("ylabel_rotated", true) }
+
+// Size (pt) of a plot's `title` (centred above the data area): the base size,
+// like the axis labels.
+fn plot_title_size() { style_get("plot_title_size", base_size()) }
+
+// --- Colours (theme) ---
+
+// Foreground colour of framework text — semantic text (`body`, `title`, …)
+// and, through `plot_fg()`, everything plots draw that isn't data. "" (default)
+// keeps the renderer's default black and sets no colour at all.
+fn fg() { style_get("fg", "") }
+
+// Plot foreground: axes, frame, ticks, tick and axis labels, titles, legend
+// text of the swatch legend, error bars without a colour of their own,
+// `plot_text` / `plot_arrow` annotations. Follows `fg()` (black by default).
+fn plot_fg() {
+    let f = fg();
+    style_get("plot_fg", if f == "" { "#000000" } else { f })
+}
+
+// Fill behind a whole plot panel (axes, labels and all); "" (default) leaves
+// it transparent over whatever is behind (the page background).
+fn plot_bg() { style_get("plot_bg", "") }
+
+// Page background of `page(preset, root)`; "" (default) sets none (white).
+fn page_bg() { style_get("page_bg", "") }
+
+// Series colours for dark backgrounds: Okabe–Ito hues lifted so each has at
+// least 6:1 contrast (WCAG) on a dark navy (#0f1a2e) — readable as legend
+// text — and stays apart under deuteranopia/protanopia. White comes last.
+fn dark_palette() {
+    ["#FF9F40", "#5CC8FF", "#3DDC97", "#FF6B5A", "#F28CB8", "#F0E442", "#FFFFFF"]
+}
+
+// Colour `i` (0-based, wrapping) of `palette()`, to share one colour between
+// series — e.g. data markers and their fit line. A series' `color` option
+// also takes the index directly: `#{ color: 1 }`.
+fn palette_color(i) {
+    let p = palette();
+    if type_of(i) != "i64" || p.len() == 0 {
+        throw `palette_color(): expected an integer index (got ${type_of(i)} ${i})`;
+    }
+    p[((i % p.len()) + p.len()) % p.len()]
+}
 
 // ---------------------------------------------------------------------------
 // Semantic text
 // ---------------------------------------------------------------------------
 
+// `text(s)` in the theme's `fg()` colour (no colour set while it is "").
+fn fg_text(s) {
+    let c = fg();
+    if c == "" { text(s) } else { text(s).color(c) }
+}
+
 // Running text; also what a bare string in a framework container becomes.
-fn body(s) { text(s).size(base_size()) }
+fn body(s) { fg_text(s).size(base_size()) }
 
 // Figure/poster title: `title_size()` (1.5x base), bold, centered.
-fn title(s) { text(s).size(title_size()).bold().center() }
+fn title(s) { fg_text(s).size(title_size()).bold().center() }
 
 // Caption under a panel: base size, centered.
-fn caption(s) { text(s).size(base_size()).center() }
+fn caption(s) { fg_text(s).size(base_size()).center() }
 
 // Panel label ("(a)"): `label_size()` (1.25x base), bold.
-fn label(s) { text(s).size(label_size()).bold() }
+fn label(s) { fg_text(s).size(label_size()).bold() }
 
 // `t` (a text node) with a halo: the core text outline (`stroke`) in `color`,
 // reaching `r` (cm) past the glyph edges with round joins. The outline is
@@ -539,10 +637,13 @@ fn paper_size(name) {
 }
 
 // A page sized by preset name, in cm: `page("double", root)`, in the style's
-// `font_family()` when one is set (chain `.font(name)` to override).
+// `font_family()` when one is set (chain `.font(name)` to override), on the
+// style's `page_bg()` background when one is set.
 fn page(preset, root) {
     let s = paper_size(preset);
     let d = page(s[0], s[1], root).unit("cm");
+    let bg = page_bg();
+    if bg != "" { d = d.background(bg); }
     let f = font_family();
     if f == "" { d } else { d.font(f) }
 }
@@ -940,14 +1041,19 @@ fn plot_series(kind, xs, ys, opts) {
         xs = plot_numbers(kind, "x", xs);
     }
     let s = #{ kind: if kind == "line_plot" { "line" } else { kind }, x: xs, y: ys, label: "", color: "", width: (), dash: [],
-               marker: if kind == "scatter" { "o" } else { "none" }, size: (), yerr: () };
-    let known = ["label", "color", "width", "dash", "marker", "size", "yerr"];
+               marker: if kind == "scatter" { "o" } else { "none" }, size: (), yerr: (), open: marker_open() };
+    let known = ["label", "color", "width", "dash", "marker", "size", "yerr", "open"];
     for k in opts.keys() {
         if !known.contains(k) {
-            throw `${kind}(): unknown option "${k}" (label, color, width, dash, marker, size, yerr)`;
+            throw `${kind}(): unknown option "${k}" (label, color, width, dash, marker, size, yerr, open)`;
         }
         s[k] = opts[k];
     }
+    if type_of(s.color) == "i64" { s.color = palette_color(s.color); }
+    if type_of(s.color) != "string" {
+        throw `${kind}(): color must be "#rrggbb" or a palette index (got ${type_of(s.color)})`;
+    }
+    if type_of(s.open) != "bool" { throw `${kind}(): open must be true or false (got ${s.open})`; }
     if type_of(s.yerr) != "()" {
         s.yerr = plot_numbers(kind, "yerr", s.yerr);
         if s.yerr.len() != ys.len() {
@@ -961,11 +1067,12 @@ fn plot_series(kind, xs, ys, opts) {
 }
 
 // A line through the points; `opts` is a legend label or a map of
-// label/color/width/dash/marker/size/yerr.
+// label/color/width/dash/marker/size/yerr/open.
 fn line_plot(xs, ys) { plot_series("line_plot", xs, ys, #{}) }
 fn line_plot(xs, ys, opts) { plot_series("line_plot", xs, ys, opts) }
 
-// Markers at the points (marker "o"; also "s", "^", "d").
+// Markers at the points (marker "o"; also "s", "^", "d"); `open: true` draws
+// them hollow.
 fn scatter(xs, ys) { plot_series("scatter", xs, ys, #{}) }
 fn scatter(xs, ys, opts) { plot_series("scatter", xs, ys, opts) }
 
@@ -974,7 +1081,7 @@ fn scatter(xs, ys, opts) { plot_series("scatter", xs, ys, opts) }
 fn bars(xs, ys) { plot_series("bars", xs, ys, #{}) }
 fn bars(xs, ys, opts) { plot_series("bars", xs, ys, opts) }
 
-// Error bars only: y ± errs (black unless `color` is given).
+// Error bars only: y ± errs (in `plot_fg()` unless `color` is given).
 fn errorbars(xs, ys, errs) { errorbars(xs, ys, errs, #{}) }
 fn errorbars(xs, ys, errs, opts) {
     if type_of(opts) == "string" { opts = #{ label: opts }; }
@@ -983,7 +1090,7 @@ fn errorbars(xs, ys, errs, opts) {
 }
 
 // Series with their colours filled in from `palette()` (in order; error-bar
-// only series default to black and take no palette slot).
+// only series default to `plot_fg()` and take no palette slot).
 fn plot_colored(series) {
     if type_of(series) == "map" { series = [series]; }
     let pal = palette();
@@ -994,7 +1101,7 @@ fn plot_colored(series) {
             throw `plot(): series must be line_plot/scatter/bars/errorbars (got ${type_of(s)})`;
         }
         if s.kind == "errorbars" {
-            if s.color == "" { s.color = "#000000"; }
+            if s.color == "" { s.color = plot_fg(); }
         } else {
             if s.color == "" { s.color = pal[i % pal.len()]; }
             i += 1;
@@ -1006,12 +1113,21 @@ fn plot_colored(series) {
 
 // --- marks ---
 
-// Plot text: base size, black.
-fn plot_text(s) { text(s).size(base_size()) }
+// Plot text: base size, in `plot_fg()`, in the page font (no font of its
+// own, so CJK labels and the style's `font_family()` apply as everywhere).
+fn plot_text(s) { text(s).size(base_size()).color(plot_fg()) }
 
 // A marker of `shape` ("o", "s", "^", "d") and diameter `d`, filled with `c`
-// and ringed in white so overlapping markers stay apart.
-fn plot_marker(shape, d, c) {
+// and ringed in `marker_ring()` so overlapping markers stay apart — or, when
+// `open`, hollow: outlined in `c`, `marker_stroke_width()` wide.
+fn plot_marker(shape, d, c, open) {
+    let m = plot_marker_shape(shape, d);
+    if open { return m.stroke(c).stroke_width(marker_stroke_width()); }
+    let ring = marker_ring();
+    if ring == "" { m.fill(c) } else { m.fill(c).stroke(ring).stroke_width(plot_line_width() * 0.5) }
+}
+
+fn plot_marker_shape(shape, d) {
     let m = if shape == "s" {
         let a = d * 0.88;
         path([[0, 0], [a, 0], [a, a], [0, a]]).closed()
@@ -1024,7 +1140,77 @@ fn plot_marker(shape, d, c) {
     } else {
         circle(d / 2)
     };
-    m.fill(c).stroke("#ffffff").stroke_width(plot_line_width() * 0.5)
+    m
+}
+
+// --- annotations in data coordinates ---
+
+// `plot_text(x, y, s)` / `plot_text(x, y, s, opts)`: text `s` at the data
+// point (x, y) of the plot it is given to — in `marks`, or among the series —
+// centred on it unless `anchor` says otherwise. Data values as for the series
+// (the plot applies log axes), so it stays put when ranges change. Options:
+//   color   "#rrggbb" or a palette index (default `plot_fg()`)
+//   size    pt (default `base_size()`)
+//   bold    true for bold
+//   anchor  [ax, ay]: which point of the text sits at (x, y), fractions of
+//           its box from its top-left (default [0.5, 0.5], centred)
+fn plot_text(x, y, s) { plot_text(x, y, s, #{}) }
+fn plot_text(x, y, s, opts) {
+    plot_annotation("plot_text", "text", [x, y], s, opts, ["color", "size", "bold", "anchor"])
+}
+
+// `plot_arrow(x1, y1, x2, y2)` / `(…, opts)`: an arrow from data point
+// (x1, y1) to (x2, y2), in `plot_fg()`, `series_width()` wide. Options:
+// `color` (or a palette index), `width` (cm), `head` ("end" default, "start",
+// "both"), `dash`.
+fn plot_arrow(x1, y1, x2, y2) { plot_arrow(x1, y1, x2, y2, #{}) }
+fn plot_arrow(x1, y1, x2, y2, opts) {
+    plot_annotation("plot_arrow", "arrow", [x1, y1, x2, y2], "", opts, ["color", "width", "head", "dash"])
+}
+
+// An annotation descriptor (`plot` turns it into nodes once the axes exist).
+fn plot_annotation(name, kind, pts, s, opts, known) {
+    if type_of(opts) != "map" { throw `${name}(): options must be a map (got ${type_of(opts)})`; }
+    for k in opts.keys() {
+        if !known.contains(k) { throw `${name}(): unknown option "${k}" (${list_names(known)})`; }
+    }
+    let a = #{ mark: kind, pts: plot_numbers(name, "coordinates", pts), s: s, color: plot_fg() };
+    if opts.contains("color") {
+        a.color = if type_of(opts.color) == "i64" { palette_color(opts.color) } else { opts.color };
+    }
+    if kind == "text" {
+        if type_of(s) != "string" { throw `${name}(): text must be a string (got ${type_of(s)})`; }
+        a.size = plot_opt(opts, "size", base_size());
+        a.bold = plot_opt(opts, "bold", false);
+        a.anchor = plot_numbers(name, "anchor", plot_opt(opts, "anchor", [0.5, 0.5]));
+        if a.anchor.len() != 2 { throw `${name}(): anchor must be [ax, ay]`; }
+    } else {
+        a.width = plot_opt(opts, "width", series_width());
+        a.head = plot_opt(opts, "head", "end");
+        a.dash = plot_opt(opts, "dash", []);
+    }
+    a
+}
+
+// Is `x` an annotation descriptor (from `plot_text` / `plot_arrow`)?
+fn plot_is_annotation(x) { type_of(x) == "map" && x.contains("mark") }
+
+// The node of annotation `a` in a data area spanning [x0, x1] x [y0, y1]
+// (viewbox coordinates; `xlog`/`ylog` take log10 of the values).
+fn plot_annotation_node(a, xlog, ylog, x0, x1, y0, y1) {
+    let p = [];
+    for i in 0..a.pts.len() {
+        let v = plot_tf(a.pts[i], if i % 2 == 0 { xlog } else { ylog });
+        if type_of(v) == "()" { return (); }   // off a log axis: nothing to draw
+        p.push(v);
+    }
+    if a.mark == "text" {
+        let t = text(a.s).size(a.size).color(a.color);
+        if a.bold { t = t.bold(); }
+        return t.at(p[0], p[1]).anchor(a.anchor[0], a.anchor[1]);
+    }
+    arrow(p[0], p[1], p[2], p[3]).viewbox(x0, y1, x1, y0).stroke(a.color)
+        .stroke_width(a.width).head(a.head).dash(a.dash)
 }
 
 // Polyline runs of `pts` (arrays [x, y] or () for gaps) clipped to the box
@@ -1095,24 +1281,39 @@ fn legend_key(s) {
         parts.push(line(w / 2, 0, w / 2, h).stroke(s.color).stroke_width(plot_line_width()));
     } else if s.marker != "none" {
         let d = if type_of(s.size) == "()" { marker_size() } else { s.size };
-        parts.push(plot_marker(s.marker, d, s.color).at(w / 2, h / 2).anchor(0.5, 0.5));
+        parts.push(plot_marker(s.marker, d, s.color, s.open).at(w / 2, h / 2).anchor(0.5, 0.5));
     }
     stack(parts).width(w).height(h)
 }
 
-// A legend for `series` (labelled ones only): one key + label row each.
-// Usable on its own, e.g. beside a row of plots: `legend([line_plot(..), ..])`.
-fn legend(series) { legend_box(plot_colored(series)) }
+// A legend for `series` (labelled ones only): one key + label row each — or,
+// with `legend_style()` "text", the labels alone in their series colours.
+// Usable on its own, e.g. beside a row of plots: `legend([line_plot(..), ..])`;
+// `legend(style, series)` picks the style ("swatch" or "text").
+fn legend(series) { legend(legend_style(), series) }
+fn legend(style, series) { legend_box(plot_colored(plot_only_series(series)), style) }
 
-fn legend_box(series) {
+fn legend_box(series, style) {
+    if style != "swatch" && style != "text" {
+        throw `legend(): unknown style "${style}" (swatch, text)`;
+    }
     let rows = [];
     for s in series {
-        if s.label != "" {
+        if s.label == "" { continue; }
+        if style == "text" {
+            rows.push(text(s.label).size(base_size()).color(s.color));
+        } else {
             rows.push(row([legend_key(s), plot_text(s.label)])
                 .cross("center").spacing(base_size() * 0.02));
         }
     }
     col(rows).spacing(base_size() * 0.008)
+}
+
+// `series` (an array or one series) without annotation descriptors.
+fn plot_only_series(series) {
+    if type_of(series) != "array" { series = [series]; }
+    series.filter(|x| !plot_is_annotation(x))
 }
 
 // The corner of the [0, 1]² data area with the fewest `samples` ([u, v],
@@ -1163,23 +1364,29 @@ fn plot_norm(x0, x1, y0, y1, p) { [(p[0] - x0) / (x1 - x0), (p[1] - y0) / (y1 - 
 //                  is false)
 //   xscale, yscale "linear" (default) or "log"
 //   xticks, yticks explicit tick values
-//   legend         a corner, "auto", or "" / false for none (default legend_corner())
+//   title          a title centred above the data area (`plot_title_size()`)
+//   legend         a corner, "auto", "text" (a text legend, `legend_style()`
+//                  "text", at `legend_corner()`), "" / false for none, or a
+//                  map #{ style, corner } / #{ style, at: [x, y], anchor }
+//                  (`at` in data units; default legend_corner())
 //   frame          "open", "box" or "none" (default plot_frame())
 //   marks          extra nodes for the data area, placed `.at(x, y)` in data
-//                  units (log10 of the value on log axes)
+//                  units (log10 of the value on log axes), and/or
+//                  `plot_text` / `plot_arrow` annotations (data values)
+// `series` may hold `plot_text` / `plot_arrow` annotations too.
 // The result is an ordinary node (a column) — chain `.flex`, `.height`, ….
 fn plot(series) { plot(#{}, series) }
 
 fn plot(opts, series) {
-    if type_of(opts) == "array" && type_of(series) == "map" {
+    if type_of(opts) == "array" && type_of(series) == "map" && !plot_is_annotation(series) {
         throw "plot(): use plot(opts, series) — options first";
     }
     if type_of(opts) != "map" { throw `plot(): options must be a map (got ${type_of(opts)})`; }
     let known = ["x", "y", "xlabel", "ylabel", "xscale", "yscale", "xticks", "yticks",
-                 "legend", "frame", "marks"];
+                 "legend", "frame", "marks", "title"];
     for k in opts.keys() {
         if !known.contains(k) {
-            throw `plot(): unknown option "${k}" (x, y, xlabel, ylabel, xscale, yscale, xticks, yticks, legend, frame, marks)`;
+            throw `plot(): unknown option "${k}" (${list_names(known)})`;
         }
     }
     let xlog = plot_opt(opts, "xscale", "linear");
@@ -1189,7 +1396,13 @@ fn plot(opts, series) {
     }
     xlog = xlog == "log";
     ylog = ylog == "log";
-    let series = plot_colored(series);
+    if type_of(series) != "array" { series = [series]; }
+    let notes = series.filter(|x| plot_is_annotation(x));
+    let series = plot_colored(plot_only_series(series));
+    let extra = plot_opt(opts, "marks", []);
+    if type_of(extra) != "array" { extra = [extra]; }
+    notes += extra.filter(|x| plot_is_annotation(x));
+    extra = extra.filter(|x| !plot_is_annotation(x));
 
     // Categories (first appearance order) of string-x series.
     let cats = [];
@@ -1304,8 +1517,8 @@ fn plot(opts, series) {
                 }
             }
         }
-        // Error bars: black on bars (the bar's colour would vanish into it).
-        let ec = if s.kind == "bars" { "#000000" } else { c };
+        // Error bars: `plot_fg()` on bars (the bar's colour would vanish into it).
+        let ec = if s.kind == "bars" { plot_fg() } else { c };
         let cap = marker_size();
         for i in 0..pr.errs.len() {
             let e = pr.errs[i];
@@ -1327,41 +1540,79 @@ fn plot(opts, series) {
             let d = if type_of(s.size) == "()" { marker_size() } else { s.size };
             for p in pr.pts {
                 if type_of(p) == "()" || !plot_inside(p, x0, x1, y0, y1) { continue; }
-                marks.push(plot_marker(s.marker, d, c).at(p[0], p[1]).anchor(0.5, 0.5));
+                marks.push(plot_marker(s.marker, d, c, s.open).at(p[0], p[1]).anchor(0.5, 0.5));
                 samples.push(plot_norm(x0, x1, y0, y1, p));
             }
         }
     }
 
     // Frame and ticks, on top of the data.
+    let fg = plot_fg();
     let frame = plot_opt(opts, "frame", plot_frame());
     if frame == "open" {
         marks.push(path([[x0, y1], [x0, y0], [x1, y0]]).viewbox(x0, y1, x1, y0)
-            .stroke("#000000").stroke_width(lw).cap("square"));
+            .stroke(fg).stroke_width(lw).cap("square"));
     } else if frame == "box" {
         marks.push(path([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]).closed().viewbox(x0, y1, x1, y0)
-            .stroke("#000000").stroke_width(lw));
+            .stroke(fg).stroke_width(lw));
     } else if frame != "none" {
         throw `plot(): unknown frame "${frame}" (open, box, none)`;
     }
+    let dir = tick_direction();
+    if dir != "out" && dir != "in" { throw `tick_direction(): must be "out" or "in" (got "${dir}")`; }
+    let inward = dir == "in";
+    // Outward ticks hang below / left of the axis; inward ones point into the
+    // area (anchored at their far end instead).
+    let xan = if inward { 1 } else { 0 };
+    let yan = if inward { 0 } else { 1 };
+    let xminor = xa.minor + plot_minor(xa, xlog);
+    let yminor = ya.minor + plot_minor(ya, ylog);
     if xa.marks {
-        for t in xa.ticks { marks.push(line(0, 0, 0, tl).stroke_width(lw).at(t, y0)); }
-        for t in xa.minor { marks.push(line(0, 0, 0, tl * 0.6).stroke_width(lw * 0.8).at(t, y0)); }
+        for t in xa.ticks { marks.push(line(0, 0, 0, tl).stroke(fg).stroke_width(lw).at(t, y0).anchor(0, xan)); }
+        for t in xminor { marks.push(line(0, 0, 0, tl * 0.6).stroke(fg).stroke_width(lw * 0.8).at(t, y0).anchor(0, xan)); }
     }
-    for t in ya.ticks { marks.push(line(0, 0, tl, 0).stroke_width(lw).at(x0, t).anchor(1, 0)); }
-    for t in ya.minor { marks.push(line(0, 0, tl * 0.6, 0).stroke_width(lw * 0.8).at(x0, t).anchor(1, 0)); }
-    let extra = plot_opt(opts, "marks", []);
-    if type_of(extra) != "array" { extra = [extra]; }
+    for t in ya.ticks { marks.push(line(0, 0, tl, 0).stroke(fg).stroke_width(lw).at(x0, t).anchor(yan, 0)); }
+    for t in yminor { marks.push(line(0, 0, tl * 0.6, 0).stroke(fg).stroke_width(lw * 0.8).at(x0, t).anchor(yan, 0)); }
+    for a in notes {
+        let n = plot_annotation_node(a, xlog, ylog, x0, x1, y0, y1);
+        if type_of(n) != "()" { extra.push(n); }
+    }
     let area = [stack(marks + extra).viewbox(x0, y1, x1, y0)];
 
     // Legend over the data area.
     let where = plot_opt(opts, "legend", legend_corner());
     if type_of(where) == "bool" { where = if where { legend_corner() } else { "" }; }
+    let lstyle = legend_style();
+    let lat = ();
+    let lanchor = [0, 0];
+    if type_of(where) == "map" {
+        for k in where.keys() {
+            if !["style", "corner", "at", "anchor"].contains(k) {
+                throw `plot(): unknown legend option "${k}" (style, corner, at, anchor)`;
+            }
+        }
+        lstyle = plot_opt(where, "style", lstyle);
+        lat = plot_opt(where, "at", ());
+        lanchor = plot_opt(where, "anchor", lanchor);
+        where = plot_opt(where, "corner", legend_corner());
+    } else if where == "text" || where == "swatch" {
+        lstyle = where;
+        where = legend_corner();
+    }
     let labelled = false;
     for s in series { if s.label != "" { labelled = true; } }
-    if where != "" && labelled {
+    if labelled && type_of(lat) != "()" {
+        let p = plot_numbers("plot", "legend `at`", lat);
+        let la = plot_numbers("plot", "legend `anchor`", lanchor);
+        if p.len() != 2 || la.len() != 2 { throw "plot(): legend `at` and `anchor` must be [x, y]"; }
+        let px = plot_tf(p[0], xlog);
+        let py = plot_tf(p[1], ylog);
+        if type_of(px) == "()" || type_of(py) == "()" { throw `plot(): legend at ${lat} is off the log axis`; }
+        area[0] = stack(marks + extra + [legend_box(series, lstyle).at(px, py).anchor(la[0], la[1])])
+            .viewbox(x0, y1, x1, y0);
+    } else if where != "" && labelled {
         if where == "auto" { where = legend_auto_corner(samples); }
-        area.push(pin(legend_box(series), where, base_size() * 0.03));
+        area.push(pin(legend_box(series, lstyle), where, base_size() * 0.03));
     }
 
     let parts = [stack(area)];
@@ -1372,6 +1623,7 @@ fn plot(opts, series) {
     // tick label, the tallest x tick label, the half labels overhanging the
     // axis ends — and nothing spills past the panel.
     let pad = base_size() * 0.012;                 // tick -> label (cm)
+    let tl = if inward { 0.0 } else { tl };        // room the ticks take outside
     let xl = [];
     for i in 0..xa.ticks.len() {
         if xa.ticks[i] >= x0 - 1e-9 && xa.ticks[i] <= x1 + 1e-9 {
@@ -1417,8 +1669,27 @@ fn plot(opts, series) {
     parts.push(col(xband).stretch().y(y0));
     // An unrotated y label sits above the axis, its bottom edge half its own
     // height up: clear of the top tick label's overhang (same text size).
+    // A title goes above it all, centred on the data area: a band as wide as
+    // the area (no x offset), holding the title and the unrotated y label
+    // under it, its bottom a quarter of the band (two lines) or half the
+    // title (one) above the axis — clear of the top tick label's overhang
+    // as long as the title is no smaller than the tick labels.
+    let ptitle = plot_opt(opts, "title", "");
+    if type_of(ptitle) != "string" { throw `plot(): title must be a string (got ${type_of(ptitle)})`; }
+    let top = [];
+    if ptitle != "" {
+        top.push(text(ptitle).size(plot_title_size()).color(plot_fg()).center());
+    }
     if ylabel != "" && !rotated {
-        parts.push(plot_text(ylabel).at(x0, y1).anchor(0, 1.5));
+        if top.len() == 0 {
+            parts.push(plot_text(ylabel).at(x0, y1).anchor(0, 1.5));
+        } else {
+            top.push(plot_text(ylabel));
+        }
+    }
+    if top.len() > 0 {
+        let k = if top.len() > 1 { 1.25 } else { 1.5 };
+        parts.push(col(top).spacing(pad).stretch().y(y1).anchor(0, k));
     }
 
     // On top: room for a panel label at its inset, so `panels([plot(..), ..])`
@@ -1426,7 +1697,28 @@ fn plot(opts, series) {
     let body = stack(parts).viewbox(x0, y1, x1, y0).contain().pad(plot_pad()).flex(1);
     let head = plot_label_room();
     let node = col(if head > 0.0 { [rect().height(head), body] } else { [body] }).stretch();
+    // A panel background goes under the whole plot (`plot_bg()`).
+    let bg = plot_bg();
+    if bg != "" { node = stack([rect().fill(bg), node]); }
     let ar = plot_aspect();
     if ar.to_float() > 0.0 { node = node.aspect(ar); }
     node
+}
+
+// Minor tick positions of linear axis `ax` (`minor_ticks()` intervals per
+// labelled step), skipping the labelled ticks; none for log/category axes.
+fn plot_minor(ax, log) {
+    let n = minor_ticks();
+    if type_of(n) != "i64" || n < 0 { throw `minor_ticks(): must be an integer >= 0 (got ${n})`; }
+    if log || !ax.marks || n < 2 || ax.ticks.len() < 2 { return []; }
+    let step = ax.ticks[1] - ax.ticks[0];
+    if !(step > 0.0) { return []; }
+    let sub = step / n.to_float();
+    let out = [];
+    let i0 = ((ax.lo - ax.ticks[0]) / sub - 1e-9).ceiling().to_int();
+    let i1 = ((ax.hi - ax.ticks[0]) / sub + 1e-9).floor().to_int();
+    for i in i0..=i1 {
+        if i % n != 0 { out.push(ax.ticks[0] + i.to_float() * sub); }
+    }
+    out
 }

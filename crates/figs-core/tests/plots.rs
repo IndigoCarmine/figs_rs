@@ -929,3 +929,519 @@ fn plot_example_renders() {
     let svg = render_svg(&computed, &opts);
     assert!(svg.contains("#0072b2") || svg.contains("#0072B2"));
 }
+
+// ---- theme: colours from hooks -------------------------------------------------
+
+/// Lowercase hex of an optional colour ("" when unset).
+fn hx(c: Option<figs_core::geom::Color>) -> String {
+    c.map(|c| c.to_hex()).unwrap_or_default()
+}
+
+/// A small labelled plot with every kind of non-data mark: tick and axis
+/// labels, a legend, a title, error bars without a colour, markers, a line.
+const THEMED: &str = r#"plot(#{ xlabel: "Time", ylabel: "Signal", title: "T" }, [
+        line_plot([0, 1, 2], [0.2, 0.5, 0.9], "a"),
+        scatter([0, 1, 2], [0.4, 0.3, 0.6], "b"),
+        errorbars([0, 1, 2], [0.4, 0.3, 0.6], [0.05, 0.05, 0.05]),
+    ])"#;
+
+fn themed(prelude: &str) -> RawDocument {
+    eval_script(&format!("{prelude}\npage(\"single\", {THEMED})"))
+        .unwrap_or_else(|e| panic!("script failed: {e}"))
+}
+
+/// Colours of the plot's non-data parts: text colours, and stroke colours of
+/// lines (ticks, error-bar caps — not the legend key of the data line).
+fn chrome_colors(raw: &RawDocument) -> (Vec<String>, Vec<String>) {
+    let data = themed_line(raw);
+    let texts = raw
+        .nodes
+        .values()
+        .filter(|n| n.kind == NodeKind::Text)
+        .map(|n| hx(n.color))
+        .collect();
+    let lines = raw
+        .nodes
+        .values()
+        .filter(|n| n.kind == NodeKind::Line)
+        .map(|n| hx(n.stroke))
+        .filter(|c| *c != data)
+        .collect();
+    (texts, lines)
+}
+
+/// The data line of `THEMED`.
+fn themed_line(raw: &RawDocument) -> String {
+    let id = find_raw(raw, |n| {
+        n.kind == NodeKind::Path && n.points.len() == 3 && n.points[0] == [0.0, 0.2]
+    });
+    hx(raw.nodes[id].stroke)
+}
+
+#[test]
+fn light_default_plot_colours_are_unchanged() {
+    // The default theme is the journal one: black text, axes and ticks,
+    // Okabe-Ito series, white marker rings, black error bars, no panel fill.
+    let raw = themed("");
+    let (texts, lines) = chrome_colors(&raw);
+    assert!(
+        !texts.is_empty() && texts.iter().all(|c| c == "#000000"),
+        "{texts:?}"
+    );
+    assert!(
+        !lines.is_empty() && lines.iter().all(|c| c == "#000000"),
+        "{lines:?}"
+    );
+    let ellipses: Vec<_> = raw
+        .nodes
+        .values()
+        .filter(|n| n.kind == NodeKind::Ellipse)
+        .collect();
+    assert!(!ellipses.is_empty());
+    for e in ellipses {
+        assert_eq!(hx(e.fill), "#e69f00"); // the scatter's palette colour 1
+        assert_eq!(hx(e.stroke), "#ffffff");
+    }
+    assert_eq!(themed_line(&raw), "#0072b2");
+    assert!(raw
+        .nodes
+        .values()
+        .all(|n| n.kind != NodeKind::Rect || n.fill.is_none()));
+    assert_eq!(raw.page.background, None);
+}
+
+#[test]
+fn plot_colours_follow_the_theme_hooks() {
+    // `style("dark")`: everything but the data in `fg()` white, series from
+    // `dark_palette()`, marker rings and page in navy.
+    let raw = themed(r#"style("dark");"#);
+    let (texts, lines) = chrome_colors(&raw);
+    assert!(texts.iter().all(|c| c == "#ffffff"), "{texts:?}");
+    assert!(lines.iter().all(|c| c == "#ffffff"), "{lines:?}");
+    // The open frame: (x0, y1) -> (x0, y0) -> (x1, y0).
+    let frame = find_raw(&raw, |n| {
+        n.kind == NodeKind::Path && n.points.len() == 3 && n.points[0][0] == n.points[1][0]
+    });
+    assert_eq!(hx(raw.nodes[frame].stroke), "#ffffff");
+    assert_eq!(themed_line(&raw), "#ff9f40");
+    let marker = find_raw(&raw, |n| n.kind == NodeKind::Ellipse);
+    assert_eq!(hx(raw.nodes[marker].fill), "#5cc8ff");
+    assert_eq!(hx(raw.nodes[marker].stroke), "#0f1a2e");
+    assert_eq!(hx(raw.page.background), "#0f1a2e");
+
+    // `plot_fg` alone (a key or a hook) recolours the plot; `plot_bg` fills
+    // the whole panel.
+    for prelude in [
+        r##"style(#{ plot_fg: "#123456", plot_bg: "#eeeeee" });"##,
+        r##"fn plot_fg() { "#123456" } fn plot_bg() { "#eeeeee" }"##,
+    ] {
+        let raw = themed(prelude);
+        let (texts, lines) = chrome_colors(&raw);
+        assert!(texts.iter().all(|c| c == "#123456"), "{prelude}: {texts:?}");
+        assert!(lines.iter().all(|c| c == "#123456"), "{prelude}: {lines:?}");
+        let bg = find_raw(&raw, |n| n.kind == NodeKind::Rect && n.fill.is_some());
+        assert_eq!(hx(raw.nodes[bg].fill), "#eeeeee");
+        // The fill sits under the plot: the root is a stack of [fill, plot]
+        // carrying the plot's aspect.
+        let root = &raw.nodes["root"];
+        assert_eq!(root.kind, NodeKind::Stack);
+        assert_eq!(root.children[0], bg);
+        assert!(root.aspect_ratio.is_some());
+    }
+
+    // `fg()` also colours semantic text; unset, text stays colourless.
+    let raw = eval_script(r#"style("dark"); page("single", vbox(["x", caption("y")]))"#).unwrap();
+    assert!(raw
+        .nodes
+        .values()
+        .filter(|n| n.kind == NodeKind::Text)
+        .all(|n| hx(n.color) == "#ffffff"));
+    let raw = eval_script(r#"page("single", vbox(["x", caption("y")]))"#).unwrap();
+    assert!(raw.nodes.values().all(|n| n.color.is_none()));
+}
+
+#[test]
+fn dark_palette_has_contrast_on_navy() {
+    // WCAG contrast of every dark-palette colour on the navy page is >= 6:1
+    // (above the 4.5:1 text threshold, as a text legend needs).
+    fn lum(hex: &str) -> f64 {
+        let c = figs_core::geom::Color::parse_hex(hex).unwrap();
+        let lin = |v: f32| {
+            let v = v as f64;
+            if v <= 0.04045 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+    }
+    let contrast = |a: &str, b: &str| {
+        let (x, y) = (lum(a), lum(b));
+        (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    };
+    let pal = rhai("dark_palette()");
+    let colors: Vec<&str> = pal
+        .trim_matches(|c| c == '[' || c == ']')
+        .split(", ")
+        .map(|s| s.trim_matches('"'))
+        .collect();
+    assert_eq!(colors.len(), 7, "{pal}");
+    for c in colors {
+        let k = contrast(c, "#0f1a2e");
+        assert!(k >= 6.0, "{c}: {k:.2}:1 on #0f1a2e");
+    }
+}
+
+// ---- markers -------------------------------------------------------------------
+
+#[test]
+fn hollow_markers_are_outlined_in_the_series_colour() {
+    let raw = eval_script(
+        r##"page("single", plot([scatter([0, 1], [0, 1], #{ open: true, color: "#ff0000", label: "a" })]))"##,
+    )
+    .unwrap();
+    let w: f32 = rhai("marker_stroke_width()").parse().unwrap();
+    let markers: Vec<_> = raw
+        .nodes
+        .values()
+        .filter(|n| n.kind == NodeKind::Ellipse)
+        .collect();
+    // Two data markers and the legend key, all hollow.
+    assert_eq!(markers.len(), 3);
+    for m in markers {
+        assert_eq!(m.fill, None, "hollow marker is filled");
+        assert_eq!(hx(m.stroke), "#ff0000");
+        approx(m.stroke_width.unwrap(), w);
+    }
+    // The resolved shape is unfilled, with that outline.
+    let doc = figs_core::schema::resolve::resolve(raw).unwrap();
+    let e = doc
+        .nodes
+        .iter()
+        .find_map(|n| match &n.kind {
+            figs_core::schema::NodeType::Ellipse(e) => Some(e),
+            _ => None,
+        })
+        .unwrap();
+    assert!(e.fill.is_none() && e.stroke.is_some());
+
+    // Every shape takes `open`; `marker_open()` makes it the default, and
+    // `marker_ring()` "" drops the ring of filled markers.
+    let raw = eval_script(
+        r#"style(#{ marker_open: true });
+        page("single", plot([scatter([0], [0], #{ marker: "s" }), scatter([1], [1], #{ open: false })]))"#,
+    )
+    .unwrap();
+    let sq = find_raw(&raw, |n| {
+        n.kind == NodeKind::Path && n.closed && n.viewbox.is_none()
+    });
+    assert!(raw.nodes[sq].fill.is_none() && raw.nodes[sq].stroke.is_some());
+    let dot = find_raw(&raw, |n| n.kind == NodeKind::Ellipse);
+    assert!(raw.nodes[dot].fill.is_some());
+    let raw = eval_script(r#"fn marker_ring() { "" } page("single", plot([scatter([0], [0])]))"#)
+        .unwrap();
+    let dot = find_raw(&raw, |n| n.kind == NodeKind::Ellipse);
+    assert!(raw.nodes[dot].stroke.is_none() && raw.nodes[dot].fill.is_some());
+
+    let e = eval_script(r#"page(1, 1, plot([scatter([1], [1], #{ open: "yes" })]))"#).unwrap_err();
+    assert!(
+        e.message.contains("open must be true or false"),
+        "{}",
+        e.message
+    );
+}
+
+#[test]
+fn palette_index_colours_are_shared_between_series() {
+    // Markers and their fit line in one colour: `color: i` or `palette_color(i)`.
+    let raw = eval_script(
+        r#"page("single", plot([
+            scatter([0, 1], [0, 1], #{ color: 1 }),
+            line_plot([0, 1], [0, 1], #{ color: palette_color(1) }),
+        ]))"#,
+    )
+    .unwrap();
+    let marker = find_raw(&raw, |n| n.kind == NodeKind::Ellipse);
+    let line = find_raw(&raw, |n| {
+        n.kind == NodeKind::Path && n.points == vec![[0.0, 0.0], [1.0, 1.0]]
+    });
+    assert_eq!(hx(raw.nodes[marker].fill), "#e69f00");
+    assert_eq!(hx(raw.nodes[line].stroke), "#e69f00");
+    // Indices wrap (both ways) and follow the palette hook / style key.
+    assert_eq!(rhai("palette_color(8)"), "#0072B2");
+    assert_eq!(rhai("palette_color(-1)"), "#000000");
+    let raw = eval_script(r#"style("dark"); page(1, 1, text(palette_color(0)))"#).unwrap();
+    assert_eq!(raw.nodes["root"].content.as_deref(), Some("#FF9F40"));
+    let e = eval_script(r#"page(1, 1, text(palette_color(0.5)))"#).unwrap_err();
+    assert!(e.message.contains("integer index"), "{}", e.message);
+}
+
+// ---- legend styles -------------------------------------------------------------
+
+#[test]
+fn text_legend_stacks_coloured_labels_in_a_corner() {
+    let p = Plotted::new(
+        r##"fn legend_corner() { "top-left" }
+        page(12, 9, plot(#{ x: [0, 10], y: [0, 1], legend: "text" }, [
+            scatter([2, 8], [0.2, 0.8], #{ color: "#ff0000", label: "10 μM" }),
+            line_plot([0, 10], [0, 1], #{ color: "#00ff00", label: "100 μM" }),
+        ]).flex(1)).unit("cm")"##,
+    );
+    let area = p.area();
+    let inset = 8.0 * 0.03 * 72.0 / 2.54;
+    let a = p.text("10 μM");
+    let b = p.text("100 μM");
+    approx(a.x, area.x + inset);
+    approx(a.y, area.y + inset);
+    approx(b.x, a.x); // stacked, left-aligned
+    approx(b.y, a.y + LINE_H + 8.0 * 0.008 * 72.0 / 2.54);
+    // Each label is its series' colour; no keys are drawn (the only
+    // ellipses are the data markers).
+    let color_of = |s: &str| {
+        hx(p.raw
+            .nodes
+            .values()
+            .find(|n| n.content.as_deref() == Some(s))
+            .unwrap()
+            .color)
+    };
+    assert_eq!(color_of("10 μM"), "#ff0000");
+    assert_eq!(color_of("100 μM"), "#00ff00");
+    let ellipses = |raw: &RawDocument| {
+        raw.nodes
+            .values()
+            .filter(|n| n.kind == NodeKind::Ellipse)
+            .count()
+    };
+    assert_eq!(ellipses(&p.raw), 2);
+
+    // At an explicit data point: its top-left corner there by default.
+    let p = Plotted::new(
+        r#"page(12, 9, plot(#{ x: [0, 10], y: [0, 1], legend: #{ style: "text", at: [2, 0.8] } },
+            [line_plot([0, 10], [0, 1], "a")]).flex(1)).unit("cm")"#,
+    );
+    let area = p.area();
+    let a = p.text("a");
+    approx(a.x, area.x + area.w * 0.2);
+    approx(a.y, area.y + area.h * 0.2);
+    // The swatch legend stays the default: a marker key before the label.
+    let raw = eval_script(r#"page("single", plot([scatter([0, 1], [0, 1], "a")]))"#).unwrap();
+    assert_eq!(ellipses(&raw), 3);
+    // `legend_style()` switches the default; bad styles / keys are errors.
+    let raw = eval_script(
+        r#"style(#{ legend_style: "text" }); page("single", plot([scatter([0, 1], [0, 1], "a")]))"#,
+    )
+    .unwrap();
+    assert_eq!(ellipses(&raw), 2);
+    let e = eval_script(
+        r#"page(1, 1, plot(#{ legend: #{ style: "box" } }, [scatter([1], [1], "a")]))"#,
+    )
+    .unwrap_err();
+    assert!(e.message.contains("unknown style \"box\""), "{}", e.message);
+    let e =
+        eval_script(r#"page(1, 1, plot(#{ legend: #{ where: 1 } }, [scatter([1], [1], "a")]))"#)
+            .unwrap_err();
+    assert!(
+        e.message.contains("unknown legend option \"where\""),
+        "{}",
+        e.message
+    );
+}
+
+// ---- annotations in data coordinates ---------------------------------------------
+
+#[test]
+fn plot_text_and_arrow_sit_at_data_points() {
+    // In `marks` or among the series alike.
+    for (marks, series) in [
+        (
+            r#"[plot_text(5, 0.5, "mid"), plot_arrow(0, 0, 10, 1)]"#,
+            "[line_plot([0, 10], [1, 0])]",
+        ),
+        (
+            "[]",
+            r#"[line_plot([0, 10], [1, 0]), plot_text(5, 0.5, "mid"), plot_arrow(0, 0, 10, 1)]"#,
+        ),
+    ] {
+        let p = Plotted::new(&format!(
+            r#"page(12, 9, plot(#{{ x: [0, 10], y: [0, 1], marks: {marks} }}, {series}).flex(1)).unit("cm")"#
+        ));
+        let area = p.area();
+        let t = p.text("mid");
+        approx(t.x + t.w / 2.0, area.x + area.w / 2.0);
+        approx(t.y + t.h / 2.0, area.y + area.h / 2.0);
+        let arrow = find_raw(&p.raw, |n| n.kind == NodeKind::Arrow);
+        assert_eq!(hx(p.raw.nodes[arrow].stroke), "#000000"); // plot_fg()
+        let s = segs_of(&p.l, arrow);
+        assert_eq!(
+            s[0],
+            PathSegment::MoveTo(Point::new(area.x, area.y + area.h))
+        );
+        let PathSegment::LineTo(end) = s[1] else {
+            panic!()
+        };
+        approx(end.x, area.x + area.w);
+        approx(end.y, area.y);
+    }
+
+    // Options, and data values on a log axis (the plot takes log10).
+    let p = Plotted::new(
+        r##"page(12, 9, plot(#{ x: [1, 100], y: [0, 1], xscale: "log" }, [
+            scatter([1, 100], [0, 1]),
+            plot_text(10, 0, "dec", #{ anchor: [0.5, 1], color: 1, bold: true, size: 12 }),
+            plot_arrow(10, 0.2, 10, 0.8, #{ color: "#ff0000", width: 0.1, head: "both" }),
+        ]).flex(1)).unit("cm")"##,
+    );
+    let area = p.area();
+    let t = p.text("dec");
+    approx(t.x + t.w / 2.0, area.x + area.w / 2.0);
+    approx(t.y + t.h, area.y + area.h);
+    let n = p
+        .raw
+        .nodes
+        .values()
+        .find(|n| n.content.as_deref() == Some("dec"))
+        .unwrap();
+    assert_eq!(hx(n.color), "#e69f00");
+    assert_eq!((n.font_weight, n.font_size), (Some(700), Some(12.0)));
+    let arrow = find_raw(&p.raw, |n| n.kind == NodeKind::Arrow);
+    let a = &p.raw.nodes[arrow];
+    assert_eq!(hx(a.stroke), "#ff0000");
+    approx(a.stroke_width.unwrap(), 0.1);
+    approx(a.points[0][0], 1.0); // log10(10)
+
+    let e = eval_script(r#"page(1, 1, plot([plot_text(0, 0, "x", #{ colour: 1 })]))"#).unwrap_err();
+    assert!(
+        e.message.contains("unknown option \"colour\""),
+        "{}",
+        e.message
+    );
+}
+
+// ---- title -------------------------------------------------------------------
+
+#[test]
+fn title_is_centred_above_the_area() {
+    let p = Plotted::new(
+        r#"page(12, 9, plot(#{ x: [0, 10], y: [0, 1], title: "加熱曲線" },
+            [line_plot([0, 10], [0, 1])]).flex(1)).unit("cm")"#,
+    );
+    let panel = rect_of(&p.l, "root");
+    let area = p.area();
+    let t = p.text("加熱曲線");
+    approx(t.x + t.w / 2.0, area.x + area.w / 2.0);
+    // Its bottom half its own height above the axis (clear of the top tick
+    // label's half-line overhang), under the panel-label room.
+    approx(area.y - (t.y + t.h), LINE_H / 2.0);
+    approx(
+        t.y,
+        panel.y + hook_pt("plot_label_room") + hook_pt("plot_pad"),
+    );
+    let n = p
+        .raw
+        .nodes
+        .values()
+        .find(|n| n.content.as_deref() == Some("加熱曲線"))
+        .unwrap();
+    assert_eq!(n.font_size, Some(8.0)); // plot_title_size() = base_size()
+    assert_eq!(n.font_family, None); // the page font: CJK fallback applies
+
+    // With a horizontal y label the two share one band: title, then label.
+    let p = Plotted::new(
+        r#"fn ylabel_rotated() { false }
+        page(12, 9, plot(#{ x: [0, 10], y: [0, 1], title: "T", ylabel: "Signal" },
+            [line_plot([0, 10], [0, 1])]).flex(1)).unit("cm")"#,
+    );
+    let area = p.area();
+    let (t, yl) = (p.text("T"), p.text("Signal"));
+    approx(t.x + t.w / 2.0, area.x + area.w / 2.0);
+    approx(yl.x, area.x);
+    assert!(yl.y >= t.y + t.h - 1e-3, "{t:?} over {yl:?}");
+    assert!(area.y - (yl.y + yl.h) >= LINE_H / 2.0 - 1e-3);
+}
+
+// ---- ticks ---------------------------------------------------------------------
+
+#[test]
+fn inward_and_minor_ticks() {
+    let src = |hooks: &str| {
+        format!(
+            r#"{hooks}
+            page(12, 9, plot(#{{ x: [0, 10], y: [0, 1], xticks: [0, 5, 10], yticks: [0, 1] }},
+                [line_plot([0, 10], [0, 1])]).flex(1)).unit("cm")"#
+        )
+    };
+    let ticks = |p: &Plotted| -> Vec<Rect> {
+        p.l.nodes
+            .iter()
+            .filter(|n| p.raw.nodes[&n.id].kind == NodeKind::Line)
+            .map(|n| n.rect)
+            .collect()
+    };
+    let gap = 8.0 * 0.012 * 72.0 / 2.54;
+    let out = Plotted::new(&src(""));
+    let area = out.area();
+    assert_eq!(ticks(&out).len(), 5);
+    for r in ticks(&out) {
+        // Outward: below the x axis or left of the y axis.
+        assert!(
+            r.y >= area.y + area.h - 1e-3 || r.x + r.w <= area.x + 1e-3,
+            "{r:?}"
+        );
+    }
+    approx(
+        out.text("5").y,
+        area.y + area.h + hook_pt("tick_length") + gap,
+    );
+
+    let inn = Plotted::new(&src(r#"style(#{ tick_direction: "in", minor_ticks: 5 });"#));
+    let area = inn.area();
+    // 3 + 2 labelled ticks, plus 4 minor ones per x step (8) and y step (4).
+    let t = ticks(&inn);
+    assert_eq!(t.len(), 5 + 8 + 4);
+    for r in &t {
+        assert!(
+            r.x >= area.x - 1e-3
+                && r.x + r.w <= area.x + area.w + 1e-3
+                && r.y >= area.y - 1e-3
+                && r.y + r.h <= area.y + area.h + 1e-3,
+            "{r:?} outside {area:?}"
+        );
+    }
+    // The tick labels move up to the axis: no tick room outside.
+    approx(inn.text("5").y, area.y + area.h + gap);
+    let e = eval_script(&src(r#"fn tick_direction() { "up" }"#)).unwrap_err();
+    assert!(e.message.contains("tick_direction"), "{}", e.message);
+}
+
+#[test]
+fn plot_dark_example_renders() {
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    let src = std::fs::read_to_string(examples.join("plot_dark.figs")).unwrap();
+    let doc = Document::from_script_in(&src, Some(&examples)).unwrap();
+    let fonts = FontStore::new();
+    let computed = layout(&doc, &fonts);
+    let opts = RenderOptions {
+        fonts: Some(&fonts),
+        base_dir: &examples,
+    };
+    let png = render_png(&computed, &opts).unwrap();
+    let p = tiny_skia::Pixmap::decode_png(&png).unwrap();
+    let (mut navy, mut white, mut orange, mut sky) = (0, 0, 0, 0);
+    for px in p.pixels() {
+        match (px.red(), px.green(), px.blue()) {
+            (10..=20, 22..=32, 40..=52) => navy += 1,
+            (240.., 240.., 240..) => white += 1,
+            (240.., 145..=170, 50..=80) => orange += 1,
+            (80..=100, 190..=210, 240..) => sky += 1,
+            _ => {}
+        }
+    }
+    let total = p.pixels().len();
+    assert!(navy * 2 > total, "navy {navy} of {total}");
+    assert!(
+        white > 5000 && orange > 1000 && sky > 1000,
+        "white {white}, orange {orange}, sky {sky}"
+    );
+}

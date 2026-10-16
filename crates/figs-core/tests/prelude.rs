@@ -1195,7 +1195,7 @@ fn style_errors() {
     assert_eq!((line, col), (Some(2), Some(1)), "{msg}");
     assert_eq!(
         msg,
-        "line 2, col 1: style: unknown preset \"natur\" (acs, default, nature, poster, rsc, science)"
+        "line 2, col 1: style: unknown preset \"natur\" (acs, dark, default, nature, poster, poster-dark, rsc, science)"
     );
 
     let (_, _, msg) = fail(r#"style(#{ base_sise: 9 }); page("single", rect())"#);
