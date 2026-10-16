@@ -43,10 +43,12 @@ use std::path::Path;
 use rhai::{Array, Dynamic, Engine, EvalAltResult, Map, NativeCallContext, Position};
 
 use crate::geom::{
-    ArcSweep, ArrowHead, Color, CrossAxisAlign, Edges, ImageFit, LineCap, LineJoin, LinearDir,
-    MainAxisAlign, Paint, TextAlign,
+    ArcSweep, ArrowHead, Color, CrossAxisAlign, Edges, HeadStyle, HeadWidth, ImageFit, LineCap,
+    LineJoin, LinearDir, MainAxisAlign, Paint, TextAlign,
 };
-use crate::schema::{ArcRadius, NodeKind, PageHeight, RawDocument, RawNode, RawPage, RawSegment};
+use crate::schema::{
+    ArcRadius, NodeKind, PageHeight, RawDocument, RawGlow, RawNode, RawPage, RawSegment, RawShadow,
+};
 use crate::units::Unit;
 
 // ---------------------------------------------------------------------------
@@ -200,6 +202,16 @@ fn parse_head(s: &str) -> Option<ArrowHead> {
         _ => return None,
     })
 }
+fn parse_head_style(s: &str) -> Option<HeadStyle> {
+    Some(match s {
+        "triangle" => HeadStyle::Triangle,
+        "stealth" => HeadStyle::Stealth,
+        "open" => HeadStyle::Open,
+        "barb_left" => HeadStyle::BarbLeft,
+        "barb_right" => HeadStyle::BarbRight,
+        _ => return None,
+    })
+}
 fn parse_unit(s: &str) -> Option<Unit> {
     Some(match s {
         "cm" => Unit::Cm,
@@ -231,6 +243,9 @@ fn blank_node(kind: NodeKind) -> RawNode {
         viewbox: None,
         contain: false,
         clip: false,
+        shadow: None,
+        glow: None,
+        opacity: None,
         children: Vec::new(),
         spacing: 0.0,
         main_axis_alignment: None,
@@ -244,6 +259,7 @@ fn blank_node(kind: NodeKind) -> RawNode {
         line_height: None,
         src: None,
         fit: None,
+        smooth: None,
         fill: None,
         stroke: None,
         stroke_width: None,
@@ -256,6 +272,8 @@ fn blank_node(kind: NodeKind) -> RawNode {
         join: None,
         head: None,
         head_size: None,
+        head_width: None,
+        head_style: None,
     }
 }
 
@@ -504,6 +522,50 @@ fn cast_xy(name: &str, v: Array) -> Result<[f32; 2], Box<EvalAltResult>> {
 fn checked_paint(name: &str, p: Paint) -> Result<Paint, Box<EvalAltResult>> {
     p.validate().map_err(|e| err(format!("`{name}`: {e}")))?;
     Ok(p)
+}
+
+/// `.shadow(dx, dy, blur[, spread], color)`.
+fn shadow_setter(
+    n: ScriptNode,
+    [dx, dy, blur]: [Dynamic; 3],
+    spread: Option<Dynamic>,
+    color: Option<&str>,
+) -> NodeResult {
+    let sig = "dx, dy, blur[, spread], color";
+    let [dx, dy, blur] = nums("shadow", sig, [dx, dy, blur])?;
+    let spread = match spread {
+        Some(v) => nums("shadow", sig, [v])?[0],
+        None => 0.0,
+    };
+    if blur < 0.0 {
+        return Err(err("`shadow`: blur must be >= 0"));
+    }
+    let color = color.map(|c| parse_color("shadow", c)).transpose()?;
+    Ok(set_node(n, |r| {
+        r.shadow = Some(RawShadow {
+            dx,
+            dy,
+            blur,
+            spread,
+            color,
+        })
+    }))
+}
+
+/// `.glow(blur[, color])`.
+fn glow_setter(n: ScriptNode, blur: Dynamic, color: Option<&str>) -> NodeResult {
+    let [blur] = nums("glow", "blur[, color]", [blur])?;
+    if blur < 0.0 {
+        return Err(err("`glow`: blur must be >= 0"));
+    }
+    let color = color.map(|c| parse_color("glow", c)).transpose()?;
+    Ok(set_node(n, |r| {
+        r.glow = Some(RawGlow {
+            blur,
+            spread: None,
+            color,
+        })
+    }))
 }
 
 /// Register a numeric chainable setter that accepts integer or float.
@@ -870,6 +932,66 @@ fn build_engine(base_dir: Option<&Path>) -> Engine {
     // Outline corner join (shapes and text strokes).
     reg_enum(&mut engine, "join", parse_join, |r, v| r.join = Some(v));
     reg_enum(&mut engine, "head", parse_head, |r, v| r.head = Some(v));
+    reg_enum(&mut engine, "head_style", parse_head_style, |r, v| {
+        r.head_style = Some(v)
+    });
+    // Arrowhead base width: a length, or "3x" (a multiple of the stroke width).
+    engine.register_fn("head_width", |n: ScriptNode, v: Dynamic| -> NodeResult {
+        let w = match dyn_to_f32(&v) {
+            Some(w) => HeadWidth::Abs(w),
+            None => v
+                .into_string()
+                .ok()
+                .and_then(|s| HeadWidth::parse_ratio(&s))
+                .ok_or_else(|| err(r#"`head_width` expects a length or a multiple like "3x""#))?,
+        };
+        Ok(set_node(n, |r| r.head_width = Some(w)))
+    });
+
+    // Effects (any node; visual only). `shadow(dx, dy, blur[, [spread,] color])`.
+    engine.register_fn(
+        "shadow",
+        |n: ScriptNode, dx: Dynamic, dy: Dynamic, blur: Dynamic| -> NodeResult {
+            shadow_setter(n, [dx, dy, blur], None, None)
+        },
+    );
+    engine.register_fn(
+        "shadow",
+        |n: ScriptNode, dx: Dynamic, dy: Dynamic, blur: Dynamic, color: &str| -> NodeResult {
+            shadow_setter(n, [dx, dy, blur], None, Some(color))
+        },
+    );
+    engine.register_fn(
+        "shadow",
+        |n: ScriptNode,
+         dx: Dynamic,
+         dy: Dynamic,
+         blur: Dynamic,
+         spread: Dynamic,
+         color: &str|
+         -> NodeResult { shadow_setter(n, [dx, dy, blur], Some(spread), Some(color)) },
+    );
+    engine.register_fn("glow", |n: ScriptNode, blur: Dynamic| -> NodeResult {
+        glow_setter(n, blur, None)
+    });
+    engine.register_fn(
+        "glow",
+        |n: ScriptNode, blur: Dynamic, color: &str| -> NodeResult {
+            glow_setter(n, blur, Some(color))
+        },
+    );
+    engine.register_fn("opacity", |n: ScriptNode, v: Dynamic| -> NodeResult {
+        let a = dyn_to_f32(&v)
+            .filter(|a| (0.0..=1.0).contains(a))
+            .ok_or_else(|| err("`opacity` expects a number from 0 to 1"))?;
+        Ok(set_node(n, |r| r.opacity = Some(a)))
+    });
+    engine.register_fn("smooth", |n: ScriptNode, on: bool| -> NodeResult {
+        if n.node.kind != NodeKind::Image {
+            return Err(err("`smooth` applies to an image"));
+        }
+        Ok(set_node(n, |r| r.smooth = Some(on)))
+    });
 
     // Shape stroke dash pattern (page units) and polygon closing.
     engine.register_fn(

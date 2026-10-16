@@ -37,7 +37,21 @@
 //! [`paint`] brackets each run of nodes with the same list by
 //! [`Renderer::push_clip`] / [`Renderer::pop_clip`] (outside any node
 //! transform; clip outlines are page-space).
+//!
+//! **Effects** (`shadow`, `glow`, `opacity`) apply to a node *and its
+//! subtree* as one group ([`ComputedNode::effects`], with the subtree's
+//! extent in [`ComputedNode::descendants`]). [`paint`] brackets the group by
+//! [`Renderer::push_opacity`] / [`Renderer::pop_opacity`] and draws each
+//! shadow first through [`Renderer::draw_shadow`]. Shadows are rasters in
+//! every backend — the group's silhouette rendered by the tiny-skia
+//! backend, grown, blurred and tinted ([`effects`]) — so PNG, PDF and SVG
+//! show the same pixels: PNG at the output resolution, PDF/SVG as an
+//! embedded image (PDF has no blur; an SVG filter would differ per viewer).
+//!
+//! [`ComputedNode::effects`]: crate::layout::ComputedNode::effects
+//! [`ComputedNode::descendants`]: crate::layout::ComputedNode::descendants
 
+pub mod effects;
 pub mod geometry;
 pub mod outline;
 #[cfg(feature = "pdf")]
@@ -52,9 +66,10 @@ pub use svg::{render_svg, SvgRenderer};
 
 use std::path::Path;
 
-use crate::geom::{Affine, Brush, Color, ImageFit, PathSegment, Rect, StrokeStyle};
+use crate::geom::{Affine, Brush, Color, ImageFit, PathSegment, Rect, Shadow, StrokeStyle};
 use crate::layout::{
-    ClipRegion, ComputedLayout, FramePaint, PageGeom, PaintContent, PathPaint, TextBox,
+    ClipRegion, ComputedLayout, ComputedNode, FramePaint, PageGeom, PaintContent, PathPaint,
+    TextBox,
 };
 use crate::text::FontStore;
 
@@ -96,8 +111,9 @@ pub trait Renderer {
     fn draw_text(&mut self, _rect: Rect, _text: &TextBox) {}
 
     /// Draw an image (resolved against the render base dir) within `rect`,
-    /// honouring `fit`. Default: no-op.
-    fn draw_image(&mut self, _rect: Rect, _src: &Path, _fit: ImageFit) {}
+    /// honouring `fit`; `smooth = false` scales it nearest-neighbour (blocky
+    /// pixels). Default: no-op.
+    fn draw_image(&mut self, _rect: Rect, _src: &Path, _fit: ImageFit, _smooth: bool) {}
 
     /// Fill/stroke a vector path (absolute line/Bézier segments) and its
     /// arrowheads: fill `path.segments`, stroke `path.stroke_geometry().shaft`
@@ -137,20 +153,47 @@ pub trait Renderer {
 
     /// End the transform started by [`Renderer::push_transform`].
     fn pop_transform(&mut self) {}
+
+    /// Composite everything drawn until the matching
+    /// [`Renderer::pop_opacity`] as one layer at `alpha` (`0..1`). `group`
+    /// is what will be drawn (the node and its subtree, page space) — a
+    /// bound for the layer. Pushed outside any node transform, inside the
+    /// group's clips. Default: no-op (drawn opaque).
+    fn push_opacity(&mut self, _alpha: f32, _group: &[ComputedNode]) {}
+
+    /// End the layer started by [`Renderer::push_opacity`].
+    fn pop_opacity(&mut self) {}
+
+    /// Paint `shadow` of `group` (a node followed by its whole subtree, as in
+    /// the IR): the silhouette of everything it draws, grown, blurred,
+    /// tinted and offset (see [`effects`]). Called before the group is
+    /// drawn, outside any node transform, inside its clips. Default: no-op.
+    fn draw_shadow(&mut self, _group: &[ComputedNode], _shadow: &Shadow) {}
 }
 
 /// Walk a computed layout in paint order, dispatching each node to the renderer.
 pub fn paint<R: Renderer>(layout: &ComputedLayout, r: &mut R) {
     r.begin_page(&layout.page);
-    let mut active: &[ClipRegion] = &[];
-    for node in &layout.nodes {
+    paint_nodes(r, &layout.nodes, &[]);
+}
+
+/// Paint a run of IR nodes (pre-order, each subtree complete) without
+/// starting a page. `base` is the clip list already pushed by the caller: the
+/// nodes' clip lists all start with it, and only the rest is pushed here.
+pub(crate) fn paint_nodes<R: Renderer>(r: &mut R, nodes: &[ComputedNode], base: &[ClipRegion]) {
+    let mut active: &[ClipRegion] = base;
+    let mut i = 0;
+    while i < nodes.len() {
+        let node = &nodes[i];
         if node.clips[..] != *active {
             // Keep the shared outer clips; swap the rest.
             let keep = active
                 .iter()
                 .zip(&node.clips)
                 .take_while(|(a, b)| a == b)
-                .count();
+                .count()
+                .max(base.len())
+                .min(node.clips.len());
             for _ in keep..active.len() {
                 r.pop_clip();
             }
@@ -159,42 +202,80 @@ pub fn paint<R: Renderer>(layout: &ComputedLayout, r: &mut R) {
             }
             active = &node.clips;
         }
-        // Containers paint nothing, so they need no transform either.
-        let xf = node
-            .transform
-            .as_ref()
-            .filter(|_| !matches!(node.content, PaintContent::Container));
-        if let Some(t) = xf {
-            r.push_transform(t);
-        }
-        match &node.content {
-            PaintContent::Container => {}
-            PaintContent::Frame(frame) => draw_frame(r, node.rect, frame),
-            PaintContent::Rect {
-                fill,
-                stroke,
-                stroke_width,
-                corner_radius,
-            } => r.fill_rect(
-                node.rect,
-                fill.as_ref(),
-                *stroke,
-                *stroke_width,
-                *corner_radius,
-            ),
-            PaintContent::Text(tb) => r.draw_text(node.rect, tb),
-            PaintContent::Image { src, fit } => r.draw_image(node.rect, src, *fit),
-            PaintContent::Path(path) => r.draw_path(path),
-            PaintContent::Ellipse { fill, stroke } => {
-                r.draw_ellipse(node.rect, fill.as_ref(), stroke.as_ref())
+        if let Some(fx) = node.effects.as_deref().filter(|fx| !fx.is_none()) {
+            let end = (i + 1 + node.descendants).min(nodes.len());
+            let group = &nodes[i..end];
+            i = end;
+            if fx.opacity <= 0.0 {
+                continue; // invisible, shadows included
             }
+            let layer = fx.opacity < 1.0;
+            if layer {
+                r.push_opacity(fx.opacity, group);
+            }
+            for s in &fx.shadows {
+                r.draw_shadow(group, s);
+            }
+            paint_node(r, &group[0]);
+            paint_nodes(r, &group[1..], &group[0].clips);
+            if layer {
+                r.pop_opacity();
+            }
+            continue;
         }
-        if xf.is_some() {
-            r.pop_transform();
+        paint_node(r, node);
+        i += 1;
+    }
+    for _ in base.len()..active.len() {
+        r.pop_clip();
+    }
+}
+
+/// Draw one node's own content (not its children) under its transform.
+fn paint_node<R: Renderer>(r: &mut R, node: &ComputedNode) {
+    // Containers paint nothing, so they need no transform either.
+    let xf = node
+        .transform
+        .as_ref()
+        .filter(|_| !matches!(node.content, PaintContent::Container));
+    if let Some(t) = xf {
+        r.push_transform(t);
+    }
+    match &node.content {
+        PaintContent::Container => {}
+        PaintContent::Frame(frame) => draw_frame(r, node.rect, frame),
+        PaintContent::Rect {
+            fill,
+            stroke,
+            stroke_width,
+            corner_radius,
+        } => r.fill_rect(
+            node.rect,
+            fill.as_ref(),
+            *stroke,
+            *stroke_width,
+            *corner_radius,
+        ),
+        PaintContent::Text(tb) => r.draw_text(node.rect, tb),
+        PaintContent::Image { src, fit, smooth } => r.draw_image(node.rect, src, *fit, *smooth),
+        PaintContent::Path(path) => r.draw_path(path),
+        PaintContent::Ellipse { fill, stroke } => {
+            r.draw_ellipse(node.rect, fill.as_ref(), stroke.as_ref())
         }
     }
-    for _ in 0..active.len() {
-        r.pop_clip();
+    if xf.is_some() {
+        r.pop_transform();
+    }
+}
+
+/// The stroke of an open (chevron) arrowhead: the shaft's colour and width,
+/// solid, mitered.
+pub(crate) fn open_head_stroke(shaft: &StrokeStyle) -> StrokeStyle {
+    StrokeStyle {
+        dash: Vec::new(),
+        cap: crate::geom::LineCap::Butt,
+        join: crate::geom::LineJoin::Miter,
+        ..shaft.clone()
     }
 }
 

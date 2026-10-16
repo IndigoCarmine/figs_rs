@@ -9,7 +9,9 @@
 pub mod parse;
 pub mod resolve;
 
-pub use parse::{ArcRadius, NodeKind, PageHeight, RawDocument, RawNode, RawPage, RawSegment};
+pub use parse::{
+    ArcRadius, NodeKind, PageHeight, RawDocument, RawGlow, RawNode, RawPage, RawSegment, RawShadow,
+};
 pub use resolve::{
     Common, Decoration, Document, EllipseProps, ImageProps, Node, NodeType, PageInfo, PathProps,
     RectProps, ResolveError, TextProps,

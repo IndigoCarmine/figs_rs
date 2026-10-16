@@ -26,6 +26,9 @@ fn blank(kind: NodeKind) -> RawNode {
         viewbox: None,
         contain: false,
         clip: false,
+        shadow: None,
+        glow: None,
+        opacity: None,
         children: Vec::new(),
         spacing: 0.0,
         main_axis_alignment: None,
@@ -39,6 +42,7 @@ fn blank(kind: NodeKind) -> RawNode {
         line_height: None,
         src: None,
         fit: None,
+        smooth: None,
         fill: None,
         stroke: None,
         stroke_width: None,
@@ -51,6 +55,8 @@ fn blank(kind: NodeKind) -> RawNode {
         join: None,
         head: None,
         head_size: None,
+        head_width: None,
+        head_style: None,
     }
 }
 

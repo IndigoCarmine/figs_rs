@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::geom::{
-    ArcSweep, ArrowHead, Color, CrossAxisAlign, Edges, ImageFit, LineCap, LineJoin, MainAxisAlign,
-    Paint, TextAlign,
+    ArcSweep, ArrowHead, Color, CrossAxisAlign, Edges, HeadStyle, HeadWidth, ImageFit, LineCap,
+    LineJoin, MainAxisAlign, Paint, TextAlign,
 };
 use crate::units::Unit;
 
@@ -227,6 +227,20 @@ pub struct RawNode {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub clip: bool,
 
+    // ---- effects (all node types; purely visual, never affect layout) ----
+    /// A drop shadow behind everything the node and its subtree paint (see
+    /// [`RawShadow`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shadow: Option<RawShadow>,
+    /// An outer glow: a soft halo hugging the silhouette (see [`RawGlow`]),
+    /// painted behind the node, over its `shadow`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub glow: Option<RawGlow>,
+    /// Group opacity `0..=1`: the node and its subtree are composited as one
+    /// layer (overlaps inside don't add up).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<f32>,
+
     // ---- container (column / row / stack; spacing & alignment are flex-only) ----
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<String>,
@@ -263,6 +277,10 @@ pub struct RawNode {
     pub src: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fit: Option<ImageFit>,
+    /// `false`: scale the image with nearest-neighbour sampling, so a
+    /// low-resolution image keeps its blocky pixels (default `true`: smooth).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub smooth: Option<bool>,
 
     // ---- rect (`stroke` / `stroke_width` are shared with shapes and text) ----
     /// Fill paint: a colour (`"#rrggbb"`) or a gradient table (see
@@ -317,6 +335,47 @@ pub struct RawNode {
     /// Arrowhead length in the page unit (default: proportional to the stroke width).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub head_size: Option<f32>,
+    /// Arrowhead base width: a length in the page unit, or a multiple of the
+    /// stroke width as `"3x"` (default `0.8 × head_size`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub head_width: Option<HeadWidth>,
+    /// Arrowhead shape: `triangle` (default), `stealth`, `open`, `barb_left`,
+    /// `barb_right`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub head_style: Option<HeadStyle>,
+}
+
+/// `shadow = { dx, dy, blur, spread, color }` (lengths in the page unit; all
+/// optional): offset on the page, blur radius (CSS semantics, σ = blur / 2),
+/// growth of the silhouette before blurring, and colour with alpha (default
+/// `#00000080`).
+#[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RawShadow {
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub dx: f32,
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub dy: f32,
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub blur: f32,
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub spread: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<Color>,
+}
+
+/// `glow = { blur, color, spread }`: a shadow with no offset whose silhouette
+/// is first grown by `spread` (default `blur / 2`), so the halo is nearly
+/// opaque at the edges and fades out about `blur` past them. `color` defaults
+/// to `#000000`.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RawGlow {
+    pub blur: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spread: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<Color>,
 }
 
 /// One entry of a shape's `segments`: a straight, Bézier or arc segment from

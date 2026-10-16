@@ -30,6 +30,17 @@ pub fn polygon(pts: &[Point]) -> Vec<PathSegment> {
     segs
 }
 
+/// Open polyline through `pts` (e.g. an open arrowhead chevron).
+pub fn polyline(pts: &[Point]) -> Vec<PathSegment> {
+    let Some((first, rest)) = pts.split_first() else {
+        return Vec::new();
+    };
+    let mut segs = Vec::with_capacity(pts.len());
+    segs.push(PathSegment::MoveTo(*first));
+    segs.extend(rest.iter().map(|p| PathSegment::LineTo(*p)));
+    segs
+}
+
 /// Outline of `r` with corners rounded by `radius`, clamped to half the
 /// shorter side so corners never overlap. A non-positive radius gives a plain
 /// rectangle.
@@ -132,6 +143,32 @@ pub fn image_placement(rect: Rect, iw: f32, ih: f32, fit: ImageFit) -> Rect {
             )
         }
     }
+}
+
+/// Resolution an image drawn with `smooth = false` is embedded at in the
+/// vector formats (pixels per inch at its drawn size).
+pub const PIXELATED_DPI: f32 = 300.0;
+
+/// For a `smooth = false` image of `iw`×`ih` pixels drawn at `dest`
+/// (points): the whole factor to upscale it by, nearest-neighbour, before
+/// embedding in PDF/SVG, so it reaches about [`PIXELATED_DPI`] and stays
+/// blocky whatever interpolation a viewer applies. `None` when smooth, or
+/// when the image is already that fine. Capped at 8192 px a side.
+pub fn pixelated_factor(smooth: bool, iw: f32, ih: f32, dest: Rect) -> Option<u32> {
+    if smooth || iw <= 0.0 || ih <= 0.0 {
+        return None;
+    }
+    let want = PIXELATED_DPI / crate::units::PT_PER_INCH; // px per pt
+    let k = (want * dest.w / iw).max(want * dest.h / ih).ceil();
+    let cap = (8192.0 / iw.max(ih)).floor();
+    let k = k.min(cap).min(64.0);
+    (k >= 2.0).then_some(k as u32)
+}
+
+/// `img` scaled up `k` times, each pixel becoming a `k`×`k` block.
+pub fn upscale_nearest(img: &image::RgbaImage, k: u32) -> image::RgbaImage {
+    let (w, h) = img.dimensions();
+    image::imageops::resize(img, w * k, h * k, image::imageops::FilterType::Nearest)
 }
 
 /// Resolve an image `src` against the render base directory.

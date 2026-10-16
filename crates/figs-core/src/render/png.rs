@@ -11,6 +11,12 @@
 //! every pixel outside it (blending by coverage at the edge). That clips all
 //! drawing — glyph blits included — without threading a mask through every
 //! draw call, at the cost of one canvas copy per clipped container.
+//!
+//! Effects: a group `opacity` draws the group onto a fresh transparent layer
+//! and composites it back at that alpha (only over the group's bounds);
+//! shadows are rasterized at the output resolution by [`super::effects`] and
+//! blended under the node at whole-pixel positions. `smooth = false` images
+//! are sampled nearest-neighbour.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -24,9 +30,10 @@ use tiny_skia::{
 };
 
 use crate::geom::{
-    Affine, Brush, Color, ImageFit, LineCap, LineJoin, PathSegment, Point, Rect, StrokeStyle,
+    Affine, Brush, Color, ImageFit, LineCap, LineJoin, PathSegment, Point, Rect, Shadow,
+    StrokeStyle,
 };
-use crate::layout::{ClipRegion, ComputedLayout, PageGeom, PathPaint, TextBox};
+use crate::layout::{ClipRegion, ComputedLayout, ComputedNode, PageGeom, PathPaint, TextBox};
 use crate::text::FontStore;
 
 use super::geometry;
@@ -75,6 +82,9 @@ pub struct TinySkiaRenderer<'a> {
     /// Open clips: the canvas as it was at each `push_clip` and the clip's
     /// coverage mask (`None` = degenerate clip, hides everything).
     clips: Vec<(Pixmap, Option<Mask>)>,
+    /// Open opacity layers: the canvas under the layer, the layer's alpha,
+    /// and the pixel box it may have drawn in (`x0, y0, x1, y1`).
+    layers: Vec<(Pixmap, f32, [u32; 4])>,
 }
 
 type FaceId = cosmic_text::fontdb::ID;
@@ -96,7 +106,57 @@ impl<'a> TinySkiaRenderer<'a> {
             xf: None,
             glyph_paths: HashMap::new(),
             clips: Vec::new(),
+            layers: Vec::new(),
         })
+    }
+
+    /// A transparent `w` x `h` canvas at `scale` pixels per point (no page,
+    /// no background) — for rendering a group's silhouette.
+    pub(crate) fn offscreen(w: u32, h: u32, scale: f32, opts: &RenderOptions<'a>) -> Option<Self> {
+        Some(TinySkiaRenderer {
+            pixmap: Pixmap::new(w, h)?,
+            scale,
+            fonts: opts.fonts,
+            swash: SwashCache::new(),
+            outlines: OutlineCache::new(),
+            base_dir: opts.base_dir,
+            xf: None,
+            glyph_paths: HashMap::new(),
+            clips: Vec::new(),
+            layers: Vec::new(),
+        })
+    }
+
+    /// The canvas (premultiplied).
+    pub(crate) fn into_pixmap(self) -> Pixmap {
+        self.pixmap
+    }
+
+    /// The canvas extent in points.
+    fn canvas_rect(&self) -> Rect {
+        Rect::new(
+            0.0,
+            0.0,
+            self.pixmap.width() as f32 / self.scale,
+            self.pixmap.height() as f32 / self.scale,
+        )
+    }
+
+    /// The pixel box `[x0, y0, x1, y1]` (clamped to the canvas) covering
+    /// everything `group` may draw.
+    fn pixel_bounds(&self, group: &[ComputedNode]) -> [u32; 4] {
+        let (w, h) = (self.pixmap.width(), self.pixmap.height());
+        let Some(ink) = super::effects::ink_bounds(group) else {
+            return [0, 0, 0, 0];
+        };
+        let s = self.scale;
+        let clamp = |v: f32, hi: u32| (v.max(0.0) as u32).min(hi);
+        [
+            clamp((ink.x * s).floor() - 1.0, w),
+            clamp((ink.y * s).floor() - 1.0, h),
+            clamp(((ink.x + ink.w) * s).ceil() + 1.0, w),
+            clamp(((ink.y + ink.h) * s).ceil() + 1.0, h),
+        ]
     }
 
     /// Encode the current canvas as PNG bytes.
@@ -367,7 +427,7 @@ impl<'a> TinySkiaRenderer<'a> {
 
     /// Decode `path` and draw it scaled into `rect`. Returns false on any
     /// failure so the caller can paint a placeholder.
-    fn try_draw_image(&mut self, rect: Rect, path: &Path, fit: ImageFit) -> bool {
+    fn try_draw_image(&mut self, rect: Rect, path: &Path, fit: ImageFit, smooth: bool) -> bool {
         let decoded = match image::open(path) {
             Ok(img) => img.to_rgba8(),
             Err(_) => return false,
@@ -417,7 +477,11 @@ impl<'a> TinySkiaRenderer<'a> {
         }
 
         let pp = PixmapPaint {
-            quality: FilterQuality::Bilinear,
+            quality: if smooth {
+                FilterQuality::Bilinear
+            } else {
+                FilterQuality::Nearest
+            },
             ..Default::default()
         };
         self.pixmap.draw_pixmap(
@@ -586,6 +650,82 @@ impl Renderer for TinySkiaRenderer<'_> {
         self.xf = Some(*t);
     }
 
+    fn push_opacity(&mut self, alpha: f32, group: &[ComputedNode]) {
+        let bounds = self.pixel_bounds(group);
+        let (w, h) = (self.pixmap.width(), self.pixmap.height());
+        let Some(layer) = Pixmap::new(w, h) else {
+            return;
+        };
+        let under = std::mem::replace(&mut self.pixmap, layer);
+        self.layers.push((under, alpha, bounds));
+    }
+
+    fn pop_opacity(&mut self) {
+        let Some((under, alpha, [x0, y0, x1, y1])) = self.layers.pop() else {
+            return;
+        };
+        let layer = std::mem::replace(&mut self.pixmap, under);
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+        // Composite only the box the group can have drawn in.
+        let Some(part) = tiny_skia::IntRect::from_xywh(x0 as i32, y0 as i32, x1 - x0, y1 - y0)
+            .and_then(|r| layer.clone_rect(r))
+        else {
+            return;
+        };
+        let pp = PixmapPaint {
+            opacity: alpha,
+            ..Default::default()
+        };
+        self.pixmap.draw_pixmap(
+            x0 as i32,
+            y0 as i32,
+            part.as_ref(),
+            &pp,
+            Transform::identity(),
+            None,
+        );
+    }
+
+    fn draw_shadow(&mut self, group: &[ComputedNode], shadow: &Shadow) {
+        let opts = RenderOptions {
+            fonts: self.fonts,
+            base_dir: self.base_dir,
+        };
+        let visible = self.canvas_rect();
+        let Some(raster) = super::effects::shadow_raster(group, shadow, visible, self.scale, &opts)
+        else {
+            return;
+        };
+        if (raster.scale - self.scale).abs() <= 1e-6 * self.scale {
+            // Same grid: a whole-pixel blit.
+            self.pixmap.draw_pixmap(
+                raster.x0,
+                raster.y0,
+                raster.pixmap.as_ref(),
+                &PixmapPaint::default(),
+                Transform::identity(),
+                None,
+            );
+            return;
+        }
+        // Computed coarser (a huge shadow): scale it up smoothly.
+        let k = self.scale / raster.scale;
+        let pp = PixmapPaint {
+            quality: FilterQuality::Bilinear,
+            ..Default::default()
+        };
+        self.pixmap.draw_pixmap(
+            0,
+            0,
+            raster.pixmap.as_ref(),
+            &pp,
+            Transform::from_row(k, 0.0, 0.0, k, raster.x0 as f32 * k, raster.y0 as f32 * k),
+            None,
+        );
+    }
+
     fn pop_transform(&mut self) {
         self.xf = None;
     }
@@ -751,9 +891,15 @@ impl Renderer for TinySkiaRenderer<'_> {
         if let Some(p) = self.sk_path(&geo.shaft) {
             self.stroke_shape(&p, stroke);
         }
-        for tri in &geo.heads {
-            if let Some(p) = self.polygon(tri) {
+        for poly in &geo.heads {
+            if let Some(p) = self.polygon(poly) {
                 self.fill_shape(&p, stroke.color);
+            }
+        }
+        let chevron = super::open_head_stroke(stroke);
+        for v in &geo.open_heads {
+            if let Some(p) = self.sk_path(&geometry::polyline(v)) {
+                self.stroke_shape(&p, &chevron);
             }
         }
     }
@@ -770,9 +916,9 @@ impl Renderer for TinySkiaRenderer<'_> {
         }
     }
 
-    fn draw_image(&mut self, rect: Rect, src: &Path, fit: ImageFit) {
+    fn draw_image(&mut self, rect: Rect, src: &Path, fit: ImageFit, smooth: bool) {
         let resolved = geometry::resolve_image(self.base_dir, src);
-        if self.try_draw_image(rect, &resolved, fit) {
+        if self.try_draw_image(rect, &resolved, fit, smooth) {
             return;
         }
         tracing::warn!(path = %resolved.display(), "image unavailable; drawing placeholder");

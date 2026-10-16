@@ -53,7 +53,9 @@ You provide: hierarchy, style, content, and constraints (`flex`, `aspect_ratio`,
 ### Properties
 
 - **Shared** (all nodes): `flex`, `width`, `height`, `aspect_ratio`, `margin`,
-  `padding`, `x`, `y`, `anchor`, `rotate` (see [Rotation](#rotation)). `margin`/`padding` accept a scalar (`1.5`) or a table
+  `padding`, `x`, `y`, `anchor`, `rotate` (see [Rotation](#rotation)), and the
+  visual effects `shadow`, `glow`, `opacity` (see
+  [Shadows, glows & opacity](#shadows-glows--opacity)). `margin`/`padding` accept a scalar (`1.5`) or a table
   (`{ top = 1, left = 2 }`). `x`/`y` are only read by a `stack` parent (see
   below); under `column`/`row` and on the root they are ignored.
 - **Container** (`column`/`row`): `children`, `spacing`, `main_axis_alignment`
@@ -67,13 +69,14 @@ You provide: hierarchy, style, content, and constraints (`flex`, `aspect_ratio`,
 - **text**: `content`, `font_size` (pt), `font_family`, `font_weight`, `color`,
   `align`, `line_height` (multiple of font size), and an outline: `stroke`,
   `stroke_width`, `join` (see [Text outline](#text-outline)).
-- **image**: `src`, `fit` (`contain`/`cover`/`fill`).
+- **image**: `src`, `fit` (`contain`/`cover`/`fill`), `smooth` (`false`:
+  nearest-neighbour scaling, see [Pixelated images](#pixelated-images)).
 - **rect**: `fill`, `stroke`, `stroke_width`, `corner_radius`.
   Every `fill` (rect, ellipse, path, containers) and `page.background` takes a
   colour *or a gradient* (see [Gradients & frames](#gradients--frames)).
 - **line** / **arrow** / **path**: `points`, `segments` (curves), `viewbox`, `stroke`,
-  `stroke_width`, `dash`, `cap`, `join`, `head`, `head_size`; **path** adds `fill`,
-  `closed`.
+  `stroke_width`, `dash`, `cap`, `join`, `head`, `head_size`, `head_width`,
+  `head_style`; **path** adds `fill`, `closed`.
 - **ellipse**: `fill`, `stroke`, `stroke_width`, `dash`, `cap`, `join`.
 
 Lengths are in the page `unit`; `font_size` is always points. Internally
@@ -173,8 +176,8 @@ overlap), and follow rotation. The clip is exact in every backend: PDF clip
 path, SVG `clipPath`, PNG via a canvas snapshot restored outside an
 anti-aliased mask (one canvas copy per clipped container).
 
-Box shadows are not supported: a blur has no native PDF equivalent, so the
-backends could not agree.
+Shadows go on any node, frames included — see
+[Shadows, glows & opacity](#shadows-glows--opacity).
 
 In Rhai: `.fill("#…")` or `.fill(linear(90, ["#0b1a3a", "#1d3b6e"]))`,
 `linear([x1, y1], [x2, y2], stops)`, `radial(stops)`,
@@ -188,6 +191,80 @@ See [`examples/poster_frame.figs`](examples/poster_frame.figs): a conference
 poster's framing — dark gradient page, gradient section header bars with a
 light rounded border, solid and dashed framed blocks, a dashed separator, a
 gradient block arrow, and a clipped rounded "photo" frame.
+
+### Shadows, glows & opacity
+
+Three effects go on **any node** — shape, text, image, or a container with
+everything in it. They are purely visual: layout is exactly as without them.
+
+```toml
+[nodes.bar]                    # a section header bar with a soft drop shadow
+type = "row"
+fill = { linear = 90, stops = ["#3d4a73", "#080a10"] }
+shadow = { dx = 0.06, dy = 0.07, blur = 0.2, color = "#00000066" }
+
+[nodes.label]                  # a white label kept legible on a bright image
+type = "text"
+content = "(a)"
+color = "#ffffff"
+glow = { blur = 0.12, color = "#000000c0" }
+
+[nodes.overlay]                # a translucent box, contents included
+type = "column"
+fill = "#0b1020"
+opacity = 0.75
+```
+
+- **`shadow = { dx, dy, blur, spread, color }`** (all optional; lengths in
+  the page unit): the silhouette of everything the node *and its subtree*
+  paint — the rounded frame, the glyphs (with their outline), an image's
+  alpha, a path's fill, strokes and arrowheads — grown by `spread`, blurred,
+  tinted with `color` (its alpha is the shadow's opacity; default
+  `#00000080`) and moved by (`dx`, `dy`). `blur` is the blur radius as in CSS
+  (`box-shadow`): a Gaussian of σ = `blur / 2`, so the edge ramps from ~84 %
+  to ~16 % over `blur`. The offset is on the page: a rotated node's shadow
+  still falls the same way as every other one.
+- **`glow = { blur, color, spread }`**: an outer glow — a shadow with no
+  offset whose silhouette is first grown by `spread` (default `blur / 2`), so
+  the halo is nearly opaque at the edges and fades out about `blur` past them
+  (default colour `#000000`). The dark halo behind white labels on images.
+  Unlike a text `stroke`, it is soft and works on any node.
+- **`opacity`** (`0..1`): the node and its subtree are composited as **one
+  layer** — overlapping children don't show through each other, as with a
+  PowerPoint group or CSS `opacity`. Its shadows fade with it; `0` hides all
+  of it.
+- Paint order: the shadow, then the glow, then the node. Both are clipped by
+  a clipping ancestor (like everything else the node draws); clips *inside*
+  the node shape the silhouette.
+
+Every backend draws the same pixels. A shadow is a **raster**: the group is
+rendered by the PNG renderer onto a transparent canvas, its alpha grown by an
+exact Euclidean distance transform (round corners), blurred (three box blurs,
+the SVG `feGaussianBlur` recipe, exact kernel below σ = 2 px), and tinted.
+PNG does this at the output resolution and blends it under the node; PDF —
+which has no blur — and SVG embed the same raster as an image, at about four
+pixels per σ (150–300 dpi), which looks identical at any zoom because a blur
+has no fine detail. SVG deliberately doesn't use `<filter>`: filter regions,
+resolution and `feMorphology` (square, not round) differ between viewers.
+Opacity is native: a PNG layer composited back at that alpha, a PDF
+transparency group, an SVG `<g opacity>`.
+
+In Rhai: `.shadow(dx, dy, blur)`, `.shadow(dx, dy, blur, color)`,
+`.shadow(dx, dy, blur, spread, color)`, `.glow(blur)`, `.glow(blur, color)`,
+`.opacity(a)`. The editor's inspector has an **Effects** section for every
+node. See [`examples/effects.figs`](examples/effects.figs).
+
+### Pixelated images
+
+`smooth = false` on an `image` (Rhai `.smooth(false)`) scales it
+nearest-neighbour, so a low-resolution scan — an 83 × 52 px AFM image blown
+up to a panel — keeps its blocky pixels instead of turning to mush. PNG
+samples it nearest-neighbour; PDF and SVG embed it upscaled by a whole factor
+(each pixel a block, to about 300 dpi at its drawn size) so every viewer shows
+the blocks whatever its own interpolation (poppler, for one, ignores a missing
+`/Interpolate` below 4× magnification), and SVG adds
+`image-rendering: pixelated`. Smooth images (the default) are bilinear in PNG
+and carry `/Interpolate true` in PDF, so a small image looks the same in both.
 
 ### Auto page height
 
@@ -211,7 +288,11 @@ that unbounded vertical axis:
   so each child — flex or not — takes its measured (intrinsic) height, like
   Flutter flex children in an unbounded axis. A grid of equal-flex rows thus gets
   rows sized by their content; a sizeless `flex` rect is 0 tall. Rows and stacks
-  inside still use flex for widths.
+  inside still use flex for widths. A column whose own height is known — an
+  explicit `height`, or an `aspect_ratio` (its width is always decided) — is
+  not content-sized: its flex children share that height as on a fixed page.
+  That is what lets a `plot(…)` (an aspect column around a flex data area) be
+  the page root: `page("double", plot(…))`.
 - **widths are decided as usual** (stretch / flex shares), and `aspect_ratio`
   derives each height from its width: 2×2 square images on a 17.5 cm page with a
   0.2 cm gap give a page `2 × 8.65 + 0.2` cm tall.
@@ -431,8 +512,16 @@ dash = [0.2, 0.1]             # on/off lengths; omit for a solid stroke
 - **Arrowheads.** `head` is `none` / `start` / `end` / `both` (default `end` for
   `arrow`, `none` for `line`/`path`, so `path` + `head` gives a bent arrow).
   `head_size` is the head's length in page units (default 5 × the stroke width);
-  its base is 0.8 × as wide. Heads are filled with the stroke color and stay solid
-  on dashed strokes; closed paths have no heads.
+  `head_width` its base width — a length, or a multiple of the stroke width as a
+  string, `head_width = "3x"` (default 0.8 × `head_size`; PowerPoint's medium
+  head is `head_size = 3w`, `head_width = "3x"`). Heads are in the stroke color
+  and stay solid on dashed strokes; closed paths have no heads.
+- **Head styles.** `head_style` is `triangle` (default, filled), `stealth`
+  (filled, swept back with a notch 0.6 × its length from the tip), `open` (a
+  chevron stroked in the shaft's width, its mitered apex on the tip),
+  `barb_left` / `barb_right` (a filled half head on one side of the shaft —
+  the harpoons of an equilibrium `⇌`; left/right as seen travelling to the
+  tip). The shaft is cut back into the head so no line cap shows past it.
 
 See [`examples/annotations.figs`](examples/annotations.figs).
 
@@ -569,6 +658,9 @@ setters:
 
 - **layout** (any node): `.flex(n)`, `.width(n)`, `.height(n)`, `.aspect(n)`,
   `.margin(n)`, `.pad(n)`, `.rotate(deg)` (clockwise; see [Rotation](#rotation)).
+- **effects** (any node): `.shadow(dx, dy, blur[, [spread,] color])`,
+  `.glow(blur[, color])`, `.opacity(a)` — see
+  [Shadows, glows & opacity](#shadows-glows--opacity).
 - **user coordinates**: `.viewbox(x0, y0, x1, y1)` (stack/line/arrow/path) and
   `.anchor(ax, ay)` (read by a `stack` parent) — see
   [User coordinates](#user-coordinates-viewbox--anchors).
@@ -591,13 +683,14 @@ setters:
 - **shapes** (`line`/`arrow`/`ellipse`/`path`): `.stroke(hex)`, `.stroke_width(n)`,
   `.fill(hex)` (path/ellipse), `.dash([on, off, …])`, `.cap("butt"|"round"|"square")`,
   `.join("miter"|"round"|"bevel")`,
-  `.head("none"|"start"|"end"|"both")`, `.head_size(n)`, `.closed()` (path) — e.g.
+  `.head("none"|"start"|"end"|"both")`, `.head_size(n)`, `.head_width(n | "3x")`,
+  `.head_style("triangle"|"stealth"|"open"|"barb_left"|"barb_right")`, `.closed()` (path) — e.g.
   `stack([image("a.png"), arrow(1, 4, 3, 2).stroke("#e0635a")])`.
 - **curves** (continue a path from its last point): `.to(x, y)`,
   `.quad(cx, cy, x, y)`, `.cubic(c1x, c1y, c2x, c2y, x, y)`, `.arc(r, x, y)` /
   `.arc(r, x, y, #{ sweep, large, rotation })` (`r` a number or `[rx, ry]`) —
   see [Curves](#curves).
-- **image**: `.fit("contain"|"cover"|"fill")`.
+- **image**: `.fit("contain"|"cover"|"fill")`, `.smooth(false)`.
 - **page**: `.unit("cm"|…)`, `.background(hex | gradient)`, `.dpi(n)`, `.font(name)`.
 
 Build it like any document (extension selects the front-end):
@@ -649,6 +742,8 @@ Components (lengths in cm, font sizes in pt):
 | `labeled(item, s)` / `panel_label(style, i)` | One labeled panel — `stack([item, pin(label_tag(s), label_corner(), label_inset())])` — / the `i`-th (0-based) label string. |
 | `circle(r)` / `circle(cx, cy, r)` | A square `ellipse` of radius `r`; the 3-argument form is centered on (`cx`, `cy`) of the enclosing `stack` (via `.at`). |
 | `curve` / `curved_arrow` / `brace` / `bracket` `(x1, y1, x2, y2, bend_or_depth)` | Curved annotations built on the core curve builders — see [Curves](#curves). |
+| `block_arrow(x1, y1, x2, y2, shaft_w, head_w, head_len)` | A thick block arrow with its tip at (`x2`, `y2`): a shaft `shaft_w` wide and a triangular head `head_w` across, `head_len` long — one closed 7-corner `path` filled with `accent()`, so `.fill(linear(0, [...]))` gives a gradient and `.shadow(..)` depth. |
+| `equilibrium(x1, y1, x2, y2)` / `(…, gap)` | The equilibrium arrows ⇌: two `arrow`s with `head_style("barb_left")` harpoon heads, `gap` apart (default 4 × `annotation_width()`) either side of the chord — one towards (`x2`, `y2`), one back — barbs outside; in `fg()`, `annotation_width()` wide, in a `stack`. |
 | `annotate(item, marks)` | `stack([item, ..marks])`: overlays annotation nodes (an array, or one node) on a panel; coordinates inside are cm from the panel's top-left. Composes with labels: `panels([annotate(..), ..])`, `labeled(annotate(..), "(a)")`. |
 | `scalebar(len, s)` | A `len` cm bar (white, `scalebar_thickness()` thick) with label `s` centered above it (`""` for none), `scalebar_inset()` in from `scalebar_corner()` (default bottom-right). |
 | `scalebar(len, field, s)` | The same bar in image/physical units: `len` out of a field `field` wide (same unit), so exactly `len / field` of the panel width whatever the layout — `scalebar(5, 50, "5 μm")` for a 50 μm field, `scalebar(80, 1024, "1 μm")` for 80 px of a 1024 px image. |
@@ -1111,7 +1206,10 @@ the vector formats keep that exactness at any zoom.
 | Shapes | anti-aliased raster | vector paths (dash, cap, alpha) | `<rect>`/`<ellipse>`/`<path>` |
 | Text | rasterized glyphs | **real text**: fonts embedded as subsets, ToUnicode map (selectable, searchable) | **glyph outlines** (`<use>` of per-glyph paths in `<defs>`), exact on every viewer with no font dependency; not selectable (`aria-label` carries the text) |
 | Text `stroke` | glyph outlines stroked (tiny-skia), glyphs blended on top | vector path under the text (text layer unchanged) | one stroked `<path>` before the glyph group |
-| Images | resampled | JPEG passed through untouched; other formats embedded losslessly | base64 `data:` URI (PNG/JPEG bytes verbatim) |
+| Images | resampled (bilinear) | JPEG passed through untouched; other formats embedded losslessly; `/Interpolate true` | base64 `data:` URI (PNG/JPEG bytes verbatim) |
+| `smooth = false` | nearest-neighbour | upscaled nearest-neighbour to ~300 dpi, `/Interpolate` off | `image-rendering: pixelated` + the same upscale |
+| `shadow` / `glow` | blurred silhouette at the output dpi, blended under the node | the same raster as an image (soft mask, interpolated) | the same raster as `<image class="figs-shadow">` |
+| `opacity` | layer composited at that alpha | transparency group (`/ca`) | `<g opacity>` |
 | `cover` | clipped | clip path | `clipPath` |
 | Gradients | tiny-skia linear / two-point radial shaders | axial / radial shadings (soft mask for translucent stops) | `<linearGradient>` / `<radialGradient>` in `<defs>`, `userSpaceOnUse` |
 | `clip = true` | canvas snapshot restored outside an AA mask | `W n` clip path | `<g clip-path>` |
@@ -1120,7 +1218,8 @@ the vector formats keep that exactness at any zoom.
 - Coordinates are points throughout. The IR's top-left origin is kept in SVG
   (`viewBox` in pt); PDF's bottom-left flip is handled by krilla, and the
   MediaBox is exactly `page.width × page.height` pt.
-- `dpi` only affects PNG.
+- `dpi` only affects PNG (and caps the resolution of shadow rasters embedded in
+  PDF/SVG, at most 300 dpi).
 - **Rotation** is applied per node from the IR transform: PNG draws through a
   tiny-skia `Transform` (rotated text is filled from glyph outlines, since glyph
   bitmaps only blit upright), PDF wraps the node in `q … cm … Q` (rotated text

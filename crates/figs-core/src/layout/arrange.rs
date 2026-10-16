@@ -43,10 +43,13 @@ pub(crate) fn arrange<M: LeafMeasure>(
         transform: xf,
         content: paint_content(&node.kind, &node.common, rect),
         clips: Vec::new(),
+        effects: (!node.effects.is_none()).then(|| Box::new(node.effects.clone())),
+        descendants: 0,
     });
     // Everything pushed after this node, until it returns, is its subtree
     // (pre-order): a clipping container hands its region to all of it.
     let subtree_start = out.len();
+    let self_index = subtree_start - 1;
 
     match &node.kind {
         NodeType::Container {
@@ -101,6 +104,7 @@ pub(crate) fn arrange<M: LeafMeasure>(
             n.clips.insert(0, region.clone());
         }
     }
+    out[self_index].descendants = out.len() - subtree_start;
 }
 
 /// The region a `clip` decoration keeps its children in: the box inside
@@ -504,6 +508,7 @@ fn paint_content(kind: &NodeType, common: &Common, rect: Rect) -> PaintContent {
         NodeType::Image(props) => PaintContent::Image {
             src: props.src.clone().into(),
             fit: props.fit,
+            smooth: props.smooth,
         },
         NodeType::Text(TextProps {
             content,
@@ -541,6 +546,8 @@ fn paint_content(kind: &NodeType, common: &Common, rect: Rect) -> PaintContent {
                 stroke: props.stroke.clone(),
                 head: props.head,
                 head_size: props.head_size,
+                head_width: props.head_width,
+                head_style: props.head_style,
             })
         }
         NodeType::Ellipse(props) => PaintContent::Ellipse {

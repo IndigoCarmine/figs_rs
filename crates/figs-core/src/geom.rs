@@ -520,6 +520,146 @@ impl ArrowHead {
     }
 }
 
+/// The shape of an arrowhead (`head_style`). Every style is `head_size` long
+/// (tip to base) and `head_width` across its base; "left"/"right" are as
+/// seen travelling towards the tip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HeadStyle {
+    /// A filled triangle (the default).
+    #[default]
+    Triangle,
+    /// A filled, swept-back head with a notch in its base (PowerPoint's
+    /// "stealth").
+    Stealth,
+    /// An open chevron: two strokes from the base corners to the tip, in the
+    /// stroke's width (no fill).
+    Open,
+    /// A filled half head on the left of the shaft only — a harpoon, as in
+    /// the two arrows of an equilibrium `⇌`.
+    BarbLeft,
+    /// [`HeadStyle::BarbLeft`] on the right side.
+    BarbRight,
+}
+
+/// An arrowhead's base width (`head_width`): an absolute length (a number,
+/// page units) or a multiple of the stroke width (a string `"3x"`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum HeadWidth {
+    /// Page units (points once resolved).
+    Abs(f32),
+    /// Multiple of the stroke width.
+    PerStroke(f32),
+}
+
+impl HeadWidth {
+    /// The width in points for a stroke `stroke_width` points wide.
+    pub fn resolve(self, stroke_width: f32) -> f32 {
+        match self {
+            HeadWidth::Abs(w) => w,
+            HeadWidth::PerStroke(k) => k * stroke_width,
+        }
+    }
+
+    /// Parse `"3x"` / `"2.5x"` (a multiple of the stroke width).
+    pub fn parse_ratio(s: &str) -> Option<HeadWidth> {
+        let k: f32 = s.trim().strip_suffix('x')?.trim().parse().ok()?;
+        k.is_finite().then_some(HeadWidth::PerStroke(k))
+    }
+}
+
+impl Serialize for HeadWidth {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            HeadWidth::Abs(w) => s.serialize_f32(*w),
+            HeadWidth::PerStroke(k) => s.serialize_str(&format!("{k}x")),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for HeadWidth {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl serde::de::Visitor<'_> for V {
+            type Value = HeadWidth;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str(r#"a length or a multiple of the stroke width like "3x""#)
+            }
+            fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<HeadWidth, E> {
+                Ok(HeadWidth::Abs(v as f32))
+            }
+            fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<HeadWidth, E> {
+                Ok(HeadWidth::Abs(v as f32))
+            }
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<HeadWidth, E> {
+                Ok(HeadWidth::Abs(v as f32))
+            }
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<HeadWidth, E> {
+                HeadWidth::parse_ratio(v)
+                    .ok_or_else(|| E::invalid_value(serde::de::Unexpected::Str(v), &self))
+            }
+        }
+        d.deserialize_any(V)
+    }
+}
+
+/// A drop shadow (or, with no offset, a glow) behind everything a node and
+/// its subtree paint: their combined silhouette (alpha), grown by `spread`,
+/// blurred and tinted with `color`, offset by (`dx`, `dy`) on the page.
+/// Lengths in points once resolved. Purely visual: it never affects layout.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Shadow {
+    /// Offset on the page (not turned by a rotation, so every shadow on a page
+    /// falls the same way).
+    pub dx: f32,
+    pub dy: f32,
+    /// Blur radius, as CSS `box-shadow`: a Gaussian of σ = `blur / 2`.
+    pub blur: f32,
+    /// Grow (positive) or shrink (negative) the silhouette before blurring.
+    pub spread: f32,
+    /// Colour and maximum opacity of the shadow.
+    pub color: Color,
+}
+
+impl Shadow {
+    /// Standard deviation of the blur, points.
+    pub fn sigma(&self) -> f32 {
+        (self.blur / 2.0).max(0.0)
+    }
+
+    /// How far (points) the shadow reaches past its offset silhouette.
+    pub fn reach(&self) -> f32 {
+        3.0 * self.sigma() + self.spread.max(0.0)
+    }
+}
+
+/// Visual effects of a node, applied to its whole subtree as one group:
+/// shadows/glows painted behind it, and a group opacity. `Default` is "no
+/// effect".
+#[derive(Debug, Clone, PartialEq)]
+pub struct Effects {
+    /// Group opacity `0..=1` (the subtree is composited as one layer).
+    pub opacity: f32,
+    /// Painted in order, behind the node (the drop shadow, then the glow).
+    pub shadows: Vec<Shadow>,
+}
+
+impl Default for Effects {
+    fn default() -> Self {
+        Effects {
+            opacity: 1.0,
+            shadows: Vec::new(),
+        }
+    }
+}
+
+impl Effects {
+    /// True when there is nothing to do (opaque, no shadows).
+    pub fn is_none(&self) -> bool {
+        self.opacity >= 1.0 && self.shadows.is_empty()
+    }
+}
+
 /// Direction an `arc` path segment turns, as seen on the page (y down).
 /// `cw` is SVG's `sweep-flag = 1`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
@@ -641,6 +781,21 @@ mod tests {
         assert!((half.a - 128.0 / 255.0).abs() < 1e-3);
         assert!(Color::parse_hex("#xyz").is_err());
         assert!(Color::parse_hex("#12345").is_err());
+    }
+
+    #[test]
+    fn head_width_ratio_strings() {
+        assert_eq!(
+            HeadWidth::parse_ratio("3x"),
+            Some(HeadWidth::PerStroke(3.0))
+        );
+        assert_eq!(
+            HeadWidth::parse_ratio(" 2.5x "),
+            Some(HeadWidth::PerStroke(2.5))
+        );
+        assert_eq!(HeadWidth::parse_ratio("3"), None);
+        assert_eq!(HeadWidth::PerStroke(3.0).resolve(2.0), 6.0);
+        assert_eq!(HeadWidth::Abs(4.0).resolve(2.0), 4.0);
     }
 
     #[test]

@@ -15,20 +15,32 @@
 //! - **Images**: JPEGs are embedded as-is (DCT passthrough, no recompression);
 //!   other formats are decoded and embedded losslessly. `cover` is clipped to
 //!   the node rect. Unreadable images get the same placeholder box as PNG.
+//!   Smooth images (the default) carry `/Interpolate true`, so viewers scale
+//!   them smoothly as the PNG backend does (otherwise e.g. poppler magnifies
+//!   a small image with blocky pixels).
 //! - **Rotation**: a rotated node is drawn inside a `q … cm … Q` block
 //!   (krilla `push_transform` / `pop`), so rotated text stays real text.
 //! - **Gradients** are krilla linear / radial gradients (PDF shadings, with a
 //!   soft mask when a stop is translucent), defined in the current user space
 //!   — the node's local frame under its transform.
 //! - **Clips** are `W n` clip paths (krilla `push_clip_path`) in page space.
+//! - **Opacity** groups are transparency groups (krilla `push_opacity`).
+//! - **Shadows / glows** are embedded RGBA images (alpha soft mask,
+//!   `/Interpolate true`) computed by [`super::effects`] at
+//!   [`super::effects::vector_scale`] — PDF has no blur of its own.
+//! - **`smooth = false` images** are upscaled nearest-neighbour by a whole
+//!   factor (to about 300 dpi at their size) before embedding, so they stay
+//!   blocky in every viewer, whatever its interpolation.
 
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use krilla::color::rgb;
 use krilla::geom::{Path as KPath, PathBuilder, Point as KPoint, Size as KSize, Transform};
-use krilla::image::Image;
+use krilla::image::{BitsPerComponent, CustomImage, Image, ImageColorspace};
 use krilla::num::NormalizedF32;
 use krilla::page::PageSettings;
 use krilla::paint::{
@@ -40,9 +52,10 @@ use krilla::text::{Font, Glyph, GlyphId};
 use krilla::Document;
 
 use crate::geom::{
-    Affine, Brush, Color, ImageFit, LineCap, LineJoin as GLineJoin, PathSegment, Rect, StrokeStyle,
+    Affine, Brush, Color, ImageFit, LineCap, LineJoin as GLineJoin, PathSegment, Rect, Shadow,
+    StrokeStyle,
 };
-use crate::layout::{ClipRegion, ComputedLayout, PageGeom, PathPaint, TextBox};
+use crate::layout::{ClipRegion, ComputedLayout, ComputedNode, PageGeom, PathPaint, TextBox};
 use crate::text::FontStore;
 
 use super::geometry;
@@ -61,6 +74,9 @@ pub enum PdfError {
 /// Miter limit used by every backend (tiny-skia's and SVG's default).
 const MITER_LIMIT: f32 = 4.0;
 
+/// An embedded image and its natural pixel size.
+type SizedImage = (Image, f32, f32);
+
 /// A krilla-backed renderer drawing onto one PDF page surface. Build via
 /// [`render_pdf`].
 pub struct PdfRenderer<'s, 'a> {
@@ -69,8 +85,14 @@ pub struct PdfRenderer<'s, 'a> {
     base_dir: &'a Path,
     /// Embedded fonts per cosmic-text face (`None` = unusable face).
     font_cache: HashMap<cosmic_text::fontdb::ID, Option<Font>>,
-    /// Decoded images per resolved path (`None` = unreadable → placeholder).
-    image_cache: HashMap<PathBuf, Option<(Image, f32, f32)>>,
+    /// Decoded images per resolved path and smoothness (`None` = unreadable
+    /// → placeholder).
+    image_cache: HashMap<(PathBuf, bool), Option<SizedImage>>,
+    /// Pixelated (`smooth = false`) images per path and upscale factor.
+    pixel_cache: HashMap<(PathBuf, u32), Option<Image>>,
+    /// The page box (points) and resolution, for shadow rasters.
+    page: Rect,
+    dpi: f32,
     /// Glyph outlines, for text strokes.
     outlines: OutlineCache,
     /// Number of open `push_clip`s (each one krilla push).
@@ -87,6 +109,9 @@ impl<'s, 'a> PdfRenderer<'s, 'a> {
             base_dir: opts.base_dir,
             font_cache: HashMap::new(),
             image_cache: HashMap::new(),
+            pixel_cache: HashMap::new(),
+            page: Rect::default(),
+            dpi: crate::schema::resolve::DEFAULT_DPI,
             outlines: OutlineCache::new(),
             open_clips: 0,
         }
@@ -153,17 +178,31 @@ impl<'s, 'a> PdfRenderer<'s, 'a> {
     }
 
     /// Decoded image + natural pixel size for `path`, cached.
-    fn image(&mut self, path: &Path) -> Option<(Image, f32, f32)> {
+    fn image(&mut self, path: &Path, smooth: bool) -> Option<(Image, f32, f32)> {
         self.image_cache
-            .entry(path.to_path_buf())
-            .or_insert_with(|| load_image(path))
+            .entry((path.to_path_buf(), smooth))
+            .or_insert_with(|| load_image(path, smooth))
+            .clone()
+    }
+
+    /// `path` upscaled `k` times nearest-neighbour, cached.
+    fn pixelated(&mut self, path: &Path, k: u32) -> Option<Image> {
+        self.pixel_cache
+            .entry((path.to_path_buf(), k))
+            .or_insert_with(|| {
+                let img = image::open(path).ok()?.into_rgba8();
+                let up = geometry::upscale_nearest(&img, k);
+                let (w, h) = up.dimensions();
+                Some(rgba_image(up.as_raw(), w, h, false))
+            })
             .clone()
     }
 }
 
 /// Read and decode an image for embedding. JPEGs keep their original DCT
-/// stream; everything else is embedded from decoded RGBA.
-fn load_image(path: &Path) -> Option<(Image, f32, f32)> {
+/// stream; everything else is embedded from decoded RGBA. `smooth` sets the
+/// PDF `/Interpolate` flag.
+fn load_image(path: &Path, smooth: bool) -> Option<(Image, f32, f32)> {
     let bytes = std::fs::read(path).ok()?;
     // Decode up front (as the PNG backend does) so a corrupt file becomes a
     // placeholder instead of a PDF write error.
@@ -174,12 +213,73 @@ fn load_image(path: &Path) -> Option<(Image, f32, f32)> {
     }
     let is_jpeg = image::guess_format(&bytes).ok() == Some(image::ImageFormat::Jpeg);
     let img = if is_jpeg {
-        Image::from_jpeg(bytes.into(), false).ok()
+        Image::from_jpeg(bytes.into(), smooth).ok()
     } else {
         None
     }
-    .unwrap_or_else(|| Image::from_rgba8(decoded.into_rgba8().into_raw(), w, h));
+    .unwrap_or_else(|| rgba_image(decoded.into_rgba8().as_raw(), w, h, smooth));
     Some((img, w as f32, h as f32))
+}
+
+/// Straight RGBA8 pixels as a krilla image with the given `/Interpolate`
+/// flag (krilla's `from_rgba8` always writes `false`). An opaque image gets
+/// no soft mask.
+fn rgba_image(rgba: &[u8], w: u32, h: u32, interpolate: bool) -> Image {
+    let opaque = rgba.chunks_exact(4).all(|p| p[3] == 255);
+    let rgb: Vec<u8> = rgba
+        .chunks_exact(4)
+        .flat_map(|p| [p[0], p[1], p[2]])
+        .collect();
+    let alpha = (!opaque).then(|| rgba.chunks_exact(4).map(|p| p[3]).collect::<Vec<u8>>());
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    rgba.hash(&mut hasher);
+    (w, h).hash(&mut hasher);
+    let raw = RawRgba {
+        rgb: Arc::new(rgb),
+        alpha: alpha.map(Arc::new),
+        size: (w, h),
+        key: hasher.finish(),
+    };
+    Image::from_custom(raw, interpolate).unwrap_or_else(|_| Image::from_rgba8(rgba.to_vec(), w, h))
+}
+
+/// 8-bit RGB (+ optional alpha) pixels for [`Image::from_custom`]; hashed by
+/// a precomputed digest of the pixels, so cloning and hashing are cheap.
+#[derive(Clone)]
+struct RawRgba {
+    rgb: Arc<Vec<u8>>,
+    alpha: Option<Arc<Vec<u8>>>,
+    size: (u32, u32),
+    key: u64,
+}
+
+impl Hash for RawRgba {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.key.hash(state);
+        self.size.hash(state);
+        self.alpha.is_some().hash(state);
+    }
+}
+
+impl CustomImage for RawRgba {
+    fn color_channel(&self) -> &[u8] {
+        &self.rgb
+    }
+    fn alpha_channel(&self) -> Option<&[u8]> {
+        self.alpha.as_deref().map(|a| a.as_slice())
+    }
+    fn bits_per_component(&self) -> BitsPerComponent {
+        BitsPerComponent::Eight
+    }
+    fn size(&self) -> (u32, u32) {
+        self.size
+    }
+    fn icc_profile(&self) -> Option<&[u8]> {
+        None
+    }
+    fn color_space(&self) -> ImageColorspace {
+        ImageColorspace::Rgb
+    }
 }
 
 fn k_color(c: Color) -> rgb::Color {
@@ -376,7 +476,49 @@ impl Renderer for PdfRenderer<'_, '_> {
         let white = Brush::Solid(Color::WHITE);
         let bg = page.background.as_ref().unwrap_or(&white);
         let r = Rect::new(0.0, 0.0, page.width_pt, page.height_pt);
+        self.page = r;
+        self.dpi = page.dpi;
         self.draw_brush_segs(&geometry::rounded_rect(r, 0.0), Some(bg), None);
+    }
+
+    fn push_opacity(&mut self, alpha: f32, _group: &[ComputedNode]) {
+        self.surface.push_opacity(k_opacity(alpha));
+    }
+
+    fn pop_opacity(&mut self) {
+        self.surface.pop();
+    }
+
+    fn draw_shadow(&mut self, group: &[ComputedNode], shadow: &Shadow) {
+        let opts = RenderOptions {
+            fonts: self.fonts,
+            base_dir: self.base_dir,
+        };
+        let scale = super::effects::vector_scale(shadow, self.dpi);
+        let Some(raster) = super::effects::shadow_raster(group, shadow, self.page, scale, &opts)
+        else {
+            return;
+        };
+        // A smooth raster: let viewers interpolate it.
+        let (w, h) = (raster.pixmap.width(), raster.pixmap.height());
+        let rgba: Vec<u8> = raster
+            .pixmap
+            .pixels()
+            .iter()
+            .flat_map(|p| {
+                let c = p.demultiply();
+                [c.red(), c.green(), c.blue(), c.alpha()]
+            })
+            .collect();
+        let img = rgba_image(&rgba, w, h, true);
+        let at = raster.rect();
+        let Some(size) = KSize::from_wh(at.w, at.h) else {
+            return;
+        };
+        self.surface
+            .push_transform(&Transform::from_translate(at.x, at.y));
+        self.surface.draw_image(img, size);
+        self.surface.pop();
     }
 
     fn push_clip(&mut self, clip: &ClipRegion) {
@@ -481,9 +623,9 @@ impl Renderer for PdfRenderer<'_, '_> {
         }
     }
 
-    fn draw_image(&mut self, rect: Rect, src: &Path, fit: ImageFit) {
+    fn draw_image(&mut self, rect: Rect, src: &Path, fit: ImageFit, smooth: bool) {
         let resolved = geometry::resolve_image(self.base_dir, src);
-        let Some((img, iw, ih)) = self.image(&resolved) else {
+        let Some((img, iw, ih)) = self.image(&resolved, smooth) else {
             tracing::warn!(path = %resolved.display(), "image unavailable; drawing placeholder");
             let (fill, border) = geometry::placeholder_colors();
             self.fill_rect(
@@ -501,6 +643,10 @@ impl Renderer for PdfRenderer<'_, '_> {
         let dest = geometry::image_placement(rect, iw, ih, fit);
         let Some(size) = KSize::from_wh(dest.w, dest.h) else {
             return;
+        };
+        let img = match geometry::pixelated_factor(smooth, iw, ih, dest) {
+            Some(k) => self.pixelated(&resolved, k).unwrap_or(img),
+            None => img,
         };
         // Clip to the node rect so `cover` doesn't bleed into siblings.
         let clip = (fit == ImageFit::Cover)
@@ -532,8 +678,12 @@ impl Renderer for PdfRenderer<'_, '_> {
         // stroke color (geometry shared with every backend).
         let geo = path.stroke_geometry();
         self.draw_segs(&geo.shaft, None, Some(stroke));
-        for tri in &geo.heads {
-            self.draw_segs(&geometry::polygon(tri), Some(stroke.color), None);
+        for poly in &geo.heads {
+            self.draw_segs(&geometry::polygon(poly), Some(stroke.color), None);
+        }
+        let chevron = super::open_head_stroke(stroke);
+        for v in &geo.open_heads {
+            self.draw_segs(&geometry::polyline(v), None, Some(&chevron));
         }
     }
 
