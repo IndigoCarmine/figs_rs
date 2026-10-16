@@ -672,3 +672,331 @@ fn plot_as_auto_page_root_fills_its_aspect() {
         .expect("the data line");
     assert!(line.rect.h > 0.5 * l.page.height_pt, "{:?}", line.rect);
 }
+
+// ---- prelude arrow shapes: block arrows, ⇌ options, arc and bent arrows ----
+
+fn eval(src: &str) -> figs_core::schema::RawDocument {
+    figs_core::script::eval_script(src).unwrap_or_else(|e| panic!("script failed: {e}"))
+}
+
+fn eval_err(src: &str) -> String {
+    figs_core::script::eval_script(src)
+        .expect_err("script should fail")
+        .message
+}
+
+fn near(a: f32, b: f32) -> bool {
+    (a - b).abs() < 1e-3
+}
+
+fn assert_pts(got: &[[f32; 2]], want: &[[f32; 2]]) {
+    assert_eq!(got.len(), want.len(), "{got:?}");
+    for (g, w) in got.iter().zip(want) {
+        assert!(near(g[0], w[0]) && near(g[1], w[1]), "{got:?} vs {want:?}");
+    }
+}
+
+fn nodes_of(
+    d: &figs_core::schema::RawDocument,
+    kind: figs_core::schema::NodeKind,
+) -> Vec<&figs_core::schema::RawNode> {
+    let mut v: Vec<_> = d.nodes.iter().filter(|(_, n)| n.kind == kind).collect();
+    v.sort_by_key(|(id, _)| {
+        id.strip_prefix("node")
+            .map_or(0, |n| n.parse::<usize>().unwrap())
+    });
+    v.into_iter().map(|(_, n)| n).collect()
+}
+
+/// The single closed path of a one-shape script.
+fn shape(src: &str) -> figs_core::schema::RawNode {
+    let d = eval(&format!("page(20, 20, stack([{src}])).unit(\"cm\")"));
+    let p = nodes_of(&d, figs_core::schema::NodeKind::Path);
+    assert_eq!(p.len(), 1);
+    assert!(p[0].closed, "a closed outline");
+    assert!(p[0].fill.is_some());
+    p[0].clone()
+}
+
+#[test]
+fn block_arrow_both_heads() {
+    // Tips at both ends, head bases 1.0 in, 1.4 across, shaft 0.6.
+    let p = shape("block_arrow(0, 1, 6, 1, 0.6, 1.4, 1.0, #{ both: true })");
+    assert_pts(
+        &p.points,
+        &[
+            [0.0, 1.0],
+            [1.0, 0.3],
+            [1.0, 0.7],
+            [5.0, 0.7],
+            [5.0, 0.3],
+            [6.0, 1.0],
+            [5.0, 1.7],
+            [5.0, 1.3],
+            [1.0, 1.3],
+            [1.0, 1.7],
+        ],
+    );
+    // Heads longer than half the arrow meet in the middle.
+    let p = shape("block_arrow(0, 0, 2, 0, 0.2, 0.6, 5, #{ both: true })");
+    assert!(near(p.points[1][0], 1.0) && near(p.points[4][0], 1.0));
+    // The single-headed form is unchanged (7 corners).
+    assert_eq!(
+        shape("block_arrow(0, 1, 6, 1, 0.6, 1.4, 1.0, #{})")
+            .points
+            .len(),
+        7
+    );
+    assert!(
+        eval_err("page(1, 1, block_arrow(0, 0, 1, 0, 0.1, 0.2, 0.2, #{ bth: true }))")
+            .contains("unknown option \"bth\"")
+    );
+}
+
+#[test]
+fn equilibrium_options_and_hook_barbs() {
+    use figs_core::schema::NodeKind;
+    // Hooks: plain shafts `gap` apart, each with a cubic barb leaving its tip
+    // along the shaft and ending head_size back, head_width out (outside).
+    let d = eval(
+        r#"page(10, 10, equilibrium(0, 3, 4, 3, #{ barb: "hook", width: 0.1, gap: 0.4 })).unit("cm")"#,
+    );
+    let lines = nodes_of(&d, NodeKind::Line);
+    assert_eq!(lines.len(), 2);
+    assert_pts(&lines[0].points, &[[0.0, 2.8], [4.0, 2.8]]);
+    assert_pts(&lines[1].points, &[[4.0, 3.2], [0.0, 3.2]]);
+    assert!(lines.iter().all(|l| near(l.stroke_width.unwrap(), 0.1)));
+    let hooks = nodes_of(&d, NodeKind::Path);
+    assert_eq!(hooks.len(), 2);
+    // head_size = min(0.4 × 4, 20 × 0.1) = 1.6, head_width = 0.4 × 1.6.
+    for (h, tip, end) in [
+        (hooks[0], [4.0, 2.8], [2.4, 2.8 - 0.64]),
+        (hooks[1], [0.0, 3.2], [1.6, 3.2 + 0.64]),
+    ] {
+        assert_pts(&h.points, &[tip]);
+        assert_eq!(h.segments.len(), 1);
+        let s = &h.segments[0];
+        assert_pts(&[s.to], &[end]);
+        let c = s.cubic.expect("a cubic barb");
+        // Tangent to the shaft at the tip.
+        assert!(near(c[0][1], tip[1]), "{c:?}");
+        assert!(near(h.stroke_width.unwrap(), 0.15));
+        assert_eq!(h.cap, Some(figs_core::geom::LineCap::Round));
+    }
+    // Explicit sizes; dark theme strokes everything white.
+    let d = eval(
+        r#"style("dark"); page(10, 10, equilibrium(0, 3, 4, 3, #{ barb: "hook", head_size: 1, head_width: "5x" })).unit("cm")"#,
+    );
+    let w = 8.0 * 0.005;
+    let hooks = nodes_of(&d, NodeKind::Path);
+    assert_pts(
+        &[hooks[0].segments[0].to],
+        &[[3.0, 3.0 - 2.0 * w - 5.0 * w]],
+    );
+    for n in d.nodes.values().filter(|n| n.kind != NodeKind::Stack) {
+        assert_eq!(n.stroke.map(|c| c.to_hex()).as_deref(), Some("#ffffff"));
+    }
+
+    // Straight harpoons take the core head options; a number is the gap.
+    let d = eval(
+        r#"page(10, 10, equilibrium(0, 3, 4, 3, #{ head_size: 0.5, head_width: "3x", gap: 0.2 })).unit("cm")"#,
+    );
+    let arrows = nodes_of(&d, NodeKind::Arrow);
+    assert_eq!(arrows.len(), 2);
+    for a in &arrows {
+        assert_eq!(a.head_style, Some(HeadStyle::BarbLeft));
+        assert_eq!(a.head_size, Some(0.5));
+        assert_eq!(a.head_width, Some(HeadWidth::PerStroke(3.0)));
+    }
+    let d = eval(r#"page(10, 10, equilibrium(0, 3, 4, 3, 0.3)).unit("cm")"#);
+    let arrows = nodes_of(&d, NodeKind::Arrow);
+    assert!(near(arrows[0].points[0][1], 2.85));
+
+    assert!(
+        eval_err(r#"page(1, 1, equilibrium(0, 0, 1, 0, #{ barb: "curly" }))"#)
+            .contains("unknown barb")
+    );
+    assert!(
+        eval_err(r#"page(1, 1, equilibrium(0, 0, 1, 0, #{ size: 1 }))"#).contains("unknown option")
+    );
+}
+
+#[test]
+fn arc_arrow_outline() {
+    use figs_core::geom::ArcSweep;
+    use figs_core::schema::parse::ArcRadius;
+    let pt = |r: f32, deg: f32| {
+        let t = deg.to_radians();
+        [5.0 + r * t.cos(), 5.0 + r * t.sin()]
+    };
+    // 0° -> 90° (clockwise on the page), band 0.4 on radius 2; head 0.8
+    // across, 0.4 along the circle (0.2 rad).
+    let p = shape("arc_arrow(5, 5, 2, 0, 90, 0.4)");
+    let ah = 90.0 - 0.2f32.to_degrees();
+    assert_pts(&p.points, &[pt(2.2, 0.0)]);
+    let to: Vec<[f32; 2]> = p.segments.iter().map(|s| s.to).collect();
+    assert_pts(
+        &to,
+        &[
+            pt(2.2, ah),
+            pt(2.4, ah),
+            pt(2.0, 90.0),
+            pt(1.6, ah),
+            pt(1.8, ah),
+            pt(1.8, 0.0),
+        ],
+    );
+    let (outer, inner) = (&p.segments[0], &p.segments[5]);
+    assert_eq!(outer.arc, Some(ArcRadius::Circle(2.2)));
+    assert_eq!(inner.arc, Some(ArcRadius::Circle(1.8)));
+    assert_eq!(outer.sweep, Some(ArcSweep::Cw));
+    assert_eq!(inner.sweep, Some(ArcSweep::Ccw));
+    assert!(!outer.large && !inner.large);
+    assert!(p.segments[1..5].iter().all(|s| s.arc.is_none()));
+
+    // Anticlockwise past half a turn: large arcs, sweeps swapped.
+    let p = shape("arc_arrow(5, 5, 2, 90, -200, 0.4, #{ head_width: 1, head_len: 0.5 })");
+    assert_eq!(p.segments[0].sweep, Some(ArcSweep::Ccw));
+    assert!(p.segments[0].large && p.segments[5].large);
+    assert_pts(&[p.segments[2].to], &[pt(2.0, -200.0)]);
+    assert_pts(
+        &[p.segments[1].to],
+        &[pt(2.5, -200.0 + 0.25f32.to_degrees())],
+    );
+
+    // Both heads: the outline starts at the tail tip.
+    let p = shape("arc_arrow(5, 5, 2, 0, 180, 0.4, #{ both: true })");
+    let a_s = 0.2f32.to_degrees();
+    assert_pts(&p.points, &[pt(2.0, 0.0)]);
+    assert_pts(
+        &[p.segments[0].to, p.segments[1].to],
+        &[pt(2.4, a_s), pt(2.2, a_s)],
+    );
+    assert_eq!(p.segments.len(), 9);
+    assert_pts(&[p.segments[8].to], &[pt(1.6, a_s)]);
+
+    assert!(eval_err("page(1, 1, arc_arrow(0, 0, 1, 0, 90, 2))").contains("0 < w < 2 r"));
+    assert!(eval_err("page(1, 1, arc_arrow(0, 0, 1, 0, 360, 0.1))").contains("full turn"));
+    assert!(eval_err("page(1, 1, arc_arrow(0, 0, 1, 10, 10, 0.1))").contains("full turn"));
+}
+
+#[test]
+fn arc_arrow_turns_the_way_it_says() {
+    // 180° -> 360° clockwise runs over the top; 180° -> 0° under the bottom.
+    let px = |src: &str| {
+        let doc = Document::from_script(&format!(
+            r##"page(100, 100, stack([{src}.fill("#000000")])).unit("pt").dpi(72)"##
+        ))
+        .unwrap();
+        render_with(&doc, None, Path::new("."))
+    };
+    let top = px("arc_arrow(50, 50, 30, 180, 360, 10)");
+    assert!(dark(&top, 50, 20) > 200 && dark(&top, 50, 80) < 10);
+    assert!(dark(&top, 50, 50) < 10, "the centre stays open");
+    let bottom = px("arc_arrow(50, 50, 30, 180, 0, 10)");
+    assert!(dark(&bottom, 50, 80) > 200 && dark(&bottom, 50, 20) < 10);
+}
+
+#[test]
+fn block_arrow_along_offsets_the_centre_line() {
+    // An L: mitred corner, head along the last run.
+    let p =
+        shape("block_arrow_along([[0, 0], [4, 0], [4, 4]], 1, #{ head_len: 1, head_width: 2 })");
+    assert_pts(
+        &p.points,
+        &[
+            [0.0, -0.5],
+            [4.5, -0.5],
+            [4.5, 3.0],
+            [5.0, 3.0],
+            [4.0, 4.0],
+            [3.0, 3.0],
+            [3.5, 3.0],
+            [3.5, 0.5],
+            [0.0, 0.5],
+        ],
+    );
+    // Both heads (default head: 2 × w across, w long).
+    let p = shape("block_arrow_along([[0, 0], [4, 0]], 1, #{ both: true })");
+    assert_pts(
+        &p.points,
+        &[
+            [0.0, 0.0],
+            [1.0, -1.0],
+            [1.0, -0.5],
+            [3.0, -0.5],
+            [3.0, -1.0],
+            [4.0, 0.0],
+            [3.0, 1.0],
+            [3.0, 0.5],
+            [1.0, 0.5],
+            [1.0, 1.0],
+        ],
+    );
+
+    // Curves: every shaft corner sits w / 2 off the curve (to the
+    // flattening), the head's two corners hw / 2, the tip on it.
+    let dist = |q: [f32; 2], f: &dyn Fn(f32) -> [f32; 2]| {
+        (0..=4000)
+            .map(|i| {
+                let c = f(i as f32 / 4000.0);
+                ((q[0] - c[0]).powi(2) + (q[1] - c[1]).powi(2)).sqrt()
+            })
+            .fold(f32::MAX, f32::min)
+    };
+    let quad = |t: f32| {
+        let u = 1.0 - t;
+        [2.0 * u * t * 2.0 + t * t * 4.0, 2.0 * u * t * -2.0]
+    };
+    let p = shape("block_arrow_along([[0, 0], [2, -2, 4, 0]], 0.4)");
+    let ds: Vec<f32> = p.points.iter().map(|&q| dist(q, &quad)).collect();
+    let off = ds.iter().filter(|d| (**d - 0.2).abs() > 0.01).count();
+    assert_eq!(off, 3, "only the head's corners and tip: {ds:?}");
+    assert_eq!(ds.iter().filter(|d| **d < 1e-3).count(), 1, "the tip");
+    assert_eq!(ds.iter().filter(|d| (**d - 0.4).abs() < 0.02).count(), 2);
+    let cubic = shape("block_arrow_along([[0, 0], [1, -2, 3, -2, 4, 0]], 0.4)");
+    assert!(cubic.points.len() > 40);
+
+    // A rounded corner: the sharp outer corner is gone, the band keeps its
+    // width around the bend (a quadratic from (3, 0) via (4, 0) to (4, 1)).
+    let p = shape("block_arrow_along([[0, 0], [4, 0], [4, 4]], 1, #{ radius: 1 })");
+    assert!(p
+        .points
+        .iter()
+        .all(|q| (q[0] - 4.5).abs() + (q[1] + 0.5).abs() > 0.05));
+    let bend = |t: f32| {
+        let u = 1.0 - t;
+        [u * u * 3.0 + 2.0 * u * t * 4.0 + t * t * 4.0, t * t]
+    };
+    let mid = p
+        .points
+        .iter()
+        .filter(|q| q[0] > 3.0 && q[0] < 4.5 && q[1] < 1.0 && q[1] > -0.5)
+        .count();
+    assert!(mid > 10, "the bend is flattened");
+    for q in p.points.iter().filter(|q| q[0] > 3.2 && q[1] < 0.8) {
+        assert!((dist(*q, &bend) - 0.5).abs() < 0.01, "{q:?}");
+    }
+
+    assert!(eval_err("page(1, 1, block_arrow_along([[0, 0]], 1))").contains("at least two points"));
+    assert!(
+        eval_err("page(1, 1, block_arrow_along([[0, 0], [1, 2, 3]], 1))").contains("entries are")
+    );
+    assert!(
+        eval_err("page(1, 1, block_arrow_along([[0, 0, 1, 1], [2, 2]], 1))")
+            .contains("the first is")
+    );
+    assert!(eval_err("page(1, 1, block_arrow_along([[0, 0], [1, 0]], 0))").contains("positive"));
+    assert!(eval_err("page(1, 1, block_arrow_along([[0, 0], [0, 0]], 1))").contains("no length"));
+}
+
+#[test]
+fn arrows_figs_example() {
+    let d = eval(include_str!("../../../examples/arrows.figs"));
+    let closed = d
+        .nodes
+        .values()
+        .filter(|n| n.kind == figs_core::schema::NodeKind::Path && n.closed)
+        .count();
+    assert_eq!(closed, 8, "2 block arrows, 3 arc arrows, 3 bent arrows");
+}

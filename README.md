@@ -710,6 +710,29 @@ of travel — upwards for a left-to-right chord):
 
 See [`examples/curves.figs`](examples/curves.figs).
 
+#### Arrow shapes
+
+PowerPoint's block arrows are prelude shapes too. Each is **one closed
+`path`** filled with `accent()`, so `.fill(linear(..))`, `.stroke(..)`,
+`.shadow(..)` and `.opacity(..)` chain on it. Angles are degrees from +x,
+clockwise on the page (as `rotate`); lengths in page units.
+
+| Function | Result |
+|---|---|
+| `block_arrow(x1, y1, x2, y2, shaft_w, head_w, head_len)` / `(…, #{ both: true })` | A straight block arrow to its tip (x2, y2): 7 corners, or 10 with a head at both ends (⇔). |
+| `equilibrium(x1, y1, x2, y2)` / `(…, gap)` / `(…, opts)` | ⇌: two arrows `gap` apart (default 4 × the width) in `fg()`, `annotation_width()` wide. Options `gap`, `width`, `barb` — `"straight"` (core half-barb harpoons; `head_size`, `head_width` as on any arrow) or `"hook"` (plain shafts, each with a curved barb leaving the tip along the shaft and bending outwards, 1.5 × the width with round caps — the PowerPoint ⇌; `head_size` = its length back along the shaft, default 0.4 × the chord up to 20 × the width; `head_width` = how far out, a length or `"3x"`, default 0.4 × `head_size`). |
+| `arc_arrow(cx, cy, r, a0, a1, w)` / `(…, opts)` | A circular block arrow: a band `w` wide on the circle of radius `r`, from angle `a0` to its tip at `a1` (`a1 < a0` runs anticlockwise; less than a full turn). Outer and inner edges are true arcs. Options `head_width` (default 2 × w), `head_len` (along the circle, default w), `both`. |
+| `block_arrow_along(points, w)` / `(…, opts)` | A bent block arrow following a centre line: `[x, y]` entries are straight runs, `[cx, cy, x, y]` quadratic and `[c1x, c1y, c2x, c2y, x, y]` cubic curves (the arguments of `.quad` / `.cubic`). The outline is the centre line (curves flattened) offset by w / 2 each side, with mitred joins bevelled past a miter of 4 (keep curves wider than the band). Options `radius` (round every corner between straight runs), `head_width` (default 2 × w), `head_len` (default w), `both`. |
+
+```rhai
+block_arrow(1, 3.5, 7, 3.5, 0.6, 1.4, 1.0, #{ both: true })
+equilibrium(9, 3.5, 13, 3.5, #{ barb: "hook", width: 0.06 })
+arc_arrow(4, 9, 2.5, 200, 340, 0.6)                          // over the top
+block_arrow_along([[14, 6], [14, 10], [19, 10]], 0.8, #{ radius: 1.2 })
+```
+
+See [`examples/arrows.figs`](examples/arrows.figs).
+
 ### Equal spacing & edge-to-edge
 
 To place panels at **equal intervals** in a `row`/`column`, set
@@ -1309,7 +1332,7 @@ only.
 A conference poster — header, numbered section bars, a column grid with
 dashed separators, frames, tables, bullets — is part of the framework too
 ([`examples/poster_demo.figs`](examples/poster_demo.figs): a full A0 poster
-in the dark PowerPoint look in 87 lines (78 without comments and blank lines), nearly all of them content):
+in the dark PowerPoint look in 98 lines (87 without comments and blank lines), nearly all of them content):
 
 ```rhai
 style("poster-dark");
@@ -1334,15 +1357,15 @@ poster(#{
 |---|---|
 | `poster(header, body)` / `poster(preset, header, body)` | A `poster_size()` page (default `"a0"`; any paper preset, `-landscape` too) on `poster_bg()` (a colour or gradient; default `page_bg()`), the header above the body, `poster_margin()` from the edges. `header` is a node, a map for `poster_header`, or `()`; `body` an array (→ `rows`) or a node. |
 | `poster_header(#{ title, authors, affiliations, logos, number })` | Logos (`poster_logo_height()` tall) on the left; the title (`poster_title_size()`, bold) and the author line centred right of them; the poster number bold in the top-right corner; a `poster_header_rule()` under it all. |
-| `author_line(authors, affiliations)` | Authors are names or `#{ name, aff: [1, 2], presenter: true }`. With `affiliation_position()` `"before"` (default, the Japanese convention): `（Univ. A¹・Univ. B²）○A. Author¹・B. Author¹,²` on one line; `"below"`: the authors, then the numbered affiliations. The line is one text node of rich-text spans — affiliation numbers are superscript spans — so it wraps like any text; a single affiliation is not numbered. |
-| `section(title, content)` / `section(number, title, content)` | A bar (`section_bar_height()`, `section_bar_fill()`, `section_bar_border()`, square unless `section_bar_radius()`) with the title centred on it, over `content` (an array of items `section_gap()` apart, or one node) padded `section_pad()`. Numbered `section_label_style()` (`"1."` → "1. Title") in the order sections are built; an integer `number` restarts the count from it, a string is used as is (`""` for none). |
-| `columns(items)` / `columns(items, widths)` | Side by side, `poster_gutter()` apart, with a dashed `vsep` in each gutter (`separators()`), starting `separator_inset()` down (the middle of the bars). Widths: flex weights, `"12cm"` lengths, `"auto"`. |
-| `rows(items)` / `rows(items, heights)` | Down the page, `poster_row_gap()` apart (dashed `hsep`s with `row_separators()`); same sizes as `columns`. |
+| `author_line(authors, affiliations)` | Authors are names (strings or rich text: `markup("**A. Author**")`) or `#{ name, aff: [1, 2], presenter: true }`; affiliations are strings or rich text too. With `affiliation_position()` `"before"` (default, the Japanese convention): `（Univ. A¹・Univ. B²）○A. Author¹・B. Author¹,²` on one line; `"below"`: the authors, then the numbered affiliations. The line is one text node of rich-text spans — affiliation numbers are superscript spans — so it wraps like any text; a single affiliation is not numbered. |
+| `section(title, content)` / `section(number, title, content)` | A bar (`section_bar_height()`, `section_bar_fill()`, `section_bar_border()`, square unless `section_bar_radius()`) with the title centred on it, over `content` (an array of items `section_gap()` apart, or one node) padded `section_pad()`. Numbered `section_label_style()` (`"1."` → "1. Title") in the order sections are built; an integer `number` restarts the count from it, a string is used as is (`""` for none). The title is a string, rich text, or a text node used as is (the number goes before it in the bar's title style; `section_title(s)` gives that style to chain setters on). Effects: `section_title_glow()`, `section_title_shadow()`, `section_bar_shadow()`. |
+| `columns(items)` / `columns(items, widths)` / `columns(items, widths, opts)` | Side by side, `poster_gutter()` apart, with a dashed `vsep` in each gutter (`separators()`), starting `separator_inset()` down (the middle of the bars). Widths: flex weights, `"12cm"` lengths, `"auto"`. Options (also as the second argument): `gutter` — one length or one per gutter (so each row of a poster can have its own); `separators` — `true` / `false`, or one per gutter: `true`, `false`, a number (a separator ending that many cm below the top of the row) or `#{ start, end }` (cm from the top of the row; `start` defaults to the bar middle, `end` to the bottom). |
+| `rows(items)` / `rows(items, heights)` / `rows(items, heights, opts)` | Down the page, `poster_row_gap()` apart (dashed `hsep`s with `row_separators()`); same sizes as `columns`. Options: `gaps` (one or one per gap), `separators` (`true` / `false`, or one per gap). |
 | `vsep()` / `vsep(w)`, `hsep()` / `hsep(h)` | The dashed separators (`separator_color()`, `separator_width()`, `separator_dash()`) on their own: vertical in a gutter `w` wide / horizontal across the parent in a band `h` tall. |
 | `frame(content)` / `dashed_frame(content)` | A thin rounded border box (`frame_color()`, `frame_width()`, `frame_radius()`, `frame_pad()`; `frame_dash()`). Square grey boxes are core setters: `frame(..).radius(0).stroke("#7f7f7f")`. |
-| `note(s)` / `ref(s)` / `subheading(s)` | The highlighted take-home sentence (centred, `note_color()`) / a reference line (`ref_size()`, centred) / `"■ " + s` (`subheading_mark()`, `subheading_size()`). |
-| `bullets(items)` | A list with a hanging indent: each item in a cell `bullet_indent()` right of its `bullet_mark()`, so wrapped lines align; an array item is a nested list. |
-| `table(rows)` / `table(rows, opts)` | Rows of cells (strings, numbers, nodes); the first row a bold header above a `table_header_rule_width()` rule. Options `header` (false: none), `widths`, `align` (one or per column), `rules` (`"grid"`, `"rows"`, `"booktabs"`, `"none"`). Rules are filled rects between the cells, so the grid is exact; cells are padded `table_pad()`, filled `table_fill()` / `table_header_fill()`. |
+| `note(s)` / `ref(s)` / `subheading(s)` | The highlighted take-home sentence (centred, `note_color()`) / a reference line (`ref_size()`, centred) / `"■ " + s` (`subheading_mark()`, `subheading_size()`; the mark bold on its own with `subheading_mark_bold()`, sized with `subheading_mark_size()`). |
+| `bullets(items)` | A list with a hanging indent: each item in a cell `bullet_indent()` right of its `bullet_mark()`, so wrapped lines align; an array item is a nested list. The mark has its own size, `bullet_mark_size()`, kept on the first line's baseline. |
+| `table(rows)` / `table(rows, opts)` | Rows of cells (strings, numbers, spans, nodes; `colspan(n, x)` spans n columns); the first row a bold header above a `table_header_rule_width()` rule. Options `header` (false: none), `widths`, `align` (one or per column), `rules` (`"grid"`, `"rows"`, `"booktabs"`, `"none"`), `pad` / `pad_x` / `pad_y`. Rules are filled rects between the cells, so the grid is exact (a spanning cell covers the rules between its columns); cells are padded `table_pad_x()` left and right, `table_pad_y()` top and bottom (both default `table_pad()`), filled `table_fill()` / `table_header_fill()`. |
 
 All sizes derive from `base_size()`, so `style("poster")` (24 pt body) on A0
 gives the proportions of a typical PowerPoint poster: 53.5 pt titles on 2.3 cm
@@ -1351,15 +1374,20 @@ separators (12 : 4.5 pt dashes), 1 pt table rules with a 3 pt header rule.
 `style("poster")` is the light look (navy bars on white, grey separators and
 frames); `style("poster-dark")` the dark one — a navy page gradient lit from
 the top, top-lit bars (`#3d4a73` → `#181d2d` → `#080a10`) with a hairline
-pale-cyan border, white text, separators and frames, amber notes (`#ffc000`),
-table cells a shade off the page — plus the dark plot theme. Every hook is a
-`style` key as well:
+pale-cyan border and a soft drop shadow, titles in a subtle dark glow and a
+tight soft shadow (the PowerPoint text effects), white text, separators and
+frames, amber notes (`#ffc000`), table cells a shade off the page — plus the
+dark plot theme. The effect hooks take `false`, `true` (that look, scaled
+with `base_size()`) or a map (`#{ blur, color }` for the glow,
+`#{ dx, dy, blur, spread, color }` for shadows). Every hook is a `style` key
+as well:
 
 ```rhai
 fn section_bar_radius() { 0.3 }        // rounded bars (default 0: square)
 fn section_label_style() { "" }        // no numbers (default "1.")
 fn separators() { false }              // plain gutters (default true)
 style(#{ note_color: "#ff6b5a", poster_gutter: 1.0, table_rules: "booktabs" });
+style(#{ section_title_glow: #{ blur: 0.15, color: "#000000c0" }, section_bar_shadow: false });
 ```
 
 Hooks: `poster_size`, `poster_bg`, `poster_margin`, `poster_gutter`,
@@ -1376,13 +1404,15 @@ Hooks: `poster_size`, `poster_bg`, `poster_margin`, `poster_gutter`,
 `bullet_mark`, `bullet_size`, `bullet_indent`, `bullet_gap`,
 `subheading_mark`, `subheading_size`, `table_size`, `table_rule`,
 `table_rule_width`, `table_header_rule_width`, `table_rules`, `table_pad`,
-`table_fill`, `table_header_fill`. Lengths are cm; the section counter is
+`table_fill`, `table_header_fill`, `section_title_glow`,
+`section_title_shadow`, `section_bar_shadow`, `table_pad_x`, `table_pad_y`,
+`subheading_mark_bold`, `subheading_mark_size`, `bullet_mark_size`. Lengths are cm; the section counter is
 fresh for every evaluation. A section title is anchored on the bar's centre,
 so it stays centred even when a CJK font's line box is taller than the bar.
 For Japanese posters set a font list once — `style("poster-dark", #{
 font_family: "Arial, Yu Gothic" })` puts Latin in Arial and Japanese in Yu
 Gothic, as PowerPoint does. Every text argument (titles, section titles,
-items, cells, notes, refs) also takes rich text:
+author names and affiliations, items, cells, notes, refs) also takes rich text:
 `ref(markup("A. Author *et al.*, *J. Imag.* **2021**, *4*, 101."))`,
 `section(markup("H_2O *in situ*"), …)`.
 

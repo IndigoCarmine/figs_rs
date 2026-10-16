@@ -1,11 +1,14 @@
 // An A0 conference poster in the dark PowerPoint look — header with logos,
-// title, authors and poster number; seven auto-numbered sections in a
-// 3 / 2 / 1 / 1 grid with dashed separators in the gutters; frames, a table,
-// bullets, notes, references and a plot. Everything is fictional placeholder
+// title, authors and poster number; seven auto-numbered sections (titles in a
+// dark glow and soft shadow, bars with soft shadows) in a 3 / 2 / 1 / 1 grid
+// with dashed separators in the gutters (one stopping short); frames, a table
+// with a spanning cell, bullets, notes, references, a plot, an ⇌ and a cycle
+// of circular block arrows. Everything is fictional placeholder
 // content and synthetic data; the images are placeholders (missing files draw
 // grey boxes).
 // Latin in Arial, Japanese in Yu Gothic (a font fallback list).
-style("poster-dark", #{ font_family: "Arial, Yu Gothic", bullet_size: 36 });
+style("poster-dark", #{ font_family: "Arial, Yu Gothic", bullet_size: 36, bullet_mark_size: 44,
+                        subheading_mark_bold: true, table_pad_x: 0.3 });
 
 let h = csv("data/heating.csv");
 let f = csv("data/heating_fit.csv");
@@ -14,7 +17,7 @@ let dots = #{ open: true, size: marker_size() * 0.7 };
 poster(#{
     logos: ["logo_university.png", "logo_project.png"],
     title: "光駆動ゲルアクチュエーターの設計指針",
-    authors: [#{ name: "山田 太郎", aff: 1, presenter: true }, #{ name: "佐藤 花子", aff: 2 },
+    authors: [#{ name: markup("**山田 太郎**"), aff: 1, presenter: true }, #{ name: "佐藤 花子", aff: 2 },
               #{ name: "鈴木 一郎", aff: [2, 3] }],
     affiliations: ["架空大院理工", "架空大院工", "架空研究機構"],
     number: "P1-001",
@@ -37,7 +40,7 @@ poster(#{
             frame([body("多孔質の骨格で光と水の通り道を作り、速さと大きさを両立する。").center()])
                 .radius(0).stroke("#7f7f7f").stroke_width(0.1),
         ]),
-    ], [3, 2, 2]),
+    ], [3, 2, 2], #{ separators: [true, 20] }),   // the second stops 20 cm down
     columns([
         section("ゲルの合成", [
             frame([image("synthesis.png").aspect(5.5)]),
@@ -60,6 +63,8 @@ poster(#{
                 col([body(markup("*T*_{1/2} (A) = 47 °C")), body(markup("*T*_{1/2} (B) = 66 °C")), body(markup("Δ*T* = {#ffc000|19} K"))])
                     .main("center").flex(1),
             ]).spacing(1.0).cross("center"),
+            row([body("膨潤"), equilibrium(0, 0.5, 3, 0.5, #{ barb: "hook" }).width(3).height(1), body("収縮")])
+                .spacing(0.5).main("center").cross("center"),
             note("孔の多いゲル A は低い温度で鋭く収縮する。"),
             subheading("変形の様子"),
             row([image("bend_a.png").aspect(2.0).flex(1), image("bend_b.png").aspect(2.0).flex(1)]).spacing(1.0),
@@ -73,10 +78,16 @@ poster(#{
             col([
                 body("試作したデバイスの条件").center(),
                 table([["試料", "光強度", "屈曲角"], ["Gel A", "20 mW/cm²", "85°"],
-                       ["Gel B", "20 mW/cm²", "40°"], ["Gel A′", "50 mW/cm²", "120°"]]),
+                       ["Gel B", "20 mW/cm²", "40°"], ["Gel A′", "50 mW/cm²", "120°"],
+                       [colspan(2, "繰り返し 100 回後"), "84°"]]),
             ]).spacing(0.3).stretch().flex(1.1),
         ]).spacing(1.5).cross("center"),
-        row([image("cycle.png").aspect(1.3).flex(1), image("gripper.png").aspect(1.3).flex(1),
+        row([stack([   // a light ON / OFF cycle: two circular block arrows
+                arc_arrow(3, 2.3, 1.8, 200, 340, 0.45).viewbox(0, 0, 6, 4.6),
+                arc_arrow(3, 2.3, 1.8, 20, 160, 0.45).viewbox(0, 0, 6, 4.6).fill("#5CC8FF"),
+                body("ON / OFF").at(3, 2.3).anchor(0.5, 0.5),
+            ]).viewbox(0, 0, 6, 4.6).aspect(1.3).flex(1),
+             image("gripper.png").aspect(1.3).flex(1),
              image("walker.png").aspect(1.3).flex(1), image("valve.png").aspect(1.3).flex(1)]).spacing(1.0).flex(1),
         note("同じ設計で、つかむ・歩く・弁を開くの三つの動作を実現した。"),
     ]),
@@ -84,4 +95,4 @@ poster(#{
         "多孔質骨格により、厚いゲルでも数秒で光に応答するようになった。",
         "孔径と光強度で、屈曲角を幅広く設計できることを示した。",
     ])),
-], [4, 6, 3.5, 1]))
+], [4, 6, 3.5, 1], #{ gaps: [0.54, 0.54, 0.9] }))

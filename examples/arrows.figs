@@ -1,0 +1,40 @@
+// PowerPoint-style block arrows from the prelude: every one is a single closed
+// `path` (filled with `accent()`), so `.fill(..)`, `.stroke(..)`, `.shadow(..)`
+// and `.opacity(..)` chain on it like on any shape.
+//
+//   block_arrow(x1, y1, x2, y2, shaft_w, head_w, head_len[, #{ both }])
+//   equilibrium(x1, y1, x2, y2[, #{ gap, width, barb, head_size, head_width }])
+//   arc_arrow(cx, cy, r, a0, a1, w[, #{ head_width, head_len, both }])
+//   block_arrow_along(points, w[, #{ radius, head_width, head_len, both }])
+//
+// Angles are degrees from +x, clockwise on the page; coordinates are cm.
+style("dark");
+
+fn label(s, x, y) { body(s).at(x, y) }
+
+page(20, 14, stack([
+    // Straight block arrows: one head, or both (⇔).
+    block_arrow(1, 1.5, 7, 1.5, 0.6, 1.4, 1.0),
+    block_arrow(1, 3.5, 7, 3.5, 0.6, 1.4, 1.0, #{ both: true }).fill("#5CC8FF"),
+    label("block_arrow", 1, 4.4),
+
+    // ⇌: core harpoons, or the PowerPoint look with curved hook barbs.
+    equilibrium(9, 1.5, 13, 1.5),
+    equilibrium(9, 3.5, 13, 3.5, #{ barb: "hook", width: 0.06, gap: 0.25 }),
+    equilibrium(14.5, 1.5, 18.5, 1.5, #{ head_size: 0.4, head_width: "4x" }),
+    label("equilibrium", 9, 4.4),
+
+    // Circular block arrows: a cycle, and a double-headed arc.
+    arc_arrow(4, 9, 2.5, 200, 340, 0.6),
+    arc_arrow(4, 9, 2.5, 20, 160, 0.6, #{ head_width: 1.4, head_len: 0.7 }).fill("#3DDC97"),
+    body("cycle").at(4, 9).anchor(0.5, 0.5),
+    arc_arrow(10, 9, 2, -60, 240, 0.4, #{ both: true }).fill("#F28CB8"),
+    label("arc_arrow", 1, 12.6),
+
+    // Bent arrows along a centre line: a rounded corner, a curve, a zigzag.
+    block_arrow_along([[14, 6], [14, 10], [19, 10]], 0.8, #{ radius: 1.2 })
+        .fill(linear(0, ["#ffffff20", "#ffffff80"])).shadow(0.06, 0.07, 0.2, "#00000066"),
+    block_arrow_along([[14.5, 13.5], [16, 11, 19.5, 13.5]], 0.5, #{ both: true }).fill("#FF9F40"),
+    block_arrow_along([[7.5, 13.5], [8.5, 11.8], [9.5, 13.5], [10.5, 11.8], [12, 13]], 0.35),
+    label("block_arrow_along", 14, 4.8),
+])).unit("cm").background(page_bg())
