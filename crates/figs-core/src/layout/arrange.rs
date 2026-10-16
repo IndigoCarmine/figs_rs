@@ -51,14 +51,17 @@ pub(crate) fn arrange<M: LeafMeasure>(
                 out,
             );
         }
-        NodeType::Stack { children, viewbox } => {
-            layout_stack(
-                ctx,
-                children,
-                *viewbox,
-                rect.inset(node.common.padding),
-                out,
-            );
+        NodeType::Stack {
+            children,
+            viewbox,
+            contain,
+        } => {
+            let content = rect.inset(node.common.padding);
+            if *contain {
+                layout_stack_contained(ctx, children, *viewbox, content, out);
+            } else {
+                layout_stack(ctx, children, *viewbox, content, out);
+            }
         }
         _ => {}
     }
@@ -98,6 +101,76 @@ fn layout_stack<M: LeafMeasure>(
         let y = content.y + oy - ay * size.h + common.margin.top;
         arrange(ctx, child, Rect::new(x, y, size.w, size.h), out);
     }
+}
+
+/// Passes of [`layout_stack_contained`]: overhangs that don't depend on the
+/// content size (a label centred on an edge) settle in one pass; the rest
+/// converge geometrically, so a few passes leave sub-point residue at most.
+const CONTAIN_PASSES: usize = 6;
+
+/// Overhang (points) below which a contained stack counts as settled.
+const CONTAIN_EPS: f32 = 0.01;
+
+/// A `contain` stack: lay the children out as [`layout_stack`] does, measure
+/// how far the boxes of everything they drew (all descendants) reach past
+/// `bounds`, inset the content box by that much on each side, and repeat until
+/// nothing overhangs. Children placed relative to the content box (offsets,
+/// viewbox mapping, filling children) move inwards; the stack itself keeps its
+/// size. Insets only grow, and never past the box (a collapsed content box
+/// stops shrinking).
+fn layout_stack_contained<M: LeafMeasure>(
+    ctx: &Ctx<M>,
+    children: &[usize],
+    viewbox: Option<ViewBox>,
+    bounds: Rect,
+    out: &mut Vec<ComputedNode>,
+) {
+    let mut inset = Edges::default();
+    let mut placed = Vec::new();
+    for _ in 0..CONTAIN_PASSES {
+        placed.clear();
+        layout_stack(ctx, children, viewbox, bounds.inset(inset), &mut placed);
+        let Some(ink) = union_of(&placed) else {
+            break;
+        };
+        let over = Edges {
+            left: (bounds.x - ink.x).max(0.0),
+            top: (bounds.y - ink.y).max(0.0),
+            right: (ink.x + ink.w - (bounds.x + bounds.w)).max(0.0),
+            bottom: (ink.y + ink.h - (bounds.y + bounds.h)).max(0.0),
+        };
+        let room_w = bounds.w - inset.left - inset.right;
+        let room_h = bounds.h - inset.top - inset.bottom;
+        let settled = over.left.max(over.right) < CONTAIN_EPS || room_w <= 0.0;
+        let settled_v = over.top.max(over.bottom) < CONTAIN_EPS || room_h <= 0.0;
+        if settled && settled_v {
+            break;
+        }
+        if !settled {
+            inset.left += over.left;
+            inset.right += over.right;
+        }
+        if !settled_v {
+            inset.top += over.top;
+            inset.bottom += over.bottom;
+        }
+    }
+    out.append(&mut placed);
+}
+
+/// The smallest rect holding every node's box in `nodes` (`None` if empty).
+fn union_of(nodes: &[ComputedNode]) -> Option<Rect> {
+    let (first, rest) = nodes.split_first()?;
+    let r = first.rect;
+    let (mut x0, mut y0, mut x1, mut y1) = (r.x, r.y, r.x + r.w, r.y + r.h);
+    for n in rest {
+        let r = n.rect;
+        x0 = x0.min(r.x);
+        y0 = y0.min(r.y);
+        x1 = x1.max(r.x + r.w);
+        y1 = y1.max(r.y + r.h);
+    }
+    Some(Rect::new(x0, y0, x1 - x0, y1 - y0))
 }
 
 /// `content_h`: the container is a column in an unbounded (content-sized)

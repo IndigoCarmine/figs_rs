@@ -7,16 +7,21 @@
 
 use std::path::{Path, PathBuf};
 
-use figs_core::geom::{PathSegment, Point, Rect};
+use figs_core::geom::{PathSegment, Point, Rect, Size};
 use figs_core::layout::{ComputedLayout, PaintContent};
-use figs_core::schema::{NodeKind, RawDocument};
+use figs_core::schema::{ImageProps, NodeKind, RawDocument, TextProps};
 use figs_core::{
-    eval_script, eval_script_in, layout, render_png, render_svg, Document, FontStore, NullMeasurer,
-    RenderOptions,
+    eval_script, eval_script_in, layout, render_png, render_svg, Document, FontStore, LeafMeasure,
+    NullMeasurer, RenderOptions,
 };
 
 fn lay_toml(src: &str) -> ComputedLayout {
     let d = Document::from_toml(src).unwrap_or_else(|e| panic!("resolve failed: {e}"));
+    layout(&d, &NullMeasurer)
+}
+
+fn lay_script(src: &str) -> ComputedLayout {
+    let d = Document::from_script(src).unwrap_or_else(|e| panic!("script failed: {e}"));
     layout(&d, &NullMeasurer)
 }
 
@@ -279,6 +284,136 @@ fn script_setters_lower_and_round_trip_through_toml() {
     assert!(!plain.contains("viewbox") && !plain.contains("anchor"));
 }
 
+// ---- core: contain -----------------------------------------------------------
+
+#[test]
+fn contain_insets_a_viewbox_stack_by_its_childrens_overhang() {
+    // A 100 x 50 pt stack, x 0..10, y 0..1 downwards. "r" is centred on the
+    // right edge and hangs below it (5 pt right, 4 pt down); "l" is
+    // right-aligned to the left edge (6 pt left). `contain` shrinks the
+    // content box to x 6..95, y 0..46, so both end up inside the stack.
+    let src = r##"
+        [page]
+        width = 100
+        height = 50
+        unit = "pt"
+        root = "s"
+        [nodes.s]
+        type = "stack"
+        viewbox = [0, 0, 10, 1]
+        contain = true
+        children = ["fill", "r", "l"]
+        [nodes.fill]
+        type = "path"
+        viewbox = [0, 0, 10, 1]
+        points = [[0, 0], [10, 1]]
+        [nodes.r]
+        type = "rect"
+        width = 10
+        height = 4
+        x = 10
+        y = 1
+        anchor = [0.5, 0]
+        [nodes.l]
+        type = "rect"
+        width = 6
+        height = 2
+        x = 0
+        y = 0.5
+        anchor = [1, 0.5]
+    "##;
+    let l = lay_toml(src);
+    assert_rect(rect_of(&l, "s"), 0.0, 0.0, 100.0, 50.0);
+    // The viewbox maps onto the inset box: filling children and offsets follow.
+    assert_rect(rect_of(&l, "fill"), 6.0, 0.0, 89.0, 46.0);
+    assert_eq!(
+        segs_of(&l, "fill")[0],
+        PathSegment::MoveTo(Point::new(6.0, 0.0))
+    );
+    assert_rect(rect_of(&l, "r"), 90.0, 46.0, 10.0, 4.0);
+    assert_rect(rect_of(&l, "l"), 0.0, 22.0, 6.0, 2.0);
+
+    // Without `contain` the same children hang out of the box.
+    let l = lay_toml(&src.replace("contain = true\n", ""));
+    assert_rect(rect_of(&l, "fill"), 0.0, 0.0, 100.0, 50.0);
+    assert_rect(rect_of(&l, "r"), 95.0, 50.0, 10.0, 4.0);
+}
+
+#[test]
+fn contain_counts_descendants_and_respects_padding() {
+    // The overhang comes from a grandchild (a label centred on the right end
+    // of a filling row), and the limit is the padding box.
+    let l = lay_script(
+        "page(100, 50, stack([ \
+            row([ stack([ rect().width(8).height(3).at(1, 0).anchor(0.5, 0) ]).viewbox(0, 0, 1, 1).flex(1) ]) \
+                .stretch().y(0), \
+        ]).viewbox(0, 0, 1, 1).contain().pad(2)).unit(\"pt\")",
+    );
+    let r = l
+        .nodes
+        .iter()
+        .find(|n| matches!(n.content, PaintContent::Rect { .. }))
+        .unwrap()
+        .rect;
+    // Content box 2..98 shrinks by the 4 pt overhang: the rect's right edge
+    // lands on the padding edge.
+    approx(r.x + r.w, 98.0);
+    approx(r.x, 90.0);
+}
+
+#[test]
+fn contain_on_a_plain_stack_makes_room_for_negative_offsets() {
+    // A plain stack measures the part hanging off its top-left too, and
+    // shifts its content so it stays inside.
+    let src = r##"
+        [page]
+        width = 100
+        height = 100
+        unit = "pt"
+        root = "c"
+        [nodes.c]
+        type = "column"
+        children = ["s"]
+        [nodes.s]
+        type = "stack"
+        contain = true
+        children = ["a"]
+        [nodes.a]
+        type = "rect"
+        width = 10
+        height = 10
+        x = -5
+        y = -3
+    "##;
+    let l = lay_toml(src);
+    assert_rect(rect_of(&l, "s"), 0.0, 0.0, 10.0, 10.0);
+    assert_rect(rect_of(&l, "a"), 0.0, 0.0, 10.0, 10.0);
+}
+
+#[test]
+fn contain_round_trips_and_is_stack_only() {
+    let raw = eval_script("page(1, 1, stack([]).contain())").unwrap();
+    assert!(raw.nodes["root"].contain);
+    let toml = toml::to_string(&raw).unwrap();
+    assert!(toml.contains("contain = true"), "{toml}");
+    let back: RawDocument = toml::from_str(&toml).unwrap();
+    assert!(back.nodes["root"].contain);
+    let plain = toml::to_string(&eval_script("page(1, 1, stack([]))").unwrap()).unwrap();
+    assert!(!plain.contains("contain"), "{plain}");
+
+    let e = eval_script("page(1, 1, rect().contain())").unwrap_err();
+    assert!(
+        e.message.contains("`contain` applies to a stack"),
+        "{}",
+        e.message
+    );
+    let e = Document::from_toml(
+        "[page]\nwidth = 1\nheight = 1\nroot = \"r\"\n[nodes.r]\ntype = \"rect\"\ncontain = true\n",
+    )
+    .unwrap_err();
+    assert!(e.to_string().contains("contain"), "{e}");
+}
+
 // ---- prelude: ticks and number formatting ------------------------------------
 
 /// Evaluate a Rhai expression (with the prelude) to its string form.
@@ -398,9 +533,10 @@ fn plot_maps_data_to_the_area_at_layout_time() {
     let doc = figs_core::schema::resolve::resolve(raw.clone()).unwrap();
     let l = layout(&doc, &NullMeasurer);
 
-    // The data area: the stack whose viewbox is [x0, y1, x1, y0].
+    // The data area: the stack whose viewbox is [x0, y1, x1, y0] (not the
+    // `contain` stack around it, which shares the viewbox to place labels).
     let area_id = find_raw(&raw, |n| {
-        n.kind == NodeKind::Stack && n.viewbox == Some([0.0, 1.0, 10.0, 0.0])
+        n.kind == NodeKind::Stack && n.viewbox == Some([0.0, 1.0, 10.0, 0.0]) && !n.contain
     });
     let area = rect_of(&l, area_id);
     assert!(area.w > 100.0 && area.h > 50.0, "area too small: {area:?}");
@@ -492,6 +628,169 @@ fn plot_option_errors_point_at_the_call() {
     let e =
         eval_script(r#"page(1, 1, plot([line_plot([1], [1], #{ marker: "x" })]))"#).unwrap_err();
     assert!(e.message.contains("unknown marker"), "{}", e.message);
+}
+
+// ---- prelude: measured plot margins ------------------------------------------
+
+/// Text measures `CHAR_W` pt per character by `LINE_H` pt, so every plot
+/// margin is predictable from the label strings alone.
+struct PerChar;
+const CHAR_W: f32 = 5.0;
+const LINE_H: f32 = 10.0;
+impl LeafMeasure for PerChar {
+    fn measure_text(&self, t: &TextProps, _max_width: f32) -> Size {
+        Size::new(CHAR_W * t.content.chars().count() as f32, LINE_H)
+    }
+    fn measure_image(&self, _i: &ImageProps) -> Size {
+        Size::default()
+    }
+}
+
+struct Plotted {
+    raw: RawDocument,
+    l: ComputedLayout,
+}
+
+impl Plotted {
+    fn new(src: &str) -> Self {
+        let raw = eval_script(src).unwrap_or_else(|e| panic!("script failed: {e}"));
+        let doc = figs_core::schema::resolve::resolve(raw.clone()).unwrap();
+        let l = layout(&doc, &PerChar);
+        Plotted { raw, l }
+    }
+    /// Boxes of the text nodes reading `s`, in paint order.
+    fn texts(&self, s: &str) -> Vec<Rect> {
+        self.l
+            .nodes
+            .iter()
+            .filter(|n| self.raw.nodes[&n.id].content.as_deref() == Some(s))
+            .map(|n| n.rect)
+            .collect()
+    }
+    fn text(&self, s: &str) -> Rect {
+        let t = self.texts(s);
+        assert_eq!(t.len(), 1, "expected one text {s:?}, got {t:?}");
+        t[0]
+    }
+    /// The data area: the plain stack sharing the `contain` stack's viewbox.
+    fn area(&self) -> Rect {
+        let body = find_raw(&self.raw, |n| n.contain);
+        let vb = self.raw.nodes[body].viewbox;
+        assert!(vb.is_some());
+        let id = find_raw(&self.raw, |n| {
+            n.kind == NodeKind::Stack && n.viewbox == vb && !n.contain
+        });
+        rect_of(&self.l, id)
+    }
+}
+
+/// A prelude hook's value, cm -> pt.
+fn hook_pt(name: &str) -> f32 {
+    rhai(&format!("{name}()")).parse::<f32>().unwrap() * 72.0 / 2.54
+}
+
+#[test]
+fn plot_margins_are_the_measured_label_sizes() {
+    let p = Plotted::new(
+        r#"page(12, 9, plot(#{ x: [0, 10], y: [0, 1], xlabel: "Time", ylabel: "Signal" },
+            [line_plot([0, 10], [0, 1])]).flex(1)).unit("cm")"#,
+    );
+    let panel = rect_of(&p.l, "root");
+    let area = p.area();
+    let (pp, tl, room) = (
+        hook_pt("plot_pad"),
+        hook_pt("tick_length"),
+        hook_pt("plot_label_room"),
+    );
+    let gap = 8.0 * 0.012 * 72.0 / 2.54; // tick -> label, base_size() * 0.012 cm
+    let lw = 3.0 * CHAR_W; // "0.0" … "1.0"
+
+    // Left band: the widest y tick label, then the tick room.
+    approx(area.x - (panel.x + pp), lw + tl + gap);
+    for s in ["0.0", "0.2", "0.4", "0.6", "0.8", "1.0"] {
+        let r = p.text(s);
+        approx(r.x + r.w, area.x - tl - gap);
+        assert!(r.x >= panel.x + pp - 1e-3, "{s} sticks out left: {r:?}");
+    }
+    // Right: exactly half the last x tick label, centred on the axis end.
+    let last = p.text("10");
+    approx(last.x + last.w / 2.0, area.x + area.w);
+    approx(last.x + last.w, panel.x + panel.w - pp);
+    // Bottom: tick room, one x tick label line, a gap, the x label line.
+    approx(
+        panel.y + panel.h - pp - (area.y + area.h),
+        tl + gap + LINE_H + gap + LINE_H,
+    );
+    let xl = p.text("Time");
+    approx(xl.x + xl.w / 2.0, area.x + area.w / 2.0); // centred under the area
+    approx(xl.y + xl.h, panel.y + panel.h - pp);
+    // Top: the panel-label room, then the y label, its bottom half a line
+    // above the axis (clear of the top tick label's half-line overhang).
+    let yl = p.text("Signal");
+    approx(yl.y, panel.y + room + pp);
+    approx(yl.x, area.x);
+    approx(area.y - (yl.y + yl.h), LINE_H / 2.0);
+    let top = p.text("1.0");
+    assert!(top.y >= yl.y + yl.h - 1e-3, "{top:?} overlaps {yl:?}");
+}
+
+#[test]
+fn wide_end_labels_widen_their_band() {
+    // Narrow y labels ("0", "5") but a 5-character first x label: its half
+    // (12.5 pt) overhanging the axis start is wider than the y tick band, so
+    // it decides the left margin; the last one the right margin.
+    let p = Plotted::new(
+        r#"page(12, 9, plot(#{ x: [10000, 20000], y: [0, 5], yticks: [0, 5] },
+            [line_plot([10000, 20000], [0, 5])]).flex(1)).unit("cm")"#,
+    );
+    let panel = rect_of(&p.l, "root");
+    let pp = hook_pt("plot_pad");
+    let area = p.area();
+    let first = p.text("10000");
+    approx(first.x, panel.x + pp);
+    approx(first.x + first.w / 2.0, area.x);
+    let last = p.text("20000");
+    approx(last.x + last.w, panel.x + panel.w - pp);
+    // The y labels still sit right next to their ticks, inside the panel.
+    let tl = hook_pt("tick_length");
+    let gap = 8.0 * 0.012 * 72.0 / 2.54;
+    approx(p.text("5").x + CHAR_W, area.x - tl - gap);
+}
+
+#[test]
+fn category_labels_fill_their_slots() {
+    let p = Plotted::new(
+        r#"page(12, 9, plot(#{}, [bars(["a", "bb", "ccc"], [1, 2, 3])]).flex(1)).unit("cm")"#,
+    );
+    let area = p.area();
+    let slot = area.w / 3.0;
+    for (i, s) in ["a", "bb", "ccc"].iter().enumerate() {
+        let r = p.text(s);
+        // Each label is a cell of its slot (less a small gap), centred on it.
+        approx(r.x + r.w / 2.0, area.x + slot * (i as f32 + 0.5));
+        assert!(r.w <= slot && r.w > slot * 0.9, "{s}: {r:?} vs slot {slot}");
+    }
+}
+
+#[test]
+fn rotated_y_label_sits_left_of_the_tick_labels() {
+    // Core rotation lands separately; a stand-in `rotate` (identity) is
+    // enough to check where `ylabel_rotated()` puts the label.
+    let p = Plotted::new(
+        r#"fn ylabel_rotated() { true }
+        fn rotate(deg) { this }
+        page(12, 9, plot(#{ x: [0, 10], y: [0, 1], ylabel: "Signal" },
+            [line_plot([0, 10], [0, 1])]).flex(1)).unit("cm")"#,
+    );
+    let panel = rect_of(&p.l, "root");
+    let area = p.area();
+    let yl = p.text("Signal");
+    let tick = p.text("0.4");
+    approx(yl.x, panel.x + hook_pt("plot_pad"));
+    assert!(yl.x + yl.w < tick.x, "{yl:?} vs {tick:?}");
+    // Centred on the axis, not above it.
+    approx(yl.y + yl.h / 2.0, area.y + area.h / 2.0);
+    assert!(yl.y > area.y);
 }
 
 // ---- csv() -------------------------------------------------------------------
