@@ -225,8 +225,10 @@ Components (lengths in cm, font sizes in pt):
 | `title(s)` / `caption(s)` / `label(s)` / `body(s)` | Semantic text: 1.5× base bold centered / base centered / 1.25× base bold / base. |
 | `vbox(items)` / `hbox(items)` | `col`/`row` with the default gap, stretched cross axis, and bare strings allowed. |
 | `grid(ncols, items)` / `grid(ncols, gap, items)` | Rows of `ncols` equal-flex cells (rows share height equally); the last row is padded with empty cells so widths stay equal. |
-| `panels(items)` / `panels(style, items)` | Each item overlaid with an auto label at its top-left (via core `stack` + `.at`). `style` is a template whose last `a`/`A`/`1` is the counter: `"(a)"` (default), `"a"`, `"A"`, `"a."`, `"Fig. 1"`. |
+| `panels(items)` / `panels(style, items)` | Each item overlaid with an auto label, `label_inset()` in from its `label_corner()` (via core `stack`). `style` is a template whose last `a`/`A`/`1` is the counter: `"(a)"` (default), `"a"`, `"A"`, `"a."`, `"Fig. 1"`. |
+| `panels(items, captions)` / `panels(style, items, captions)` | The same labeled panels, each with its caption below (`captioned`). `captions` must match `items` in length. |
 | `labeled(item, s)` / `panel_label(style, i)` | One labeled panel / the `i`-th (0-based) label string. |
+| `captioned(item, c)` | `item` above caption `c` (a string becomes `caption(c)`, a node is used as is), `caption_gap()` apart; the item takes the spare height. |
 | `nodes(items)` / `as_node(x)` | Bare-string sugar: a string becomes `body(s)`. Use `col(nodes([...]))` to get it in core containers. |
 
 **Bare strings.** Inside framework containers (`vbox`, `hbox`, `grid`, `panels`)
@@ -242,6 +244,36 @@ same name in your script to override it everywhere:
 fn base_size() { 9 }        // pt; all semantic text scales from it (default 8)
 fn gap() { 0.3 }            // cm between siblings in framework containers (default 0.2)
 fn label_style() { "A" }    // panel labels A, B, C … (default "(a)")
+fn label_inset() { 0.3 }    // cm from the panel corner (default base_size() * 0.02 = 0.16)
+fn label_corner() { "top-right" }   // or "bottom-left" / "bottom-right" (default "top-left")
+fn label_background() { "#ffffff" } // box behind the label (default "": none)
+fn label_pad() { 0.1 }      // cm between label text and its box (default base_size() * 0.01)
+fn caption_gap() { 0.15 }   // cm between a panel and its caption (default gap() / 2)
+```
+
+The label and caption defaults derive from `base_size()` / `gap()`, so
+overriding those rescales them too. The inset keeps labels off the panel edge;
+the caption gap is half the grid gap so a caption reads as belonging to the panel
+above it rather than the one below.
+
+**Labeled & captioned panels.** A labeled panel is a core `stack`: the item
+fills it and the label is overlaid. Stack offsets measure from the top-left, so
+a top-left label is simply `label(s).at(inset, inset)`; for the other corners
+the label sits in a column that fills the stack (no offset, no size), padded by
+the inset and aligned with `.main("end")` / `.cross("end")` as needed. With
+`label_background()` set, the label becomes a small stack of a filled `rect`
+under the text (padded via the text's margin). All of it is ordinary nodes, so
+you can restyle or replace any piece. Captions go below with
+`panels(items, captions)`
+([`examples/captioned_panels.figs`](examples/captioned_panels.figs)):
+
+```rhai
+fn label_background() { "#ffffff" }   // readable over dark micrographs
+
+page("double", grid(2, panels(
+    [image("a.png"), image("b.png")],
+    ["As-grown film", "After annealing"],
+)))
 ```
 
 In the editor (`figs-editor`), the **Script** tab is the source of truth: press
