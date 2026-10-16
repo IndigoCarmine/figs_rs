@@ -3,6 +3,7 @@
 //! images are rasterized with anti-aliasing and the pixmap is encoded to PNG or read back
 //! as straight RGBA for on-screen preview.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use cosmic_text::{CacheKey, CacheKeyFlags, SwashCache, SwashContent, SwashImage};
@@ -12,7 +13,9 @@ use tiny_skia::{
     StrokeDash, Transform,
 };
 
-use crate::geom::{Color, ImageFit, LineCap, LineJoin, PathSegment, Point, Rect, StrokeStyle};
+use crate::geom::{
+    Affine, Color, ImageFit, LineCap, LineJoin, PathSegment, Point, Rect, StrokeStyle,
+};
 use crate::layout::{ComputedLayout, PageGeom, PathPaint, TextBox};
 use crate::text::FontStore;
 
@@ -53,7 +56,15 @@ pub struct TinySkiaRenderer<'a> {
     outlines: OutlineCache,
     /// Resolves relative image `src` paths.
     base_dir: &'a Path,
+    /// Page-space transform of the node being drawn (see
+    /// [`Renderer::push_transform`]); `None` = identity.
+    xf: Option<Affine>,
+    /// Glyph outlines in font units (y up) plus units-per-em, per face and
+    /// glyph, for text drawn under a rotation (`None` = no outline).
+    glyph_paths: HashMap<(FaceId, u16), Option<(tiny_skia::Path, f32)>>,
 }
+
+type FaceId = cosmic_text::fontdb::ID;
 
 impl<'a> TinySkiaRenderer<'a> {
     /// Allocate a canvas for a page. Returns an error for a degenerate size.
@@ -69,6 +80,8 @@ impl<'a> TinySkiaRenderer<'a> {
             swash: SwashCache::new(),
             outlines: OutlineCache::new(),
             base_dir: opts.base_dir,
+            xf: None,
+            glyph_paths: HashMap::new(),
         })
     }
 
@@ -98,6 +111,118 @@ impl<'a> TinySkiaRenderer<'a> {
         v * self.scale
     }
 
+    /// The current node transform in pixel space: paths are built in pixels
+    /// (points x scale), so the page-space rotation keeps its linear part and
+    /// scales its translation.
+    fn sk_xf(&self) -> Transform {
+        match &self.xf {
+            Some(t) => Transform::from_row(t.a, t.b, t.c, t.d, t.e * self.scale, t.f * self.scale),
+            None => Transform::identity(),
+        }
+    }
+
+    /// The current node transform in page space (points), as tiny-skia.
+    fn page_xf(&self) -> Transform {
+        match &self.xf {
+            Some(t) => Transform::from_row(t.a, t.b, t.c, t.d, t.e, t.f),
+            None => Transform::identity(),
+        }
+    }
+
+    /// Outline of glyph `gid` of `face` in font units (y up) and the face's
+    /// units per em, cached.
+    fn glyph_outline(
+        &mut self,
+        fonts: &FontStore,
+        face: FaceId,
+        gid: u16,
+    ) -> Option<(tiny_skia::Path, f32)> {
+        self.glyph_paths
+            .entry((face, gid))
+            .or_insert_with(|| {
+                fonts.with_system(|sys| {
+                    sys.db()
+                        .with_face_data(face, |data, index| {
+                            let parsed = ttf_parser::Face::parse(data, index).ok()?;
+                            let mut b = OutlineToPath(PathBuilder::new());
+                            parsed.outline_glyph(ttf_parser::GlyphId(gid), &mut b)?;
+                            let upem = parsed.units_per_em() as f32;
+                            if upem <= 0.0 {
+                                return None;
+                            }
+                            Some((b.0.finish()?, upem))
+                        })
+                        .flatten()
+                })
+            })
+            .clone()
+    }
+
+    /// Text under a rotation: glyph bitmaps can only be blitted axis-aligned,
+    /// so each glyph is filled from its outline through the full transform
+    /// (font units -> pen position -> page transform -> pixels). Glyphs
+    /// without an outline (bitmap-only, e.g. colour emoji) are rasterized
+    /// upright and drawn as a transformed image.
+    fn draw_text_transformed(&mut self, fonts: &FontStore, rect: Rect, text: &TextBox) {
+        let shaped = fonts.shape(&geometry::text_props(text), rect.w);
+        // Outline first, as in `draw_text`; `stroke_shape` applies the node
+        // transform itself.
+        if let Some(stroke) = &text.stroke {
+            let segs = self.outlines.text_outline(fonts, &shaped, rect, text.align);
+            if let Some(p) = self.sk_path(&segs) {
+                self.stroke_shape(&p, stroke);
+            }
+        }
+        let device = Transform::from_scale(self.scale, self.scale).pre_concat(self.page_xf());
+        let mut paint = Paint::default();
+        paint.set_color(sk_color(text.color));
+        paint.anti_alias = true;
+
+        for line in &shaped.lines {
+            let align_off = geometry::align_offset(text.align, line.width, rect.w);
+            for g in &line.glyphs {
+                // Pen position in the node's local frame (points).
+                let pen_x = rect.x + align_off + g.x + g.x_offset;
+                let pen_y = rect.y + line.baseline - g.y_offset;
+                if let Some((path, upem)) = self.glyph_outline(fonts, g.font_id, g.glyph_id) {
+                    let k = g.font_size / upem;
+                    let t = device.pre_concat(Transform::from_row(k, 0.0, 0.0, -k, pen_x, pen_y));
+                    self.pixmap
+                        .fill_path(&path, &paint, FillRule::Winding, t, None);
+                    continue;
+                }
+                let (key, _, _) = CacheKey::new(
+                    g.font_id,
+                    g.glyph_id,
+                    g.font_size * self.scale,
+                    (0.0, 0.0),
+                    CacheKeyFlags::empty(),
+                );
+                let image = fonts.with_system(|sys| self.swash.get_image(sys, key).clone());
+                let Some(glyph) = image.as_ref().and_then(|img| glyph_pixmap(img, text.color))
+                else {
+                    continue;
+                };
+                let img = image.as_ref().expect("checked above");
+                // Bitmap pixels -> upright device pixels around the pen ->
+                // local points -> page -> device.
+                let inv = 1.0 / self.scale;
+                let t = device
+                    .pre_concat(Transform::from_translate(pen_x, pen_y))
+                    .pre_concat(Transform::from_scale(inv, inv))
+                    .pre_concat(Transform::from_translate(
+                        img.placement.left as f32,
+                        -img.placement.top as f32,
+                    ));
+                let pp = PixmapPaint {
+                    quality: FilterQuality::Bilinear,
+                    ..Default::default()
+                };
+                self.pixmap.draw_pixmap(0, 0, glyph.as_ref(), &pp, t, None);
+            }
+        }
+    }
+
     fn sk_rect(&self, r: Rect) -> Option<SkRect> {
         SkRect::from_xywh(self.px(r.x), self.px(r.y), self.px(r.w), self.px(r.h))
     }
@@ -108,7 +233,7 @@ impl<'a> TinySkiaRenderer<'a> {
         paint.set_color(sk_color(color));
         paint.anti_alias = true;
         self.pixmap
-            .fill_path(path, &paint, FillRule::Winding, Transform::identity(), None);
+            .fill_path(path, &paint, FillRule::Winding, self.sk_xf(), None);
     }
 
     /// Anti-aliased stroke of `path` with width/dash/cap from `style` (points).
@@ -137,7 +262,7 @@ impl<'a> TinySkiaRenderer<'a> {
             ..Stroke::default()
         };
         self.pixmap
-            .stroke_path(path, &paint, &sk_stroke, Transform::identity(), None);
+            .stroke_path(path, &paint, &sk_stroke, self.sk_xf(), None);
     }
 
     /// Build a pixel-space path from IR segments (points).
@@ -224,7 +349,7 @@ impl<'a> TinySkiaRenderer<'a> {
         let mut mask = Mask::new(self.pixmap.width(), self.pixmap.height());
         if let (Some(mask), Some(skr)) = (mask.as_mut(), SkRect::from_xywh(rx, ry, rw, rh)) {
             let path = PathBuilder::from_rect(skr);
-            mask.fill_path(&path, FillRule::Winding, true, Transform::identity());
+            mask.fill_path(&path, FillRule::Winding, true, self.sk_xf());
         }
 
         let pp = PixmapPaint {
@@ -236,7 +361,8 @@ impl<'a> TinySkiaRenderer<'a> {
             0,
             src.as_ref(),
             &pp,
-            Transform::from_row(sx, 0.0, 0.0, sy, tx, ty),
+            self.sk_xf()
+                .pre_concat(Transform::from_row(sx, 0.0, 0.0, sy, tx, ty)),
             mask.as_ref(),
         );
         true
@@ -330,7 +456,60 @@ fn blit_glyph(pixmap: &mut Pixmap, img: &SwashImage, ox: i32, oy: i32, color: Co
     }
 }
 
+/// A glyph bitmap as a premultiplied pixmap (a coverage mask tinted with
+/// `color`, or the colour bitmap with `color`'s alpha applied).
+fn glyph_pixmap(img: &SwashImage, color: Color) -> Option<Pixmap> {
+    let (w, h) = (img.placement.width, img.placement.height);
+    let mut pm = Pixmap::new(w, h)?;
+    let ca = color.a.clamp(0.0, 1.0);
+    let (cr, cg, cb) = (to_u8(color.r), to_u8(color.g), to_u8(color.b));
+    for (i, px) in pm.pixels_mut().iter_mut().enumerate() {
+        let straight = match img.content {
+            SwashContent::Mask => {
+                let cov = *img.data.get(i)? as f32 / 255.0;
+                ColorU8::from_rgba(cr, cg, cb, to_u8(cov * ca))
+            }
+            SwashContent::Color => {
+                let d = img.data.get(i * 4..i * 4 + 4)?;
+                ColorU8::from_rgba(d[0], d[1], d[2], to_u8(d[3] as f32 / 255.0 * ca))
+            }
+            SwashContent::SubpixelMask => return None,
+        };
+        *px = straight.premultiply();
+    }
+    Some(pm)
+}
+
+/// Collects a glyph outline into a tiny-skia path, in font units (y up).
+struct OutlineToPath(PathBuilder);
+
+impl ttf_parser::OutlineBuilder for OutlineToPath {
+    fn move_to(&mut self, x: f32, y: f32) {
+        self.0.move_to(x, y);
+    }
+    fn line_to(&mut self, x: f32, y: f32) {
+        self.0.line_to(x, y);
+    }
+    fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
+        self.0.quad_to(x1, y1, x, y);
+    }
+    fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
+        self.0.cubic_to(x1, y1, x2, y2, x, y);
+    }
+    fn close(&mut self) {
+        self.0.close();
+    }
+}
+
 impl Renderer for TinySkiaRenderer<'_> {
+    fn push_transform(&mut self, t: &Affine) {
+        self.xf = Some(*t);
+    }
+
+    fn pop_transform(&mut self) {
+        self.xf = None;
+    }
+
     fn begin_page(&mut self, page: &PageGeom) {
         // Default to white when no background is given (print-friendly).
         let bg = page.background.unwrap_or(Color::WHITE);
@@ -362,13 +541,8 @@ impl Renderer for TinySkiaRenderer<'_> {
             let mut paint = Paint::default();
             paint.set_color(sk_color(fill));
             paint.anti_alias = true;
-            self.pixmap.fill_path(
-                &path,
-                &paint,
-                FillRule::Winding,
-                Transform::identity(),
-                None,
-            );
+            self.pixmap
+                .fill_path(&path, &paint, FillRule::Winding, self.sk_xf(), None);
         }
         if let Some(stroke) = stroke {
             if stroke_width > 0.0 {
@@ -380,7 +554,7 @@ impl Renderer for TinySkiaRenderer<'_> {
                     ..Stroke::default()
                 };
                 self.pixmap
-                    .stroke_path(&path, &paint, &sk_stroke, Transform::identity(), None);
+                    .stroke_path(&path, &paint, &sk_stroke, self.sk_xf(), None);
             }
         }
     }
@@ -389,6 +563,10 @@ impl Renderer for TinySkiaRenderer<'_> {
         let Some(fonts) = self.fonts else {
             return;
         };
+        if self.xf.is_some() {
+            self.draw_text_transformed(fonts, rect, text);
+            return;
+        }
         let shaped = fonts.shape(&geometry::text_props(text), rect.w);
         let scale = self.scale;
 

@@ -144,6 +144,36 @@ pub struct Common {
     /// Fractions `[ax, ay]` of the border box placed at the `x`/`y` offset
     /// (`None` = top-left, unclamped otherwise; see [`RawNode::anchor`]).
     pub anchor: Option<[f32; 2]>,
+    /// Clockwise rotation in degrees about the box centre (`0` = none; see
+    /// [`RawNode::rotate`]). `width`/`height`/`aspect_ratio`/`padding` are the
+    /// node's own (unrotated) box; `margin`, `flex`, `x`/`y` and `anchor` act
+    /// in the parent's frame, on the footprint.
+    pub rotate: f32,
+}
+
+impl Common {
+    /// Whether the node is turned by an odd number of quarter turns (`90°`,
+    /// `270°`, …), so its layout footprint is its box with width and height
+    /// swapped.
+    pub fn swaps_axes(&self) -> bool {
+        crate::geom::quarter_turns(self.rotate).is_some_and(|k| k % 2 == 1)
+    }
+
+    /// The properties a parent reads, in the parent's frame: for a node
+    /// turned by an odd quarter turn, `width`/`height` are swapped and
+    /// `aspect_ratio` inverted (they describe the footprint); otherwise
+    /// unchanged.
+    pub fn outer(&self) -> std::borrow::Cow<'_, Common> {
+        if !self.swaps_axes() {
+            return std::borrow::Cow::Borrowed(self);
+        }
+        std::borrow::Cow::Owned(Common {
+            width: self.height,
+            height: self.width,
+            aspect_ratio: self.aspect_ratio.map(|a| if a > 0.0 { 1.0 / a } else { a }),
+            ..self.clone()
+        })
+    }
 }
 
 /// Typed node payload.
@@ -334,7 +364,15 @@ fn convert_node(
         x: raw.x.map(|x| x * factor),
         y: raw.y.map(|y| y * factor),
         anchor: raw.anchor,
+        rotate: raw.rotate.unwrap_or(0.0),
     };
+    if !common.rotate.is_finite() {
+        return Err(ResolveError::InvalidField {
+            node: id.to_string(),
+            field: "rotate",
+            reason: "must be a finite number of degrees".into(),
+        });
+    }
     if raw.anchor.is_some_and(|a| a.iter().any(|v| !v.is_finite())) {
         return Err(ResolveError::InvalidField {
             node: id.to_string(),

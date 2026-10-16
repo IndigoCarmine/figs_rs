@@ -53,7 +53,7 @@ You provide: hierarchy, style, content, and constraints (`flex`, `aspect_ratio`,
 ### Properties
 
 - **Shared** (all nodes): `flex`, `width`, `height`, `aspect_ratio`, `margin`,
-  `padding`, `x`, `y`, `anchor`. `margin`/`padding` accept a scalar (`1.5`) or a table
+  `padding`, `x`, `y`, `anchor`, `rotate` (see [Rotation](#rotation)). `margin`/`padding` accept a scalar (`1.5`) or a table
   (`{ top = 1, left = 2 }`). `x`/`y` are only read by a `stack` parent (see
   below); under `column`/`row` and on the root they are ignored.
 - **Container** (`column`/`row`): `children`, `spacing`, `main_axis_alignment`
@@ -231,6 +231,63 @@ anchor = [0.5, 0.5]
 In scripts: `.viewbox(x0, y0, x1, y1)` and `.anchor(ax, ay)`. The framework's
 [plots](#plots) are built entirely from these.
 
+### Rotation
+
+`rotate` (degrees) turns any node — and its whole subtree — **clockwise on the
+page about the centre of its box** (`-90` is a quarter turn counter-clockwise,
+so text reads bottom-to-top). There is no separate pivot: to turn about a
+point, centre the node on it in a stack with `anchor = [0.5, 0.5]`.
+
+How layout treats it depends on the angle:
+
+- **Quarter turns are layout-aware.** An odd quarter turn (`90`, `-90`, `270`)
+  swaps the node's footprint, like Flutter's `RotatedBox`: the parent lays out
+  the turned box. A rotated y-axis label in a row is exactly one text line wide
+  and as tall as its text is long; in a stretched row it is as long as the row
+  is tall, so centred text sits at the middle of the axis. `180` keeps the
+  footprint.
+- **Any other angle is paint-only**, like CSS `transform`: layout uses the
+  unrotated box and the drawing may overhang its neighbours (a tilted note or
+  stamp). Angles within 0.001° of a multiple of 90° count as quarter turns.
+
+The node's own properties stay in its own frame: `width`, `height`,
+`aspect_ratio` and `padding` describe the unrotated box (`width = 4,
+rotate = 90` is 4 tall on the page), and its children are laid out inside it as
+usual, then turned with it. What the parent reads — `margin`, `flex`, `x`/`y`,
+`anchor` — acts on the footprint in the parent's frame (`anchor = [0.5, 1]` is
+the bottom-centre of the turned box).
+
+```toml
+[nodes.axis]
+type = "row"
+cross_axis_alignment = "stretch"
+children = ["ylabel", "img"]
+
+[nodes.ylabel]           # a vertical axis label, centred along the image
+type = "text"
+content = "Intensity (a.u.)"
+align = "center"
+rotate = -90
+
+[nodes.img]
+type = "image"
+src = "a.png"
+flex = 1
+```
+
+In scripts: `.rotate(deg)` — `row([text("Intensity").center().rotate(-90),
+image("a.png").flex(1)]).stretch()`, or a tilted label
+`text("note").at(3, 1).anchor(0.5, 0.5).rotate(-20)`. See
+[`examples/rotation.figs`](examples/rotation.figs).
+
+In the IR each node carries an absolute `transform` (`Option<Affine>`, the
+composition of its own and its ancestors' rotations; `None` when unrotated);
+its `rect` is the unrotated box in that local frame and `bounds()` the
+page-space box it covers. Every backend draws the node unrotated under that
+transform (see [Output formats](#output-formats)), and the editor's canvas
+hit-test (`ComputedLayout::hit_test`) and selection outline follow it; the
+inspector has a **Rotate** field.
+
 ### Vector shapes (annotations)
 
 Four leaf nodes draw arrows, highlights and callouts:
@@ -406,7 +463,7 @@ ones — no map literals.) Numbers may be integer or float; colors are hex strin
 setters:
 
 - **layout** (any node): `.flex(n)`, `.width(n)`, `.height(n)`, `.aspect(n)`,
-  `.margin(n)`, `.pad(n)`.
+  `.margin(n)`, `.pad(n)`, `.rotate(deg)` (clockwise; see [Rotation](#rotation)).
 - **user coordinates**: `.viewbox(x0, y0, x1, y1)` (stack/line/arrow/path) and
   `.anchor(ax, ay)` (read by a `stack` parent) — see
   [User coordinates](#user-coordinates-viewbox--anchors).
@@ -788,6 +845,11 @@ Modeled on Flutter's `BoxConstraints`/`RenderFlex`:
   unbounded axis (auto page height) doesn't limit; it never yields an infinite
   size. Several such images side by side in a `row` each claim the full width
   and overflow — give them `flex` or a size.
+- **rotation**: an odd quarter turn measures the node with the constraints'
+  axes swapped and reports its size swapped back, so the parent sees the turned
+  footprint; arrange gives the node its slot with width and height exchanged
+  about the same centre. Other angles don't touch layout. See
+  [Rotation](#rotation).
 - **text boxes**: a text block is its stacked line boxes (`font_size ×
   line_height` each, glyphs centred per CSS half-leading), grown at the top and
   bottom when the font's ascent/descent is taller than the line box (e.g. Segoe
@@ -825,6 +887,10 @@ the vector formats keep that exactness at any zoom.
   (`viewBox` in pt); PDF's bottom-left flip is handled by krilla, and the
   MediaBox is exactly `page.width × page.height` pt.
 - `dpi` only affects PNG.
+- **Rotation** is applied per node from the IR transform: PNG draws through a
+  tiny-skia `Transform` (rotated text is filled from glyph outlines, since glyph
+  bitmaps only blit upright), PDF wraps the node in `q … cm … Q` (rotated text
+  stays real, selectable text), SVG in `<g transform="matrix(…)">`.
 - Text in PDF/SVG uses the exact glyph positions shaped for layout, so line
   breaks and kerning match the PNG. Bitmap-only glyphs (colour emoji) have no
   outline and are skipped in SVG.

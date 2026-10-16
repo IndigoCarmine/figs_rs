@@ -162,6 +162,12 @@ fn content_sized_heights(doc: &Document) -> Vec<bool> {
     let mut marks = vec![false; doc.nodes.len()];
     let mut stack = vec![doc.root];
     while let Some(i) = stack.pop() {
+        // A quarter-turned node's own vertical axis is its parent's
+        // horizontal one, which is bounded: neither it nor its subtree is
+        // content-sized.
+        if doc.nodes[i].common.swaps_axes() {
+            continue;
+        }
         if std::mem::replace(&mut marks[i], true) {
             continue; // resolve rejects cycles; guard anyway
         }
@@ -228,7 +234,7 @@ pub fn layout<M: LeafMeasure>(doc: &Document, measurer: &M) -> ComputedLayout {
     let root_box = page_rect.inset(root.common.margin);
 
     let mut nodes = Vec::with_capacity(doc.nodes.len());
-    arrange::arrange(&ctx, doc.root, root_box, &mut nodes);
+    arrange::arrange(&ctx, doc.root, root_box, None, &mut nodes);
 
     ComputedLayout { page, nodes }
 }

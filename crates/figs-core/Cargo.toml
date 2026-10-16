@@ -15,7 +15,8 @@ tiny-skia = "0.11"
 cosmic-text = "0.12"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 rhai = { version = "1.24", features = ["sync"], optional = true }
-# Unhinted glyph outlines for the SVG backend (same font bytes cosmic-text uses).
+# Unhinted glyph outlines for the SVG backend and rotated PNG text (same font
+# bytes cosmic-text uses).
 ttf-parser = "0.25"
 # PDF backend: embeds/subsets fonts as real text, vector paths, images.
 krilla = { version = "0.8.2", default-features = false, features = ["raster-images"], optional = true }
@@ -35,7 +36,8 @@ pdf = ["dep:krilla"]
 watch = ["dep:notify-debouncer-mini"]
 
 [dev-dependencies]
+# Inflates PDF content streams in the rotation tests.
+miniz_oxide = "0.8"
 roxmltree = "0.21.1"
 tempfile = "3"
 # Inflate PDF content streams in tests (already in the tree via `png`).
-miniz_oxide = "0.8"

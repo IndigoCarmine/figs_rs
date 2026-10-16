@@ -20,12 +20,17 @@
 //!   and a translucent outline stays uniform where outlines overlap).
 //! - **Images** are embedded as base64 `data:` URIs (PNG/JPEG bytes verbatim,
 //!   other formats re-encoded as PNG); `cover` is clipped to the node rect.
+//! - **Rotation**: each rotated node's elements are wrapped in
+//!   `<g transform="matrix(a b c d e f)">` (its absolute IR transform), so the
+//!   elements inside keep their unrotated coordinates.
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::Path;
 
-use crate::geom::{Color, ImageFit, LineCap, LineJoin, PathSegment, Point, Rect, StrokeStyle};
+use crate::geom::{
+    Affine, Color, ImageFit, LineCap, LineJoin, PathSegment, Point, Rect, StrokeStyle,
+};
 use crate::layout::{ComputedLayout, PageGeom, PathPaint, TextBox};
 use crate::text::FontStore;
 
@@ -361,6 +366,26 @@ fn base64(data: &[u8]) -> String {
 }
 
 impl Renderer for SvgRenderer<'_> {
+    fn push_transform(&mut self, t: &Affine) {
+        // Coefficients get more decimals than coordinates: an error of 1e-3 in
+        // cos/sin would move a far corner by a visible fraction of a point.
+        let k = |v: f32| fmt_decimals(v, 6);
+        let _ = writeln!(
+            self.body,
+            "<g transform=\"matrix({} {} {} {} {} {})\">",
+            k(t.a),
+            k(t.b),
+            k(t.c),
+            k(t.d),
+            num(t.e),
+            num(t.f)
+        );
+    }
+
+    fn pop_transform(&mut self) {
+        self.body.push_str("</g>\n");
+    }
+
     fn begin_page(&mut self, page: &PageGeom) {
         self.width = page.width_pt;
         self.height = page.height_pt;

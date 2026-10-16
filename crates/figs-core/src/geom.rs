@@ -338,6 +338,127 @@ impl Point {
     }
 }
 
+/// A 2-D affine transform in page space (points, top-left origin, y down),
+/// in SVG's `matrix(a b c d e f)` convention:
+///
+/// ```text
+/// x' = a·x + c·y + e
+/// y' = b·x + d·y + f
+/// ```
+///
+/// The layout IR carries one per rotated node ([`ComputedNode::transform`]);
+/// backends hand the six numbers straight to tiny-skia / krilla
+/// (`Transform::from_row(a, b, c, d, e, f)`) or SVG.
+///
+/// [`ComputedNode::transform`]: crate::layout::ComputedNode::transform
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Affine {
+    pub a: f32,
+    pub b: f32,
+    pub c: f32,
+    pub d: f32,
+    pub e: f32,
+    pub f: f32,
+}
+
+impl Affine {
+    pub const IDENTITY: Affine = Affine {
+        a: 1.0,
+        b: 0.0,
+        c: 0.0,
+        d: 1.0,
+        e: 0.0,
+        f: 0.0,
+    };
+
+    /// A rotation by `degrees` **clockwise on the page** (y points down, so
+    /// this is the usual rotation matrix) about the point (`cx`, `cy`).
+    /// Multiples of 90° use exact 0/±1 coefficients, so quarter turns carry no
+    /// floating-point noise.
+    pub fn rotation_about(degrees: f32, cx: f32, cy: f32) -> Affine {
+        let (sin, cos) = match quarter_turns(degrees) {
+            Some(0) => (0.0, 1.0),
+            Some(1) => (1.0, 0.0),
+            Some(2) => (0.0, -1.0),
+            Some(_) => (-1.0, 0.0),
+            None => {
+                let (s, c) = (degrees as f64).to_radians().sin_cos();
+                (s as f32, c as f32)
+            }
+        };
+        // Translate to the origin, rotate, translate back.
+        Affine {
+            a: cos,
+            b: sin,
+            c: -sin,
+            d: cos,
+            e: cx - cos * cx + sin * cy,
+            f: cy - sin * cx - cos * cy,
+        }
+    }
+
+    /// `self` followed by `outer`: the transform that applies `self` first,
+    /// then `outer` (i.e. `outer ∘ self`).
+    pub fn then(self, outer: Affine) -> Affine {
+        let (m, n) = (outer, self);
+        Affine {
+            a: m.a * n.a + m.c * n.b,
+            b: m.b * n.a + m.d * n.b,
+            c: m.a * n.c + m.c * n.d,
+            d: m.b * n.c + m.d * n.d,
+            e: m.a * n.e + m.c * n.f + m.e,
+            f: m.b * n.e + m.d * n.f + m.f,
+        }
+    }
+
+    /// Map a point.
+    pub fn apply(&self, p: Point) -> Point {
+        Point::new(
+            self.a * p.x + self.c * p.y + self.e,
+            self.b * p.x + self.d * p.y + self.f,
+        )
+    }
+
+    /// The inverse transform, or `None` when singular.
+    pub fn invert(&self) -> Option<Affine> {
+        let det = self.a * self.d - self.b * self.c;
+        if det.abs() < 1e-12 || !det.is_finite() {
+            return None;
+        }
+        let (a, b, c, d) = (self.d / det, -self.b / det, -self.c / det, self.a / det);
+        Some(Affine {
+            a,
+            b,
+            c,
+            d,
+            e: -(a * self.e + c * self.f),
+            f: -(b * self.e + d * self.f),
+        })
+    }
+
+    /// True when the transform moves nothing (within `1e-6`).
+    pub fn is_identity(&self) -> bool {
+        let close = |x: f32, y: f32| (x - y).abs() <= 1e-6;
+        close(self.a, 1.0)
+            && close(self.b, 0.0)
+            && close(self.c, 0.0)
+            && close(self.d, 1.0)
+            && close(self.e, 0.0)
+            && close(self.f, 0.0)
+    }
+}
+
+/// How many clockwise quarter turns (`0..=3`) `degrees` is, when it is a
+/// multiple of 90° (within 0.001°); `None` for any other angle. `-90` is 3.
+pub fn quarter_turns(degrees: f32) -> Option<u8> {
+    if !degrees.is_finite() {
+        return None;
+    }
+    let r = degrees.rem_euclid(360.0);
+    let k = (r / 90.0).round();
+    ((r - k * 90.0).abs() < 1e-3).then_some((k as i64).rem_euclid(4) as u8)
+}
+
 /// How a vector shape's (or a text node's) outline is stroked. Lengths in
 /// points once resolved.
 #[derive(Debug, Clone, PartialEq)]
