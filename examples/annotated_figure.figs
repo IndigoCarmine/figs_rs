@@ -1,0 +1,19 @@
+// Annotated micrographs: `annotate(item, marks)` overlays annotation nodes on
+// a panel (a core `stack`), and `panels` labels the result "(a)", "(b)".
+// Coordinates are cm from each panel's top-left; colours, stroke widths and
+// dashes come from overridable hooks (`accent()`, `annotation_width()`,
+// `scalebar_color()`, …).
+fn label_background() { "#ffffff" }   // black "(a)" would vanish on dark images
+
+page("double", grid(2, panels([
+    annotate(image("a.png"), [
+        scalebar(2, "500 nm"),                          // 2 cm bar, bottom-right
+        callout(3.3, 1.3, 4.6, 2.6, "grain boundary"),  // label at the tail
+        spot(5.2, 3.2, 0.7),                            // dashed circle
+    ]),
+    annotate(image("b.png"), [
+        scalebar(5, 50, "5 μm"),        // 5 μm of a 50 μm wide field of view
+        highlight(4.6, 1.2, 2.6, 2.0),  // dashed box
+        callout(2.6, 4.2, 4.5, 3.0, "precipitate"),
+    ]),
+])))

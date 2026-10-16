@@ -318,6 +318,12 @@ Components (lengths in cm, font sizes in pt):
 | `panels(items, captions)` / `panels(style, items, captions)` | The same labeled panels, each with its caption below (`captioned`). `captions` must match `items` in length. |
 | `labeled(item, s)` / `panel_label(style, i)` | One labeled panel / the `i`-th (0-based) label string. |
 | `circle(r)` / `circle(cx, cy, r)` | A square `ellipse` of radius `r`; the 3-argument form is centered on (`cx`, `cy`) of the enclosing `stack` (via `.at`). |
+| `annotate(item, marks)` | `stack([item, ..marks])`: overlays annotation nodes (an array, or one node) on a panel; coordinates inside are cm from the panel's top-left. Composes with labels: `panels([annotate(..), ..])`, `labeled(annotate(..), "(a)")`. |
+| `scalebar(len, s)` | A `len` cm bar (white, `scalebar_thickness()` thick) with label `s` centered above it (`""` for none), `scalebar_inset()` in from `scalebar_corner()` (default bottom-right). |
+| `scalebar(len, field, s)` | The same bar in image/physical units: `len` out of a field `field` wide (same unit), so exactly `len / field` of the panel width whatever the layout — `scalebar(5, 50, "5 μm")` for a 50 μm field, `scalebar(80, 1024, "1 μm")` for 80 px of a 1024 px image. |
+| `callout(tx, ty, x, y, s)` | The core `arrow(tx, ty, x, y)` in `accent()` with label `s` at its tail, beside it on the side away from the target and vertically centered on `ty`. |
+| `highlight(x, y, w, h)` / `spot(cx, cy, r)` | Dashed box with its top-left at (`x`, `y`) / dashed circle centered on (`cx`, `cy`), in `accent()` (a closed `path` / an `ellipse`; `.dash([])` makes them solid). |
+| `pin(node, corner)` / `pin(node, corner, inset)` | Any node pinned `inset` (default `label_inset()`) in from a corner of the enclosing stack — what `labeled` and `scalebar` use. |
 | `captioned(item, c)` | `item` above caption `c` (a string becomes `caption(c)`, a node is used as is), `caption_gap()` apart; the item takes the spare height. |
 | `nodes(items)` / `as_node(x)` | Bare-string sugar: a string becomes `body(s)`. Use `col(nodes([...]))` to get it in core containers. |
 
@@ -339,6 +345,15 @@ fn label_corner() { "top-right" }   // or "bottom-left" / "bottom-right" (defaul
 fn label_background() { "#ffffff" } // box behind the label (default "": none)
 fn label_pad() { 0.1 }      // cm between label text and its box (default base_size() * 0.01)
 fn caption_gap() { 0.15 }   // cm between a panel and its caption (default gap() / 2)
+fn accent() { "#ffd400" }   // callout / highlight / spot colour (default "#ff5a3c")
+fn annotation_width() { 0.05 }      // their stroke, cm (default base_size() * 0.005)
+fn annotation_dash() { [0.2, 0.1] } // highlight/spot dash, cm (default 3x / 2x the width)
+fn scalebar_color() { "#000000" }   // bar + label (default "#ffffff")
+fn scalebar_thickness() { 0.1 }     // cm (default base_size() * 0.01 = 0.08)
+fn scalebar_corner() { "bottom-left" } // (default "bottom-right")
+fn scalebar_inset() { 0.3 }         // cm from the corner (default label_inset())
+fn scalebar_halo() { "" }           // outline + label shadow colour (default "#000000a0")
+fn scalebar_frac_inset() { 0.05 }   // side inset of scalebar(len, field, s), fraction of width (default 0.025)
 ```
 
 The label and caption defaults derive from `base_size()` / `gap()`, so
@@ -365,6 +380,50 @@ page("double", grid(2, panels(
     ["As-grown film", "After annealing"],
 )))
 ```
+
+**Annotations.** `annotate(item, marks)` turns a panel into a core `stack` with
+the item at the bottom and each mark overlaid, so one line adds scale bars,
+callouts and highlights; wrap it in `panels`/`labeled` and the label goes on top
+([`examples/annotated_figure.figs`](examples/annotated_figure.figs)):
+
+```rhai
+fn label_background() { "#ffffff" }   // labels readable on dark micrographs
+
+page("double", grid(2, panels([
+    annotate(image("a.png"), [
+        scalebar(2, "500 nm"),                          // 2 cm bar, bottom-right
+        callout(3.3, 1.3, 4.6, 2.6, "grain boundary"),  // arrow from label to target
+        spot(5.2, 3.2, 0.7),                            // dashed circle
+    ]),
+    annotate(image("b.png"), [
+        scalebar(5, 50, "5 μm"),         // 5 μm of a 50 μm wide field
+        highlight(4.6, 1.2, 2.6, 2.0),   // dashed box
+    ]),
+])))
+```
+
+Every mark is ordinary core nodes (a `rect` bar and `text` in a pinned column,
+an `arrow` + `text`, a closed `path`, an `ellipse`), so core setters still chain
+— `spot(..).stroke("#00ff00")`, `highlight(..).dash([])`. The defaults are
+opinionated for micrographs: the scale bar is white (TEM/SEM/fluorescence
+images are mostly dark), with a thin translucent-black outline and a drop shadow
+under its label (`scalebar_halo()`) so it stays legible over bright regions
+without covering the image with a box; callouts, highlights and spots use a warm
+red-orange `accent()` that reads on both light and dark backgrounds, with a
+stroke tied to `base_size()`. Notes:
+
+- `scalebar(len, s)` takes `len` in cm. When you only know the image's field of
+  view, use `scalebar(len, field, s)`: the bar is laid out as flex shares of the
+  panel width, so it is exact however the layout sizes the panel — but only if
+  the image spans the whole panel width (its natural aspect, as on auto-height
+  pages; not letterboxed by `contain` in a fixed cell, nor cropped by `cover`).
+  Because that form is all fractions, its side inset is `scalebar_frac_inset()`
+  of the width rather than cm, and a label wider than the bar plus its insets
+  wraps — keep it short.
+- `callout` measures nothing: (`tx`, `ty`) is where the arrow starts, and the
+  label is placed beside that point (right-aligned to it when the target is to
+  the right, else left-aligned), centered on a box of about three font sizes, so
+  a label sitting right at the panel's bottom edge may drift.
 
 **Errors point at your script.** An error raised inside the framework is
 reported at *your* call into it, named after the function you called — never at
