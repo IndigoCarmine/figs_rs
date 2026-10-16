@@ -3,3 +3,6 @@
 *.pdf
 *.png
 !examples/**/*.png
+
+# Local reference material (never committed)
+/refs/
