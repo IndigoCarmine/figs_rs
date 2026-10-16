@@ -28,7 +28,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use rhai::{Array, Dynamic, Engine, EvalAltResult, Map, Position};
+use rhai::{Array, Dynamic, Engine, EvalAltResult, Map, NativeCallContext, Position};
 
 use crate::geom::{
     ArcSweep, ArrowHead, Color, CrossAxisAlign, Edges, ImageFit, LineCap, LineJoin, MainAxisAlign,
@@ -47,6 +47,8 @@ use crate::units::Unit;
 pub struct ScriptNode {
     node: RawNode,
     children: Vec<ScriptNode>,
+    /// Where `x`/`y` were last set (editor metadata; see [`sites`]).
+    sites: sites::RawSites,
 }
 
 /// The whole document a script returns: a page plus its root node.
@@ -248,6 +250,7 @@ fn leaf(kind: NodeKind) -> ScriptNode {
     ScriptNode {
         node: blank_node(kind),
         children: Vec::new(),
+        sites: Default::default(),
     }
 }
 
@@ -279,6 +282,7 @@ fn make_container(kind: NodeKind, children: Array) -> Result<ScriptNode, Box<Eva
     Ok(ScriptNode {
         node: blank_node(kind),
         children: cast_children(children)?,
+        sites: Default::default(),
     })
 }
 
@@ -478,17 +482,31 @@ fn reg_enum<T: Clone + Send + Sync + 'static>(
 // ---------------------------------------------------------------------------
 
 /// Flatten the node tree into a `RawDocument`, synthesising ids (`root`, then
-/// `node1`, `node2`, … in pre-order) and filling each node's `children`.
-fn lower(doc: ScriptDoc) -> RawDocument {
+/// `node1`, `node2`, … in pre-order) and filling each node's `children`. The
+/// offset call sites of each node are classified against `src` (the user's
+/// script) into the returned [`SourceMap`].
+fn lower(doc: ScriptDoc, src: &str) -> (RawDocument, SourceMap) {
     let mut nodes: HashMap<String, RawNode> = HashMap::new();
+    let mut map = SourceMap::new();
     let mut counter = 0usize;
-    assign(doc.root, "root".to_string(), &mut counter, &mut nodes);
+    let mut out = Lowered {
+        nodes: &mut nodes,
+        map: &mut map,
+        src,
+    };
+    assign(doc.root, "root".to_string(), &mut counter, &mut out);
     let mut page = doc.page;
     page.root = "root".to_string();
-    RawDocument { page, nodes }
+    (RawDocument { page, nodes }, map)
 }
 
-fn assign(mut sn: ScriptNode, id: String, counter: &mut usize, out: &mut HashMap<String, RawNode>) {
+struct Lowered<'a> {
+    nodes: &'a mut HashMap<String, RawNode>,
+    map: &'a mut SourceMap,
+    src: &'a str,
+}
+
+fn assign(mut sn: ScriptNode, id: String, counter: &mut usize, out: &mut Lowered<'_>) {
     let children = std::mem::take(&mut sn.children);
     let mut child_ids = Vec::with_capacity(children.len());
     for child in children {
@@ -498,7 +516,16 @@ fn assign(mut sn: ScriptNode, id: String, counter: &mut usize, out: &mut HashMap
         assign(child, cid, counter, out);
     }
     sn.node.children = child_ids;
-    out.insert(id, sn.node);
+    let classify =
+        |s: Option<sites::RawSite>| s.and_then(|s| s.classify(out.src, prelude::source()));
+    let found = OffsetSites {
+        x: classify(sn.sites.x),
+        y: classify(sn.sites.y),
+    };
+    if found != OffsetSites::default() {
+        out.map.insert(id.clone(), found);
+    }
+    out.nodes.insert(id, sn.node);
 }
 
 // ---------------------------------------------------------------------------
@@ -579,17 +606,35 @@ fn build_engine(base_dir: Option<&Path>) -> Engine {
     reg_num(&mut engine, "head_size", |r, x| r.head_size = Some(x));
     reg_num(&mut engine, "margin", |r, x| r.margin = Edges::all(x));
     reg_num(&mut engine, "pad", |r, x| r.padding = Edges::all(x));
-    // Absolute offset inside a `stack` parent (ignored under col/row).
-    reg_num(&mut engine, "x", |r, x| r.x = Some(x));
-    reg_num(&mut engine, "y", |r, y| r.y = Some(y));
+    // Absolute offset inside a `stack` parent (ignored under col/row). Each
+    // records its call site, so the editor can write a drag back.
+    engine.register_fn(
+        "x",
+        |ctx: NativeCallContext, mut n: ScriptNode, v: Dynamic| -> NodeResult {
+            let x = dyn_to_f32(&v).ok_or_else(|| err("`x` expects a number"))?;
+            n.sites.x = Some(sites::RawSite::here(&ctx, "x"));
+            Ok(set_node(n, |r| r.x = Some(x)))
+        },
+    );
+    engine.register_fn(
+        "y",
+        |ctx: NativeCallContext, mut n: ScriptNode, v: Dynamic| -> NodeResult {
+            let y = dyn_to_f32(&v).ok_or_else(|| err("`y` expects a number"))?;
+            n.sites.y = Some(sites::RawSite::here(&ctx, "y"));
+            Ok(set_node(n, |r| r.y = Some(y)))
+        },
+    );
     // Clockwise degrees about the box centre; odd quarter turns swap the
     // layout footprint (`text("y").rotate(-90)` in a row is a vertical label).
     reg_num(&mut engine, "rotate", |r, d| r.rotate = Some(d));
     engine.register_fn(
         "at",
-        |n: ScriptNode, x: Dynamic, y: Dynamic| -> Result<ScriptNode, Box<EvalAltResult>> {
+        |ctx: NativeCallContext, mut n: ScriptNode, x: Dynamic, y: Dynamic| -> NodeResult {
             let x = dyn_to_f32(&x).ok_or_else(|| err("`at` expects numbers (x, y)"))?;
             let y = dyn_to_f32(&y).ok_or_else(|| err("`at` expects numbers (x, y)"))?;
+            let site = sites::RawSite::here(&ctx, "at");
+            n.sites.x = Some(site);
+            n.sites.y = Some(site);
             Ok(set_node(n, |r| {
                 r.x = Some(x);
                 r.y = Some(y);
@@ -778,6 +823,9 @@ fn build_engine(base_dir: Option<&Path>) -> Engine {
 
 pub mod csv;
 mod prelude;
+pub mod sites;
+
+pub use sites::{OffsetSite, OffsetSites, SiteOrigin, SourceMap};
 
 /// Evaluate a Rhai script into a [`RawDocument`]. The script's last expression
 /// must be a `page(...)` call. The framework prelude is available implicitly.
@@ -793,6 +841,16 @@ pub fn eval_script(src: &str) -> Result<RawDocument, ScriptError> {
 /// file's directory, as the CLI and the editor do. `None` resolves them
 /// against the current directory.
 pub fn eval_script_in(src: &str, base_dir: Option<&Path>) -> Result<RawDocument, ScriptError> {
+    eval_script_mapped(src, base_dir).map(|(doc, _)| doc)
+}
+
+/// [`eval_script_in`] that also returns where each node's stack offsets were
+/// set (the `.at` / `.x` / `.y` call sites, see [`sites`]) — editor metadata
+/// for writing a canvas drag back into the script.
+pub fn eval_script_mapped(
+    src: &str,
+    base_dir: Option<&Path>,
+) -> Result<(RawDocument, SourceMap), ScriptError> {
     let mut engine = build_engine(base_dir);
     prelude::register_style(&mut engine);
     let (ast, origins) =
@@ -803,5 +861,5 @@ pub fn eval_script_in(src: &str, base_dir: Option<&Path>) -> Result<RawDocument,
     let doc = value
         .try_cast::<ScriptDoc>()
         .ok_or_else(ScriptError::not_a_document)?;
-    Ok(lower(doc))
+    Ok(lower(doc, src))
 }

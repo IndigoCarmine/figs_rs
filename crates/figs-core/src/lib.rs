@@ -29,7 +29,7 @@ pub use render::{
 pub use render::{render_pdf, PdfError};
 pub use schema::Document;
 #[cfg(feature = "script")]
-pub use script::{eval_script, eval_script_in, ScriptError};
+pub use script::{eval_script, eval_script_in, eval_script_mapped, ScriptError};
 pub use text::{FontStore, ShapedText};
 
 /// Top-level error for the parse → resolve pipeline.

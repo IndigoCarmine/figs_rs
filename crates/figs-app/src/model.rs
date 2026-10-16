@@ -349,3 +349,64 @@ pub fn to_toml(doc: &RawDocument) -> Result<String, toml::ser::Error> {
     };
     toml::to_string_pretty(&view)
 }
+
+/// Set `[nodes.<id>]`'s `x` / `y` (those given) in TOML `text`, preserving
+/// everything else — comments, ordering, formatting, a value's trailing
+/// comment. `None` if the text doesn't parse or has no such node table.
+pub fn patch_toml_offset(text: &str, id: &str, x: Option<f32>, y: Option<f32>) -> Option<String> {
+    let mut doc: toml_edit::DocumentMut = text.parse().ok()?;
+    let node = doc.get_mut("nodes")?.get_mut(id)?.as_table_like_mut()?;
+    for (key, v) in [("x", x), ("y", y)] {
+        let Some(v) = v else { continue };
+        // Through the minimal decimal form, so 0.22f32 is written `0.22`.
+        let num: f64 = crate::script_edit::format_num(v as f64).parse().ok()?;
+        match node.get_mut(key).and_then(|i| i.as_value_mut()) {
+            Some(val) => {
+                let decor = val.decor().clone();
+                *val = toml_edit::Value::from(num);
+                *val.decor_mut() = decor;
+            }
+            None => {
+                node.insert(key, toml_edit::value(num));
+            }
+        }
+    }
+    Some(doc.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn patches_offsets_keeping_comments() {
+        let text = r#"# my figure
+[page]
+width = 10.0
+height = 5.0
+root = "s"
+
+[nodes.s]
+type = "stack"
+children = ["t"]
+
+[nodes.t]  # the label
+type = "text"
+content = "a"
+x = 1.0 # left inset
+"#;
+        let out = patch_toml_offset(text, "t", Some(2.25), Some(0.22)).unwrap();
+        assert!(out.starts_with("# my figure\n"));
+        assert!(out.contains("[nodes.t]  # the label"));
+        assert!(out.contains("x = 2.25 # left inset"), "{out}");
+        assert!(out.contains("y = 0.22"), "{out}");
+        let doc = figs_core::schema::parse::parse_str(&out).unwrap();
+        assert_eq!(doc.nodes["t"].x, Some(2.25));
+        assert_eq!(doc.nodes["t"].y, Some(0.22));
+        // Only the axes given change; unknown nodes / bad text give None.
+        let out2 = patch_toml_offset(&out, "t", None, Some(1.0)).unwrap();
+        assert!(out2.contains("x = 2.25 # left inset"));
+        assert!(patch_toml_offset(text, "nope", Some(1.0), None).is_none());
+        assert!(patch_toml_offset("[[", "t", Some(1.0), None).is_none());
+    }
+}

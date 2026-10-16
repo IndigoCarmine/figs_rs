@@ -10,8 +10,11 @@
 //! it uses are watched: external edits reload live.
 
 mod app;
+mod canvas_edit;
+mod history;
 mod model;
 mod panels;
+mod script_edit;
 mod theme;
 
 use std::path::PathBuf;
