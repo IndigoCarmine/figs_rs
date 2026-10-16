@@ -94,11 +94,7 @@ impl Document {
     /// Evaluate a Rhai script and resolve it in one step.
     #[cfg(feature = "script")]
     pub fn from_script(src: &str) -> Result<Document, crate::Error> {
-        // Built-ins that read files record them; keep them as dependencies.
-        let (raw, data_files) = crate::deps::capture(|| crate::script::eval_script(src));
-        let mut doc = resolve(raw?)?;
-        doc.data_files = data_files;
-        Ok(doc)
+        Document::from_script_in(src, None)
     }
 
     /// [`Document::from_script`] for a script in `base_dir` (relative data
@@ -108,8 +104,12 @@ impl Document {
         src: &str,
         base_dir: Option<&std::path::Path>,
     ) -> Result<Document, crate::Error> {
-        let raw = crate::script::eval_script_in(src, base_dir)?;
-        Ok(resolve(raw)?)
+        // Built-ins that read files record them; keep them as dependencies.
+        let (raw, data_files) =
+            crate::deps::capture(|| crate::script::eval_script_in(src, base_dir));
+        let mut doc = resolve(raw?)?;
+        doc.data_files = data_files;
+        Ok(doc)
     }
 
     pub fn node(&self, idx: usize) -> &Node {

@@ -27,6 +27,14 @@ pub(super) fn register(engine: &mut Engine, base: Option<PathBuf>) {
         "csv",
         move |path: &str| -> Result<Map, Box<EvalAltResult>> {
             let full = resolve(base.as_deref(), Path::new(path));
+            // A watch dependency, even if missing (it may appear later). With
+            // a base dir the path stays as written — dependencies resolve
+            // relative paths against the document's directory, which is that
+            // base; without one it was read from the working directory.
+            crate::deps::record(match base {
+                Some(_) => PathBuf::from(path),
+                None => std::path::absolute(&full).unwrap_or_else(|_| full.clone()),
+            });
             let text =
                 read(&full).map_err(|e| err(format!("csv(): cannot read \"{path}\": {e}")))?;
             let table = parse_csv(&text).map_err(|e| err(format!("csv(): \"{path}\": {e}")))?;

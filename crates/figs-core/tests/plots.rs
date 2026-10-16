@@ -522,6 +522,32 @@ fn csv_columns_resolve_against_the_script_dir() {
 }
 
 #[test]
+fn csv_files_are_watch_dependencies() {
+    let dir = scratch("csv-deps");
+    std::fs::write(dir.join("d.csv"), "t,v\n0,1\n").unwrap();
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    std::fs::write(dir.join("sub").join("e.csv"), "t,v\n0,1\n").unwrap();
+    let src = r#"let d = csv("d.csv");
+        let e = csv("sub/e.csv");
+        page("single", plot([line_plot(d.t, d.v), scatter(e.t, e.v)]))"#;
+    let doc = Document::from_script_in(src, Some(&dir)).unwrap();
+    let deps = doc.dependencies(&dir);
+    let abs = |p: &Path| figs_core::deps::absolutize(&dir, p);
+    assert!(deps.contains(&abs(Path::new("d.csv"))), "{deps:?}");
+    assert!(deps.contains(&abs(Path::new("sub/e.csv"))), "{deps:?}");
+    // A missing file is still a dependency of the (failing) evaluation, so
+    // a watcher can rebuild once it appears.
+    let (res, recorded) = figs_core::deps::capture(|| {
+        eval_script_in(
+            r#"let d = csv("later.csv"); page(1, 1, rect())"#,
+            Some(&dir),
+        )
+    });
+    assert!(res.is_err());
+    assert_eq!(recorded, vec![PathBuf::from("later.csv")]);
+}
+
+#[test]
 fn csv_errors_are_positioned() {
     let dir = scratch("csv-err");
     std::fs::write(dir.join("bad.csv"), "a,b\n1,2\n3\n").unwrap();
