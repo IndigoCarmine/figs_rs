@@ -19,6 +19,8 @@ fn blank(kind: NodeKind) -> RawNode {
         aspect_ratio: None,
         margin: Edges::default(),
         padding: Edges::default(),
+        x: None,
+        y: None,
         children: Vec::new(),
         spacing: 0.0,
         main_axis_alignment: None,
@@ -58,6 +60,7 @@ pub fn new_node(kind: NodeKind) -> RawNode {
         NodeKind::Column | NodeKind::Row => {
             n.spacing = 12.0;
         }
+        NodeKind::Stack => {}
     }
     n
 }
@@ -120,11 +123,11 @@ page(720, 960,
     .to_string()
 }
 
-/// True when a node distributes children (column or row).
+/// True when a node holds children (column, row or stack).
 pub fn is_container(doc: &RawDocument, id: &str) -> bool {
     matches!(
         doc.nodes.get(id).map(|n| n.kind),
-        Some(NodeKind::Column | NodeKind::Row)
+        Some(NodeKind::Column | NodeKind::Row | NodeKind::Stack)
     )
 }
 

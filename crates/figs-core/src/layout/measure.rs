@@ -18,6 +18,7 @@ pub(crate) fn measure<M: LeafMeasure>(ctx: &Ctx<M>, idx: usize, c: Constraints) 
             spacing,
             ..
         } => measure_container(ctx, *axis, children, *spacing, &node.common, c),
+        NodeType::Stack { children } => measure_stack(ctx, children, &node.common, c),
         NodeType::Rect(_) => Size::default(),
         NodeType::Image(props) => ctx.measurer.measure_image(props),
         NodeType::Text(props) => {
@@ -65,6 +66,84 @@ fn measure_container<M: LeafMeasure>(
         Axis::Horizontal => (main_sum, cross_max),
     };
     Size::new(w + common.padding.horizontal(), h + common.padding.vertical())
+}
+
+/// Wrap-content size of a stack: the furthest extent of any child
+/// (`offset + margins + border box`) on each axis, plus padding. Children that
+/// fill the stack in arrange contribute their intrinsic size here, as flex
+/// children do in a row/column.
+fn measure_stack<M: LeafMeasure>(
+    ctx: &Ctx<M>,
+    children: &[usize],
+    common: &Common,
+    c: Constraints,
+) -> Size {
+    let inner = Size::new(
+        (c.max_w - common.padding.horizontal()).max(0.0),
+        (c.max_h - common.padding.vertical()).max(0.0),
+    );
+
+    let mut w = 0.0f32;
+    let mut h = 0.0f32;
+    for &child in children {
+        let cc = &ctx.doc.nodes[child].common;
+        let avail = stack_child_avail(cc, inner);
+        let sz = measure(ctx, child, Constraints::loose(avail.w, avail.h));
+        w = w.max(cc.x.unwrap_or(0.0) + cc.margin.horizontal() + sz.w);
+        h = h.max(cc.y.unwrap_or(0.0) + cc.margin.vertical() + sz.h);
+    }
+    Size::new(w + common.padding.horizontal(), h + common.padding.vertical())
+}
+
+/// Space available to a stack child's border box inside a content box of size
+/// `content`: from the child's `x`/`y` offset (plus leading margin) to the far
+/// edge (minus trailing margin). As in rows/columns, sizes are clamped to it, so
+/// a child never spills past the right/bottom edge; a negative offset may hang
+/// off the top/left.
+pub(super) fn stack_child_avail(common: &Common, content: Size) -> Size {
+    Size::new(
+        (content.w - common.x.unwrap_or(0.0) - common.margin.horizontal()).max(0.0),
+        (content.h - common.y.unwrap_or(0.0) - common.margin.vertical()).max(0.0),
+    )
+}
+
+/// Final border-box size of a stack child, given its `measured` size (explicit
+/// `width`/`height` + `aspect_ratio` over intrinsic) and its available space.
+///
+/// Per axis: an explicit size wins; otherwise an axis with **no offset** (`x`
+/// unset for width, `y` unset for height) **fills** `avail`, and an axis with an
+/// offset keeps its measured (intrinsic) size. So an unpositioned, unsized child
+/// is a full-size base layer, while `.at(x, y)` labels wrap their content.
+///
+/// `aspect_ratio` treats a filled side like a known one: it derives a
+/// non-explicit, non-filling side from a filling one, an explicit side pins the
+/// other (which then does not fill), and when both sides would fill the child is
+/// the largest box of that ratio that fits (`contain`, anchored top-left).
+pub(super) fn stack_child_size(common: &Common, measured: Size, avail: Size) -> Size {
+    let ar = common.aspect_ratio.filter(|a| *a > 0.0);
+    let pinned_w = common.width.is_some() || (ar.is_some() && common.height.is_some());
+    let pinned_h = common.height.is_some() || (ar.is_some() && common.width.is_some());
+    let fill_w = !pinned_w && common.x.is_none();
+    let fill_h = !pinned_h && common.y.is_none();
+
+    let mut w = if fill_w { avail.w } else { measured.w };
+    let mut h = if fill_h { avail.h } else { measured.h };
+    if let Some(ar) = ar {
+        match (fill_w, fill_h) {
+            (true, true) => {
+                if avail.w / ar <= avail.h {
+                    h = avail.w / ar;
+                } else {
+                    w = avail.h * ar;
+                }
+            }
+            (true, false) => h = w / ar,
+            (false, true) => w = h * ar,
+            // measured already applied the ratio to explicit/intrinsic sides.
+            (false, false) => {}
+        }
+    }
+    Size::new(w.min(avail.w), h.min(avail.h))
 }
 
 /// Apply explicit `width`/`height` and `aspect_ratio` over an intrinsic size,

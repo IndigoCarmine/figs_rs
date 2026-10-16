@@ -96,6 +96,7 @@ fn outline(app: &mut FigsApp, ui: &mut egui::Ui, p: &Palette) {
             for (k, lbl) in [
                 (NodeKind::Column, "Column"),
                 (NodeKind::Row, "Row"),
+                (NodeKind::Stack, "Stack"),
                 (NodeKind::Text, "Text"),
                 (NodeKind::Rect, "Rect"),
                 (NodeKind::Image, "Image"),
@@ -283,6 +284,8 @@ fn inspector(app: &mut FigsApp, ui: &mut egui::Ui, _p: &Palette) {
                         changed |= main_align_combo(ui, "Main align", &mut node.main_axis_alignment);
                         changed |= cross_align_combo(ui, "Cross align", &mut node.cross_axis_alignment);
                     }
+                    // Stack children carry their own x/y (Layout section).
+                    NodeKind::Stack => {}
                 }
 
                 section(ui, "Layout");
@@ -292,8 +295,11 @@ fn inspector(app: &mut FigsApp, ui: &mut egui::Ui, _p: &Palette) {
                 if kind == NodeKind::Image {
                     changed |= opt_num(ui, "Aspect ratio", &mut node.aspect_ratio, 0.05);
                 }
+                // Offsets only take effect under a `stack` parent.
+                changed |= opt_num(ui, "X", &mut node.x, 0.5);
+                changed |= opt_num(ui, "Y", &mut node.y, 0.5);
                 changed |= edges(ui, "Margin", &mut node.margin);
-                if matches!(kind, NodeKind::Column | NodeKind::Row) {
+                if matches!(kind, NodeKind::Column | NodeKind::Row | NodeKind::Stack) {
                     changed |= edges(ui, "Padding", &mut node.padding);
                 }
             }
@@ -714,6 +720,7 @@ fn parse_type_value(rest: &str) -> Option<NodeKind> {
     match rest.split('"').nth(1)? {
         "column" => Some(NodeKind::Column),
         "row" => Some(NodeKind::Row),
+        "stack" => Some(NodeKind::Stack),
         "text" => Some(NodeKind::Text),
         "rect" => Some(NodeKind::Rect),
         "image" => Some(NodeKind::Image),
@@ -763,6 +770,7 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
                     "main_axis_alignment",
                     "cross_axis_alignment",
                 ]),
+                Some(NodeKind::Stack) => v.push("children"),
                 Some(NodeKind::Text) => v.extend([
                     "content",
                     "font_size",
@@ -783,7 +791,7 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
                     "cross_axis_alignment",
                 ]),
             }
-            v.extend(["flex", "width", "height", "aspect_ratio", "margin", "padding"]);
+            v.extend(["flex", "width", "height", "aspect_ratio", "margin", "padding", "x", "y"]);
             v
         }
     }
@@ -792,7 +800,7 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
 /// Enum values for a string-valued key (empty if the key is free-form).
 fn enum_values(key: &str) -> Vec<&'static str> {
     match key {
-        "type" => vec!["column", "row", "text", "rect", "image"],
+        "type" => vec!["column", "row", "stack", "text", "rect", "image"],
         "fit" => vec!["contain", "cover", "fill"],
         "align" => vec!["left", "center", "right", "justify"],
         "unit" => vec!["cm", "mm", "in", "pt", "px"],

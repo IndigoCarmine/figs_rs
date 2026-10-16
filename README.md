@@ -2,7 +2,8 @@
 
 A fast, declarative tool for composing paper figures and posters. You describe
 **structure and constraints** in TOML; the engine computes every coordinate and
-size for you (no manual positioning), then renders to PNG/PDF. Think
+size for you, then renders to PNG/PDF. Where you need exact placement (panel
+labels, insets, annotations), a `stack` lets you pin children at absolute offsets. Think
 Flutter/XAML-style relative layout, aimed at research figures.
 
 > Status: **Phase 1 in progress.** The layout engine core (parse → resolve →
@@ -33,7 +34,7 @@ root = "root"
 background = "#ffffff"
 
 [nodes.root]
-type = "column"       # column | row | image | text | rect
+type = "column"       # column | row | stack | image | text | rect
 spacing = 1
 padding = 1
 cross_axis_alignment = "stretch"
@@ -52,11 +53,13 @@ You provide: hierarchy, style, content, and constraints (`flex`, `aspect_ratio`,
 ### Properties
 
 - **Shared** (all nodes): `flex`, `width`, `height`, `aspect_ratio`, `margin`,
-  `padding`. `margin`/`padding` accept a scalar (`1.5`) or a table
-  (`{ top = 1, left = 2 }`).
+  `padding`, `x`, `y`. `margin`/`padding` accept a scalar (`1.5`) or a table
+  (`{ top = 1, left = 2 }`). `x`/`y` are only read by a `stack` parent (see
+  below); under `column`/`row` and on the root they are ignored.
 - **Container** (`column`/`row`): `children`, `spacing`, `main_axis_alignment`
   (`start`/`center`/`end`/`space_between`/`space_around`/`space_evenly`),
   `cross_axis_alignment` (`start`/`center`/`end`/`stretch`).
+- **stack**: `children` (plus the shared `padding`).
 - **text**: `content`, `font_size` (pt), `font_family`, `font_weight`, `color`,
   `align`, `line_height` (multiple of font size).
 - **image**: `src`, `fit` (`contain`/`cover`/`fill`).
@@ -64,6 +67,45 @@ You provide: hierarchy, style, content, and constraints (`flex`, `aspect_ratio`,
 
 Lengths are in the page `unit`; `font_size` is always points. Internally
 everything is converted to points (1 pt = 1/72 in).
+
+### Overlays & absolute offsets (`stack`)
+
+A `stack` lays its children on top of each other inside its content box (its
+rect inset by `padding`). They paint in `children` order — later is on top — and
+each child places its border box (after its margin) at offset `x`, `y` (page
+units, default `0`) from the content box's top-left.
+
+Sizing, per axis: an explicit `width`/`height` wins; otherwise an axis with **no
+offset** (`x` unset for width, `y` unset for height) **fills** the content box,
+and an axis with an offset keeps the child's natural (intrinsic) size. So a child
+with no offset and no size is a full-size base layer, a label placed with both
+`x` and `y` wraps its content, and `y = 3, height = 0.2` is a full-width band.
+`aspect_ratio` counts a filled side as known and derives the other from it; if
+both sides would fill, the child is the largest box of that ratio that fits,
+anchored top-left. As in rows/columns, sizes are clamped to the space between the
+offset and the far edge; negative offsets may hang off the top/left.
+
+Measured as wrap-content (e.g. inside a start-aligned column), a stack is as
+large as its furthest child extent (`offset + margins + size`) plus padding;
+filling children contribute their intrinsic size there, like flex children do.
+
+```toml
+[nodes.panel]
+type = "stack"
+children = ["img", "label"]
+
+[nodes.img]            # no x/y, no size -> fills the stack
+type = "image"
+src = "a.png"
+
+[nodes.label]          # pinned 0.2 from the top-left, natural size
+type = "text"
+content = "(a)"
+x = 0.2
+y = 0.2
+```
+
+See [`examples/overlay_labels.figs`](examples/overlay_labels.figs).
 
 ### Equal spacing & edge-to-edge
 
@@ -101,8 +143,8 @@ GUI's starter document no longer adds an outer inset. See
 
 For variables, arithmetic and reusable components, author a
 **[Rhai](https://rhai.rs) script** instead of TOML. A script *evaluates to the same
-document* — it builds the node tree with `page` / `col` / `row` / `text` / `rect` /
-`image`, then flows through the identical resolve → layout → render pipeline. `let`
+document* — it builds the node tree with `page` / `col` / `row` / `stack` / `text` /
+`rect` / `image`, then flows through the identical resolve → layout → render pipeline. `let`
 defines variables, `fn` defines components, and arithmetic is native:
 
 ```rhai
@@ -124,7 +166,7 @@ page(20, 12,
 ).unit("cm").background("#ffffff")
 ```
 
-Build nodes with `text` / `rect` / `image` / `col` / `row`, set properties by
+Build nodes with `text` / `rect` / `image` / `col` / `row` / `stack([...])`, set properties by
 **chaining methods**, and finish with a single `page(width, height, root)` call.
 (Rhai has no keyword arguments, so method chaining is how properties read like named
 ones — no map literals.) Numbers may be integer or float; colors are hex strings. The
@@ -132,6 +174,8 @@ setters:
 
 - **layout** (any node): `.flex(n)`, `.width(n)`, `.height(n)`, `.aspect(n)`,
   `.margin(n)`, `.pad(n)`.
+- **offset** (read by a `stack` parent): `.at(x, y)`, `.x(n)`, `.y(n)` — e.g.
+  `stack([image("a.png"), text("(a)").at(0.2, 0.2)])`.
 - **text**: `.size(n)`, `.weight(n)` / `.bold()`, `.color(hex)`, `.font(name)`,
   `.align("left"|"center"|"right"|"justify")` / `.center()`, `.line_height(n)`.
 - **container** (`col`/`row`): `.spacing(n)`, `.main("space_between"|…)`,
@@ -174,7 +218,8 @@ Modeled on Flutter's `BoxConstraints`/`RenderFlex`:
 - **arrange** (top-down): fixed children take their measured size, flex children
   split the remainder by weight; alignment distributes any leftover;
   `aspect_ratio` derives the cross axis from the (possibly flex-imposed) main
-  axis. Overflow clamps and warns — it never panics.
+  axis. Overflow clamps and warns — it never panics. A `stack` instead places
+  each child at its `x`/`y` offset, filling un-offset, unsized axes.
 
 ## Build & test
 

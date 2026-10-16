@@ -7,7 +7,7 @@
 //!
 //! ## Authoring
 //!
-//! Build nodes with `text` / `rect` / `image` / `col` / `row`, set properties by
+//! Build nodes with `text` / `rect` / `image` / `col` / `row` / `stack`, set properties by
 //! **chaining methods** (Rhai has no keyword arguments, so chaining is how you get
 //! concise, named-ish properties — no map literals), and finish with a single
 //! `page(width, height, root)` call:
@@ -179,6 +179,8 @@ fn blank_node(kind: NodeKind) -> RawNode {
         aspect_ratio: None,
         margin: Edges::default(),
         padding: Edges::default(),
+        x: None,
+        y: None,
         children: Vec::new(),
         spacing: 0.0,
         main_axis_alignment: None,
@@ -222,7 +224,7 @@ fn cast_children(children: Array) -> Result<Vec<ScriptNode>, Box<EvalAltResult>>
     for child in children {
         let node = child
             .try_cast::<ScriptNode>()
-            .ok_or_else(|| err("container children must be nodes (col/row/text/rect/image)"))?;
+            .ok_or_else(|| err("container children must be nodes (col/row/stack/text/rect/image)"))?;
         out.push(node);
     }
     Ok(out)
@@ -357,6 +359,7 @@ fn build_engine() -> Engine {
     engine.register_fn("rect", || leaf(NodeKind::Rect));
     engine.register_fn("col", |children: Array| make_container(NodeKind::Column, children));
     engine.register_fn("row", |children: Array| make_container(NodeKind::Row, children));
+    engine.register_fn("stack", |children: Array| make_container(NodeKind::Stack, children));
 
     // Numeric chainable setters (accept int or float).
     reg_num(&mut engine, "flex", |r, x| r.flex = Some(x));
@@ -370,6 +373,20 @@ fn build_engine() -> Engine {
     reg_num(&mut engine, "radius", |r, x| r.corner_radius = Some(x));
     reg_num(&mut engine, "margin", |r, x| r.margin = Edges::all(x));
     reg_num(&mut engine, "pad", |r, x| r.padding = Edges::all(x));
+    // Absolute offset inside a `stack` parent (ignored under col/row).
+    reg_num(&mut engine, "x", |r, x| r.x = Some(x));
+    reg_num(&mut engine, "y", |r, y| r.y = Some(y));
+    engine.register_fn(
+        "at",
+        |n: ScriptNode, x: Dynamic, y: Dynamic| -> Result<ScriptNode, Box<EvalAltResult>> {
+            let x = dyn_to_f32(&x).ok_or_else(|| err("`at` expects numbers (x, y)"))?;
+            let y = dyn_to_f32(&y).ok_or_else(|| err("`at` expects numbers (x, y)"))?;
+            Ok(set_node(n, |r| {
+                r.x = Some(x);
+                r.y = Some(y);
+            }))
+        },
+    );
 
     // Color chainable setters.
     reg_color(&mut engine, "color", |r, c| r.color = Some(c));
