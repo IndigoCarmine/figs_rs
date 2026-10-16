@@ -510,7 +510,9 @@ line and the trailing lines trace your calls outward.
 In the editor (`figs-editor`), the **Script** tab is the source of truth: press
 **Evaluate** (Ctrl+Enter) to lower the script into the editable **TOML** tab, the
 inspector and the live preview. Authoring flows Rhai → (TOML ↔ GUI) one way; use
-*Export TOML* to write out the lowered document.
+*Export TOML* to write out the lowered document. `figs-editor figure.figs` opens
+a file directly and reloads it when it changes on disk (see
+[Watch mode & live reload](#watch-mode--live-reload)).
 
 ## Architecture
 
@@ -592,6 +594,46 @@ the vector formats keep that exactness at any zoom.
 - PDF support is the `pdf` cargo feature of `figs-core` (on by default; it pulls
   in krilla). PNG and SVG are always built.
 
+## Watch mode & live reload
+
+Keep your text editor open and see the figure update on every save:
+
+```sh
+figs watch figure.figs -o figure.png    # any of .png / .pdf / .svg, as for build
+```
+
+`watch` builds once, then rebuilds whenever the input **or anything it reads**
+changes — every image `src`, and data files a script loads. It prints one line
+per build, keeps watching through errors (a script error shows its line/col), and
+exits cleanly on Ctrl+C:
+
+```text
+ok  wrote figure.png (151282 bytes) at 300 dpi, auto height 373.46 pt in 25 ms
+watching figure.figs and 4 dependencies (Ctrl+C to stop)
+changed: figure.figs
+error: parsing `figure.figs`: Syntax error: Unexpected ',' (line 4, position 23)
+changed: figure.figs
+ok  wrote figure.png (151282 bytes) at 300 dpi, auto height 373.46 pt in 22 ms
+changed: a.png
+ok  wrote figure.png (151228 bytes) at 300 dpi, auto height 373.46 pt in 37 ms
+```
+
+Directories are watched rather than files, so editors that save by writing a
+temp file and renaming it over the original (VS Code, vim, …) are handled, and an
+image that doesn't exist yet is picked up once it appears in its folder.
+
+The editor does the same: `figs-editor figure.figs` opens a script in the
+**Script** tab and evaluates it (a `.toml` opens in the **TOML** tab); relative
+image paths resolve against the file's folder. When the file changes on disk it
+reloads and re-renders automatically — unless you have unsaved edits, in which
+case a banner offers **Reload** / **Keep mine** instead of overwriting them.
+Changed images refresh the preview too.
+
+The dependency list comes from `figs_core::Document::dependencies(base_dir)`
+(absolute, deduplicated paths). A script built-in that reads a file registers it
+with one call, `figs_core::deps::record(path)`; the watcher API is
+`figs_core::watch::FileWatcher` (cargo feature `watch`).
+
 ## Build & test
 
 ```sh
@@ -603,7 +645,8 @@ cargo clippy --all-targets
 
 M0 workspace · **M1 schema+resolve** ✓ · **M2 layout (column/row/rect, flex,
 align, aspect, overflow)** ✓ · M3 text (cosmic-text) · M4 PNG backend · M5 image
-+ aspect/fit · **M6 PDF + SVG backends** ✓ · M7 CLI + file watch · M7′ egui live preview ·
++ aspect/fit · **M6 PDF + SVG backends** ✓ · **M7 CLI + file watch (`figs watch`,
+editor live reload)** ✓ · M7′ egui live preview ·
 M8 hardening.
 
 ## License

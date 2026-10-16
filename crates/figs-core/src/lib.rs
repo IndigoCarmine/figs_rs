@@ -8,6 +8,7 @@
 //! fonts and images during measurement/rendering, so it can be reused verbatim
 //! by the Phase 2 Tauri backend.
 
+pub mod deps;
 pub mod geom;
 pub mod layout;
 pub mod path;
@@ -17,6 +18,8 @@ pub mod schema;
 pub mod script;
 pub mod text;
 pub mod units;
+#[cfg(feature = "watch")]
+pub mod watch;
 
 pub use layout::{layout, ComputedLayout, LeafMeasure, NullMeasurer};
 pub use render::{
