@@ -21,6 +21,8 @@ fn blank(kind: NodeKind) -> RawNode {
         padding: Edges::default(),
         x: None,
         y: None,
+        anchor: None,
+        viewbox: None,
         children: Vec::new(),
         spacing: 0.0,
         main_axis_alignment: None,

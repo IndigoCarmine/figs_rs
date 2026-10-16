@@ -167,9 +167,11 @@ impl FigsApp {
     /// Evaluate the Rhai script buffer into the model, refreshing the preview,
     /// the TOML pane and the inspector. On error the current model is kept.
     pub fn evaluate_script(&mut self) {
-        // Files the script reads (data built-ins) become watched dependencies.
-        let (result, data_files) =
-            figs_core::deps::capture(|| figs_core::eval_script(&self.script_buffer));
+        // Files the script reads (data built-ins such as `csv()`, resolved
+        // against the document's directory) become watched dependencies.
+        let (result, data_files) = figs_core::deps::capture(|| {
+            figs_core::eval_script_in(&self.script_buffer, Some(&self.base_dir))
+        });
         match result {
             Ok(raw) => {
                 self.model = raw;

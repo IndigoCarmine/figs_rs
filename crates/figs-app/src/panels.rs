@@ -331,12 +331,24 @@ fn inspector(app: &mut FigsApp, ui: &mut egui::Ui, _p: &Palette) {
                             cross_align_combo(ui, "Cross align", &mut node.cross_axis_alignment);
                     }
                     // Stack children carry their own x/y (Layout section).
-                    NodeKind::Stack => {}
+                    NodeKind::Stack => {
+                        section(ui, "Stack");
+                        // With a viewbox, children's x/y are in its units.
+                        changed |=
+                            opt_nums(ui, "Viewbox", &mut node.viewbox, [0.0, 0.0, 1.0, 1.0], 0.1);
+                    }
                     NodeKind::Line | NodeKind::Arrow | NodeKind::Path | NodeKind::Ellipse => {
                         section(ui, "Shape");
                         if kind != NodeKind::Ellipse {
                             changed |= points_editor(ui, &mut node.points, kind == NodeKind::Path);
                             segments_summary(ui, &node.segments);
+                            changed |= opt_nums(
+                                ui,
+                                "Viewbox",
+                                &mut node.viewbox,
+                                [0.0, 0.0, 1.0, 1.0],
+                                0.1,
+                            );
                         }
                         if kind == NodeKind::Path {
                             changed |= ui.checkbox(&mut node.closed, "Closed").changed();
@@ -365,6 +377,7 @@ fn inspector(app: &mut FigsApp, ui: &mut egui::Ui, _p: &Palette) {
                 // Offsets only take effect under a `stack` parent.
                 changed |= opt_num(ui, "X", &mut node.x, 0.5);
                 changed |= opt_num(ui, "Y", &mut node.y, 0.5);
+                changed |= opt_nums(ui, "Anchor", &mut node.anchor, [0.5, 0.5], 0.05);
                 changed |= edges(ui, "Margin", &mut node.margin);
                 if matches!(kind, NodeKind::Column | NodeKind::Row | NodeKind::Stack) {
                     changed |= edges(ui, "Padding", &mut node.padding);
@@ -449,6 +462,32 @@ fn opt_num(ui: &mut egui::Ui, label: &str, v: &mut Option<f32>, speed: f32) -> b
         if let Some(x) = v {
             if ui.add(egui::DragValue::new(x).speed(speed)).changed() {
                 changed = true;
+            }
+        }
+    });
+    changed
+}
+
+/// An optional fixed-length number list (`anchor`, `viewbox`): a checkbox
+/// toggling it (to `default`) plus one drag value per component.
+fn opt_nums<const N: usize>(
+    ui: &mut egui::Ui,
+    label: &str,
+    v: &mut Option<[f32; N]>,
+    default: [f32; N],
+    speed: f32,
+) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label(label);
+        let mut on = v.is_some();
+        if ui.checkbox(&mut on, "").changed() {
+            *v = on.then_some(default);
+            changed = true;
+        }
+        if let Some(xs) = v {
+            for x in xs.iter_mut() {
+                changed |= ui.add(egui::DragValue::new(x).speed(speed)).changed();
             }
         }
     });
@@ -1039,7 +1078,7 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
                     "main_axis_alignment",
                     "cross_axis_alignment",
                 ]),
-                Some(NodeKind::Stack) => v.push("children"),
+                Some(NodeKind::Stack) => v.extend(["children", "viewbox"]),
                 Some(NodeKind::Text) => v.extend([
                     "content",
                     "font_size",
@@ -1056,6 +1095,7 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
                 Some(NodeKind::Line) | Some(NodeKind::Arrow) => v.extend([
                     "points",
                     "segments",
+                    "viewbox",
                     "stroke",
                     "stroke_width",
                     "dash",
@@ -1066,6 +1106,7 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
                 Some(NodeKind::Path) => v.extend([
                     "points",
                     "segments",
+                    "viewbox",
                     "closed",
                     "fill",
                     "stroke",
@@ -1098,6 +1139,7 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
                     "cross_axis_alignment",
                     "points",
                     "segments",
+                    "viewbox",
                     "closed",
                     "dash",
                     "cap",
@@ -1114,6 +1156,7 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
                 "padding",
                 "x",
                 "y",
+                "anchor",
             ]);
             v
         }

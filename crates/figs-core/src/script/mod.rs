@@ -26,6 +26,7 @@
 //! [`eval_script`] then lowers the tree into a flat, id-keyed [`RawDocument`].
 
 use std::collections::HashMap;
+use std::path::Path;
 
 use rhai::{Array, Dynamic, Engine, EvalAltResult, Map, Position};
 
@@ -202,6 +203,8 @@ fn blank_node(kind: NodeKind) -> RawNode {
         padding: Edges::default(),
         x: None,
         y: None,
+        anchor: None,
+        viewbox: None,
         children: Vec::new(),
         spacing: 0.0,
         main_axis_alignment: None,
@@ -490,7 +493,7 @@ fn assign(mut sn: ScriptNode, id: String, counter: &mut usize, out: &mut HashMap
 // Engine + entry point
 // ---------------------------------------------------------------------------
 
-fn build_engine() -> Engine {
+fn build_engine(base_dir: Option<&Path>) -> Engine {
     let mut engine = Engine::new();
 
     // Sandbox: bound CPU/recursion/allocations and forbid file `import`/`eval`.
@@ -576,6 +579,30 @@ fn build_engine() -> Engine {
                 r.x = Some(x);
                 r.y = Some(y);
             }))
+        },
+    );
+    // Which point of the node sits at its offset, as fractions of its size.
+    engine.register_fn(
+        "anchor",
+        |n: ScriptNode, ax: Dynamic, ay: Dynamic| -> NodeResult {
+            let [ax, ay] = nums("anchor", "ax, ay", [ax, ay])?;
+            Ok(set_node(n, |r| r.anchor = Some([ax, ay])))
+        },
+    );
+    // User coordinates over the content box: a stack's child offsets, or a
+    // shape's points, are given in them.
+    engine.register_fn(
+        "viewbox",
+        |n: ScriptNode, x0: Dynamic, y0: Dynamic, x1: Dynamic, y1: Dynamic| -> NodeResult {
+            let v = nums("viewbox", "x0, y0, x1, y1", [x0, y0, x1, y1])?;
+            if !matches!(
+                n.node.kind,
+                NodeKind::Stack | NodeKind::Path | NodeKind::Line | NodeKind::Arrow
+            ) {
+                return Err(err("`viewbox` applies to a stack/path/line/arrow"));
+            }
+            crate::geom::ViewBox::from_array(v).map_err(|e| err(format!("`viewbox`: {e}")))?;
+            Ok(set_node(n, |r| r.viewbox = Some(v)))
         },
     );
 
@@ -718,9 +745,13 @@ fn build_engine() -> Engine {
         set_doc(d, |pg| pg.font_family = Some(s.to_string()))
     });
 
+    // Data loading (the only file access scripts get).
+    csv::register(&mut engine, base_dir.map(Path::to_path_buf));
+
     engine
 }
 
+pub mod csv;
 mod prelude;
 
 /// Evaluate a Rhai script into a [`RawDocument`]. The script's last expression
@@ -729,7 +760,15 @@ mod prelude;
 /// Error positions always refer to `src`: an error raised inside the prelude is
 /// reported at the user's call into the framework, named after that function.
 pub fn eval_script(src: &str) -> Result<RawDocument, ScriptError> {
-    let mut engine = build_engine();
+    eval_script_in(src, None)
+}
+
+/// [`eval_script`] for a script living in `base_dir`: relative paths the
+/// script reads (`csv("data.csv")`) resolve against it — pass the script
+/// file's directory, as the CLI and the editor do. `None` resolves them
+/// against the current directory.
+pub fn eval_script_in(src: &str, base_dir: Option<&Path>) -> Result<RawDocument, ScriptError> {
+    let mut engine = build_engine(base_dir);
     prelude::register_style(&mut engine);
     let (ast, origins) =
         prelude::compile_with_prelude(&engine, src).map_err(ScriptError::from_eval)?;

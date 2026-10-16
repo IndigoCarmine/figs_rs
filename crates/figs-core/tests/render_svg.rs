@@ -334,10 +334,13 @@ fn all_examples_render_well_formed() {
     let mut count = 0;
     for entry in std::fs::read_dir(&examples).unwrap() {
         let path = entry.unwrap().path();
+        if path.is_dir() {
+            continue; // e.g. examples/data
+        }
         let src = std::fs::read_to_string(&path).unwrap();
         let doc = match path.extension().and_then(|e| e.to_str()) {
             Some("toml") => Document::from_toml(&src),
-            Some("figs") => Document::from_script(&src),
+            Some("figs") => Document::from_script_in(&src, Some(&examples)),
             _ => continue,
         }
         .unwrap_or_else(|e| panic!("{}: {e}", path.display()));

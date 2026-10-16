@@ -53,18 +53,18 @@ You provide: hierarchy, style, content, and constraints (`flex`, `aspect_ratio`,
 ### Properties
 
 - **Shared** (all nodes): `flex`, `width`, `height`, `aspect_ratio`, `margin`,
-  `padding`, `x`, `y`. `margin`/`padding` accept a scalar (`1.5`) or a table
+  `padding`, `x`, `y`, `anchor`. `margin`/`padding` accept a scalar (`1.5`) or a table
   (`{ top = 1, left = 2 }`). `x`/`y` are only read by a `stack` parent (see
   below); under `column`/`row` and on the root they are ignored.
 - **Container** (`column`/`row`): `children`, `spacing`, `main_axis_alignment`
   (`start`/`center`/`end`/`space_between`/`space_around`/`space_evenly`),
   `cross_axis_alignment` (`start`/`center`/`end`/`stretch`).
-- **stack**: `children` (plus the shared `padding`).
+- **stack**: `children`, `viewbox` (plus the shared `padding`).
 - **text**: `content`, `font_size` (pt), `font_family`, `font_weight`, `color`,
   `align`, `line_height` (multiple of font size).
 - **image**: `src`, `fit` (`contain`/`cover`/`fill`).
 - **rect**: `fill`, `stroke`, `stroke_width`, `corner_radius`.
-- **line** / **arrow** / **path**: `points`, `segments` (curves), `stroke`,
+- **line** / **arrow** / **path**: `points`, `segments` (curves), `viewbox`, `stroke`,
   `stroke_width`, `dash`, `cap`, `head`, `head_size`; **path** adds `fill`,
   `closed`.
 - **ellipse**: `fill`, `stroke`, `stroke_width`, `dash`, `cap`.
@@ -147,6 +147,53 @@ y = 0.2
 ```
 
 See [`examples/overlay_labels.figs`](examples/overlay_labels.figs).
+
+### User coordinates (`viewbox`) & anchors
+
+`viewbox = [x0, y0, x1, y1]` lays a coordinate system of your own over a node's
+content box: `x0` maps to the left edge, `x1` to the right, `y0` to the top and
+`y1` to the bottom, linearly — reverse a pair to flip that axis
+(`[0, 1, 10, 0]` is a plot's "x 0..10, y 0..1 upwards"). The mapping is done at
+layout time, so it follows whatever size the layout gives the node.
+
+- On a **stack**, the children's `x`/`y` offsets are in viewbox units.
+- On a **line** / **arrow** / **path**, `points` and `segments` (control points,
+  arc radii) are. Such a shape has no intrinsic size; unpositioned in a stack it
+  fills it, so its viewbox spans the stack.
+- Only **positions** map. Sizes (`width`, `height`), strokes, dashes and
+  arrowheads stay in the page unit, so a 2 mm marker stays round and a 1 pt line
+  stays 1 pt however the data is stretched. `x0 == x1` or `y0 == y1` is an error.
+
+`anchor = [ax, ay]` (fractions of the child's own box, default `[0, 0]`) picks
+which point of a stack child sits at its `x`/`y`: `[0.5, 0.5]` centres it,
+`[1, 0.5]` right-aligns it to the point. An anchored child — or any child of a
+viewbox stack — sits *around* its point rather than hanging from it, so it is
+not shrunk to the space after its offset; it keeps its size and may extend past
+any edge. A viewbox stack's intrinsic size ignores the
+(not yet mappable) offsets: it wraps its largest child.
+
+```toml
+[nodes.area]
+type = "stack"
+viewbox = [0, 1, 10, 0]        # x 0..10, y 0..1 upwards
+children = ["curve", "dot"]
+
+[nodes.curve]                  # fills the stack; points in data units
+type = "path"
+viewbox = [0, 1, 10, 0]
+points = [[0, 0], [5, 0.8], [10, 0.6]]
+
+[nodes.dot]                    # a marker 0.2 page units wide, centred on (5, 0.8)
+type = "ellipse"
+width = 0.2
+height = 0.2
+x = 5
+y = 0.8
+anchor = [0.5, 0.5]
+```
+
+In scripts: `.viewbox(x0, y0, x1, y1)` and `.anchor(ax, ay)`. The framework's
+[plots](#plots) are built entirely from these.
 
 ### Vector shapes (annotations)
 
@@ -323,6 +370,9 @@ setters:
 
 - **layout** (any node): `.flex(n)`, `.width(n)`, `.height(n)`, `.aspect(n)`,
   `.margin(n)`, `.pad(n)`.
+- **user coordinates**: `.viewbox(x0, y0, x1, y1)` (stack/line/arrow/path) and
+  `.anchor(ax, ay)` (read by a `stack` parent) — see
+  [User coordinates](#user-coordinates-viewbox--anchors).
 - **offset** (read by a `stack` parent): `.at(x, y)`, `.x(n)`, `.y(n)` — e.g.
   `stack([image("a.png"), text("(a)").at(0.2, 0.2)])`.
 - **text**: `.size(n)`, `.weight(n)` / `.bold()`, `.color(hex)`, `.font(name)`,
@@ -575,6 +625,85 @@ in call to function 'figure' (line 5, col 16)
 If the call is inside one of your own functions, the position is that inner
 line and the trailing lines trace your calls outward.
 
+### Plots
+
+Small data plots — the kind a paper figure needs next to its micrographs — are
+part of the framework, so no matplotlib round trip: `plot(opts, series)` returns
+an ordinary node (it takes `.flex`, `.height`, and goes in `grid`/`panels` like
+an image), and `csv(path)` loads the data
+([`examples/plot.figs`](examples/plot.figs)):
+
+```rhai
+let d = csv("data/growth.csv");        // #{ time_h: [..], wt: [..], … }
+
+page("double", grid(2, panels([
+    plot(#{ xlabel: "Time (h)", ylabel: "OD₆₀₀" }, [
+        line_plot(d.time_h, d.wt, #{ label: "Wild type", yerr: d.wt_sd }),
+        scatter(d.time_h, d.mutant, "ΔrpoS"),     // a string is the legend label
+    ]),
+    plot(#{ ylabel: "Doubling time (min)" }, [
+        bars(["WT", "ΔrpoS", "ΔrelA", "ΔspoT"], [24, 38, 31, 45],
+             #{ yerr: [1.5, 3.2, 2.1, 4.0] }),
+    ]),
+])))
+```
+
+| Function | Result |
+|---|---|
+| `plot(series)` / `plot(opts, series)` | Axes of whatever size the layout gives (default aspect `plot_aspect()` = 4:3, so plots get a height on auto pages), holding `series` (an array, or one series). |
+| `line_plot(xs, ys)` / `line_plot(xs, ys, opts)` | A line through the points; `NaN`/missing values break it. |
+| `scatter(xs, ys)` / `scatter(xs, ys, opts)` | Markers (`"o"` circles by default). |
+| `bars(xs, ys)` / `bars(xs, ys, opts)` | Bars from 0. `xs` are numbers or **category names** (a categorical axis); several bar series are grouped side by side. Error bars on bars are black. |
+| `errorbars(xs, ys, errs)` / `(…, opts)` | Error bars alone (y ± err, black by default). |
+| `legend(series)` | The legend as a standalone node (e.g. beside a row of plots). |
+| `csv(path)` | A map of columns: numbers when every non-empty cell parses (an empty cell is `NaN`), else strings. Comma- or tab-separated (TSV when the header has tabs and no commas), RFC 4180 quotes, `#` comment lines skipped. Relative paths resolve against the script's directory (the CLI and editor pass it), like image `src`. |
+
+**Series options** (a map, or a string = `label`): `label` (legend entry),
+`color` (default: next `palette()` colour, in order), `width` (cm), `dash`,
+`marker` (`"o"`, `"s"`, `"^"`, `"d"`, `"none"`), `size` (marker diameter, cm),
+`yerr` (symmetric error per point).
+
+**Plot options**: `x` / `y` ranges `[lo, hi]` (default: the data plus a 2 %
+margin — not past 0 — widened to whole ticks), `xlabel` / `ylabel`, `xscale` /
+`yscale` (`"linear"` or `"log"`), `xticks` / `yticks` (explicit values),
+`legend` (a corner, `"auto"`, or `""`/`false`), `frame` (`"open"`, `"box"`,
+`"none"`), and `marks`: extra nodes overlaid on the data area, placed with
+`.at(x, y)` in data units (log10 of the value on a log axis) — e.g.
+`text("p < 0.05").at(2, 0.9).anchor(0.5, 1)`.
+
+Defaults are journal-style and overridable hooks: open L-shaped axes, outward
+ticks, labels at `base_size()`, the y label horizontal above the axis (text is
+never rotated), and a legend without a box in the emptiest corner.
+
+```rhai
+fn plot_line_width() { 0.02 }   // axes + ticks, cm (default base_size() * 0.0035 ≈ 0.8 pt)
+fn series_width() { 0.05 }      // data lines, cm (default 1.75 × plot_line_width())
+fn palette() { ["#000000", "#d55e00"] }  // series colours (default Okabe–Ito, colour-blind safe)
+fn tick_length() { 0.1 }        // cm (default base_size() * 0.015)
+fn max_ticks() { 5 }            // labelled ticks per axis, steps 1/2/5 × 10^n (default 7)
+fn marker_size() { 0.2 }        // marker diameter, cm (default base_size() * 0.02)
+fn plot_frame() { "box" }       // "open" (default) / "box" / "none"
+fn legend_corner() { "top-left" }  // "auto" (default) / a corner / "" for none
+fn bar_width() { 0.8 }          // fraction of the bar spacing (default 0.7)
+fn plot_aspect() { 1.0 }        // width / height of a plot panel; 0 = size it yourself (default 4:3)
+fn plot_label_room() { 0 }      // band kept free at the top for a panel label, cm
+```
+
+How it maps data: the plot area is a core `stack` with
+`.viewbox(xlo, yhi, xhi, ylo)`; lines and bars are `path`s with the same
+viewbox, markers, ticks and error-bar caps are children placed `.at(x, y)` in
+data units and centred with `.anchor`, and tick labels sit in narrow viewbox
+stacks beside the area. The layout performs the mapping at the plot's final
+size, so plots stretch, flex and auto-size like any other node — and every
+piece is a plain node you could have written by hand. Ticks are "nice"
+1/2/5 × 10ⁿ steps with at most `max_ticks()` labels and shared decimals
+(`0.0, 0.5, 1.0`, real minus signs); log axes tick each decade (labelled
+`0.01 … 1000`, or `10⁻⁵`-style past that) with minor ticks at 2–9.
+Data outside an explicit range is clipped (lines are cut at the frame,
+markers outside are dropped). Notes: the space for tick labels below the axis
+and the label overhang on the right are estimated from `base_size()`; error
+bars are vertical only.
+
 In the editor (`figs-editor`), the **Script** tab is the source of truth: press
 **Evaluate** (Ctrl+Enter) to lower the script into the editable **TOML** tab, the
 inspector and the live preview. Authoring flows Rhai → (TOML ↔ GUI) one way; use
@@ -592,7 +721,7 @@ poster.toml                        figure.figs (Rhai)
   → renderers       (PNG via tiny-skia, PDF via krilla, SVG hand-written)
 ```
 
-`figs-core` is I/O-free beyond fonts/images so the Phase 2 Tauri backend can
+`figs-core` is I/O-free beyond fonts/images (and the `csv()` data files a script reads) so the Phase 2 Tauri backend can
 reuse it verbatim. The `ComputedLayout` IR is the single contract shared by both
 renderers and the editor.
 

@@ -429,7 +429,12 @@ impl PathSegment {
 
     /// This segment shifted by `(dx, dy)`.
     pub fn translated(&self, dx: f32, dy: f32) -> PathSegment {
-        let t = |p: Point| Point::new(p.x + dx, p.y + dy);
+        self.mapped(|p| Point::new(p.x + dx, p.y + dy))
+    }
+
+    /// The segment with every point (end and control points) mapped by `t`.
+    /// Béziers are affine-invariant, so an affine `t` maps the curve exactly.
+    pub fn mapped(&self, t: impl Fn(Point) -> Point) -> PathSegment {
         match *self {
             PathSegment::MoveTo(p) => PathSegment::MoveTo(t(p)),
             PathSegment::LineTo(p) => PathSegment::LineTo(t(p)),
@@ -437,6 +442,50 @@ impl PathSegment {
             PathSegment::CubicTo(c1, c2, p) => PathSegment::CubicTo(t(c1), t(c2), t(p)),
             PathSegment::Close => PathSegment::Close,
         }
+    }
+}
+
+/// A user coordinate system laid over a node's content box (`viewbox =
+/// [x0, y0, x1, y1]`): `x0` maps to the left edge, `x1` to the right, `y0` to
+/// the top and `y1` to the bottom, linearly. Either pair may be reversed
+/// (`y0 > y1` gives a y axis pointing up, as in a data plot); neither may be
+/// degenerate. Only positions are mapped — sizes, strokes, dashes and
+/// arrowheads stay in page units.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ViewBox {
+    pub x0: f32,
+    pub y0: f32,
+    pub x1: f32,
+    pub y1: f32,
+}
+
+impl ViewBox {
+    /// From `[x0, y0, x1, y1]`; `Err` explains why it is invalid.
+    pub fn from_array([x0, y0, x1, y1]: [f32; 4]) -> Result<ViewBox, String> {
+        if ![x0, y0, x1, y1].iter().all(|v| v.is_finite()) {
+            return Err("viewbox values must be finite numbers".into());
+        }
+        if x0 == x1 || y0 == y1 {
+            return Err(format!(
+                "viewbox [{x0}, {y0}, {x1}, {y1}] is degenerate: x0 != x1 and y0 != y1 are required"
+            ));
+        }
+        Ok(ViewBox { x0, y0, x1, y1 })
+    }
+
+    /// Horizontal position (points, absolute) of user `x` in `rect`.
+    pub fn map_x(&self, x: f32, rect: Rect) -> f32 {
+        rect.x + (x - self.x0) / (self.x1 - self.x0) * rect.w
+    }
+
+    /// Vertical position (points, absolute) of user `y` in `rect`.
+    pub fn map_y(&self, y: f32, rect: Rect) -> f32 {
+        rect.y + (y - self.y0) / (self.y1 - self.y0) * rect.h
+    }
+
+    /// User point `p` -> absolute page point in `rect`.
+    pub fn map(&self, p: Point, rect: Rect) -> Point {
+        Point::new(self.map_x(p.x, rect), self.map_y(p.y, rect))
     }
 }
 

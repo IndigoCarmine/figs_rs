@@ -121,7 +121,8 @@ fn build(input: &Path, output: &Path, fonts: &mut FontStore) -> Result<Built> {
         .with_context(|| format!("reading input `{}`", input.display()))?;
     let doc = match input.extension().and_then(|e| e.to_str()) {
         Some("toml") => Document::from_toml(&src),
-        Some("figs") | Some("rhai") => Document::from_script(&src),
+        // Data files a script reads resolve against its directory, like images.
+        Some("figs") | Some("rhai") => Document::from_script_in(&src, input.parent()),
         other => bail!(
             "unsupported input extension {:?}; use .toml, .figs, or .rhai",
             other.unwrap_or("(none)")

@@ -4,7 +4,7 @@
 //! (parent before children, siblings in array order — so later stack children
 //! paint on top).
 
-use crate::geom::{Axis, CrossAxisAlign, Edges, MainAxisAlign, Rect, Size};
+use crate::geom::{Axis, CrossAxisAlign, Edges, MainAxisAlign, Rect, Size, ViewBox};
 use crate::schema::{Common, NodeType, RectProps, TextProps};
 
 use super::computed::{ComputedNode, PaintContent, PathPaint, TextBox};
@@ -51,24 +51,33 @@ pub(crate) fn arrange<M: LeafMeasure>(
                 out,
             );
         }
-        NodeType::Stack { children } => {
-            layout_stack(ctx, children, rect.inset(node.common.padding), out);
+        NodeType::Stack { children, viewbox } => {
+            layout_stack(
+                ctx,
+                children,
+                *viewbox,
+                rect.inset(node.common.padding),
+                out,
+            );
         }
         _ => {}
     }
 }
 
-/// Place each stack child at `content origin + (x, y) + leading margin`, sized by
-/// [`stack_child_size`]. Children overlap; array order is paint order.
+/// Place each stack child at `content origin + (x, y) - anchor * size +
+/// leading margin`, sized by [`stack_child_size`]; with a `viewbox` the offsets
+/// are user units mapped onto the content box first. Children overlap; array
+/// order is paint order.
 fn layout_stack<M: LeafMeasure>(
     ctx: &Ctx<M>,
     children: &[usize],
+    viewbox: Option<ViewBox>,
     content: Rect,
     out: &mut Vec<ComputedNode>,
 ) {
     for &child in children {
         let common = &ctx.doc.nodes[child].common;
-        let avail = stack_child_avail(common, content.size());
+        let avail = stack_child_avail(common, content.size(), viewbox.is_some());
         // The content box is known here, so filling axes measure tight.
         let measured = measure(
             ctx,
@@ -76,8 +85,17 @@ fn layout_stack<M: LeafMeasure>(
             stack_child_constraints(common, avail, true, true),
         );
         let size = stack_child_size(common, measured, avail);
-        let x = content.x + common.x.unwrap_or(0.0) + common.margin.left;
-        let y = content.y + common.y.unwrap_or(0.0) + common.margin.top;
+        // Offset from the content-box origin, in points.
+        let (ox, oy) = match viewbox {
+            Some(vb) => (
+                common.x.map_or(0.0, |x| vb.map_x(x, content) - content.x),
+                common.y.map_or(0.0, |y| vb.map_y(y, content) - content.y),
+            ),
+            None => (common.x.unwrap_or(0.0), common.y.unwrap_or(0.0)),
+        };
+        let [ax, ay] = common.anchor.unwrap_or([0.0, 0.0]);
+        let x = content.x + ox - ax * size.w + common.margin.left;
+        let y = content.y + oy - ay * size.h + common.margin.top;
         arrange(ctx, child, Rect::new(x, y, size.w, size.h), out);
     }
 }
@@ -328,13 +346,17 @@ fn paint_content(kind: &NodeType, common: &Common, rect: Rect) -> PaintContent {
             line_height: *line_height,
         }),
         NodeType::Path(props) => {
-            // Box-relative segments -> absolute page points (content-box origin).
+            // Box-relative segments -> absolute page points (content-box
+            // origin), or viewbox units mapped onto the content box.
             let origin = rect.inset(common.padding);
             PaintContent::Path(PathPaint {
                 segments: props
                     .segments
                     .iter()
-                    .map(|s| s.translated(origin.x, origin.y))
+                    .map(|s| match props.viewbox {
+                        Some(vb) => s.mapped(|p| vb.map(p, origin)),
+                        None => s.translated(origin.x, origin.y),
+                    })
                     .collect(),
                 fill: props.fill,
                 stroke: props.stroke.clone(),
