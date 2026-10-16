@@ -2,7 +2,7 @@
 
 A fast, declarative tool for composing paper figures and posters. You describe
 **structure and constraints** in TOML; the engine computes every coordinate and
-size for you, then renders to PNG/PDF. Where you need exact placement (panel
+size for you, then renders to PNG, PDF or SVG. Where you need exact placement (panel
 labels, insets, annotations), a `stack` lets you pin children at absolute offsets. Think
 Flutter/XAML-style relative layout, aimed at research figures.
 
@@ -390,7 +390,7 @@ poster.toml                        figure.figs (Rhai)
   → schema::parse   (TOML → RawDocument)   → script::eval_script (→ RawDocument)
   → schema::resolve (validate ids/cycles, convert units → typed Document)
   → layout          (two-pass measure/arrange → ComputedLayout IR)
-  → renderers       (PNG via tiny-skia, PDF via printpdf)   [upcoming]
+  → renderers       (PNG via tiny-skia, PDF via krilla, SVG hand-written)
 ```
 
 `figs-core` is I/O-free beyond fonts/images so the Phase 2 Tauri backend can
@@ -413,6 +413,40 @@ Modeled on Flutter's `BoxConstraints`/`RenderFlex`:
   too, so `aspect_ratio` children report their real height (this is what sizes
   an auto-height page).
 
+## Output formats
+
+The output extension picks the backend — no flags:
+
+```sh
+figs build figure.figs -o figure.png   # raster, at the page `dpi`
+figs build figure.figs -o figure.pdf   # vector, page = exact page size in pt
+figs build figure.figs -o figure.svg   # vector, width/height in pt
+```
+
+Any other extension is an error. The editor has matching **Export PNG / PDF /
+SVG** buttons. All three backends are driven by the same `ComputedLayout` walk
+and share one geometry module (arrowheads, rounded corners, ellipses, text
+alignment, image fitting), so they place everything at identical coordinates;
+the vector formats keep that exactness at any zoom.
+
+| | PNG | PDF | SVG |
+|---|---|---|---|
+| Shapes | anti-aliased raster | vector paths (dash, cap, alpha) | `<rect>`/`<ellipse>`/`<path>` |
+| Text | rasterized glyphs | **real text**: fonts embedded as subsets, ToUnicode map (selectable, searchable) | **glyph outlines** (`<use>` of per-glyph paths in `<defs>`), exact on every viewer with no font dependency; not selectable (`aria-label` carries the text) |
+| Images | resampled | JPEG passed through untouched; other formats embedded losslessly | base64 `data:` URI (PNG/JPEG bytes verbatim) |
+| `cover` | clipped | clip path | `clipPath` |
+| Missing image | gray placeholder | same placeholder | same placeholder |
+
+- Coordinates are points throughout. The IR's top-left origin is kept in SVG
+  (`viewBox` in pt); PDF's bottom-left flip is handled by krilla, and the
+  MediaBox is exactly `page.width × page.height` pt.
+- `dpi` only affects PNG.
+- Text in PDF/SVG uses the exact glyph positions shaped for layout, so line
+  breaks and kerning match the PNG. Bitmap-only glyphs (colour emoji) have no
+  outline and are skipped in SVG.
+- PDF support is the `pdf` cargo feature of `figs-core` (on by default; it pulls
+  in krilla). PNG and SVG are always built.
+
 ## Build & test
 
 ```sh
@@ -424,7 +458,7 @@ cargo clippy --all-targets
 
 M0 workspace · **M1 schema+resolve** ✓ · **M2 layout (column/row/rect, flex,
 align, aspect, overflow)** ✓ · M3 text (cosmic-text) · M4 PNG backend · M5 image
-+ aspect/fit · M6 PDF backend · M7 CLI + file watch · M7′ egui live preview ·
++ aspect/fit · **M6 PDF + SVG backends** ✓ · M7 CLI + file watch · M7′ egui live preview ·
 M8 hardening.
 
 ## License

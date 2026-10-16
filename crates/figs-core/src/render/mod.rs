@@ -1,15 +1,27 @@
 //! Rendering: a single [`Renderer`] trait fed the [`ComputedLayout`] IR, with
 //! one implementation per output format. Driving every backend from the same
-//! `paint()` walk guarantees PNG and (later) PDF stay pixel/point-identical.
+//! `paint()` walk — and computing arrowheads, rounded corners, ellipses, text
+//! alignment and image fitting once in [`geometry`] — keeps PNG, PDF and SVG
+//! point-identical.
 //!
-//! Rectangles, text, images and vector shapes are all painted through
-//! [`png::TinySkiaRenderer`]. Text, image and shape painting are trait methods
-//! with no-op defaults, so future backends (e.g. PDF) keep compiling until they
-//! opt in.
+//! - [`png::TinySkiaRenderer`] — raster (PNG / RGBA preview).
+//! - [`pdf::PdfRenderer`] — vector PDF with embedded, subset fonts as real
+//!   text (feature `pdf`, on by default).
+//! - [`svg::SvgRenderer`] — vector SVG with text as glyph outlines.
+//!
+//! Text, image and shape painting are trait methods with no-op defaults, so a
+//! new backend compiles before it opts in to everything.
 
+pub mod geometry;
+#[cfg(feature = "pdf")]
+pub mod pdf;
 pub mod png;
+pub mod svg;
 
+#[cfg(feature = "pdf")]
+pub use pdf::{render_pdf, PdfError, PdfRenderer};
 pub use png::{image_size, render_png, render_rgba, PngError, RenderedImage, TinySkiaRenderer};
+pub use svg::{render_svg, SvgRenderer};
 
 use std::path::Path;
 

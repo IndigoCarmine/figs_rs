@@ -15,9 +15,19 @@ tiny-skia = "0.11"
 cosmic-text = "0.12"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 rhai = { version = "1.24", features = ["sync"], optional = true }
+# Unhinted glyph outlines for the SVG backend (same font bytes cosmic-text uses).
+ttf-parser = "0.25"
+# PDF backend: embeds/subsets fonts as real text, vector paths, images.
+krilla = { version = "0.8.2", default-features = false, features = ["raster-images"], optional = true }
 
 [features]
-default = ["script"]
+default = ["script", "pdf"]
 # The Rhai scripting front-end (`.figs`/`.rhai`): scripts evaluate to a
 # `RawDocument` that flows through the existing resolve/layout/render pipeline.
 script = ["dep:rhai"]
+# The PDF backend (`render::pdf`, via krilla). The PNG and SVG backends are
+# always available (they add no heavy dependencies).
+pdf = ["dep:krilla"]
+
+[dev-dependencies]
+roxmltree = "0.21.1"

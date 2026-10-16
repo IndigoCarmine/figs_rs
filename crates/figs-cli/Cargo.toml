@@ -11,7 +11,7 @@ name = "figs"
 path = "src/main.rs"
 
 [dependencies]
-figs-core = { path = "../figs-core" }
+figs-core = { path = "../figs-core", features = ["pdf"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = { workspace = true }
 tracing = { workspace = true }

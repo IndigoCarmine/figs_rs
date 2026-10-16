@@ -11,11 +11,11 @@ use tiny_skia::{
     Pixmap, PixmapPaint, PremultipliedColorU8, Rect as SkRect, Stroke, StrokeDash, Transform,
 };
 
-use crate::geom::{Color, ImageFit, LineCap, Point, Rect, StrokeStyle};
+use crate::geom::{Color, ImageFit, LineCap, Rect, StrokeStyle};
 use crate::layout::{ComputedLayout, PageGeom, PathPaint, TextBox};
-use crate::schema::TextProps;
 use crate::text::FontStore;
 
+use super::geometry::{self, PathSeg};
 use super::{paint, RenderOptions, Renderer};
 
 /// Errors from raster rendering.
@@ -130,16 +130,23 @@ impl<'a> TinySkiaRenderer<'a> {
             .stroke_path(path, &paint, &sk_stroke, Transform::identity(), None);
     }
 
-    /// Build a pixel-space polyline through `pts` (points), closing it if asked.
-    fn polyline(&self, pts: &[Point], closed: bool) -> Option<tiny_skia::Path> {
-        let (first, rest) = pts.split_first()?;
+    /// Build a pixel-space tiny-skia path from shared point-space segments.
+    fn sk_path(&self, segs: &[PathSeg]) -> Option<tiny_skia::Path> {
         let mut pb = PathBuilder::new();
-        pb.move_to(self.px(first.x), self.px(first.y));
-        for p in rest {
-            pb.line_to(self.px(p.x), self.px(p.y));
-        }
-        if closed {
-            pb.close();
+        for seg in segs {
+            match *seg {
+                PathSeg::MoveTo(p) => pb.move_to(self.px(p.x), self.px(p.y)),
+                PathSeg::LineTo(p) => pb.line_to(self.px(p.x), self.px(p.y)),
+                PathSeg::CubicTo(c1, c2, p) => pb.cubic_to(
+                    self.px(c1.x),
+                    self.px(c1.y),
+                    self.px(c2.x),
+                    self.px(c2.y),
+                    self.px(p.x),
+                    self.px(p.y),
+                ),
+                PathSeg::Close => pb.close(),
+            }
         }
         pb.finish()
     }
@@ -179,17 +186,9 @@ impl<'a> TinySkiaRenderer<'a> {
             return true; // nothing to draw, but not an error
         }
         let (iwf, ihf) = (iw as f32, ih as f32);
-        let (sx, sy, tx, ty) = match fit {
-            ImageFit::Fill => (rw / iwf, rh / ihf, rx, ry),
-            ImageFit::Contain => {
-                let s = (rw / iwf).min(rh / ihf);
-                (s, s, rx + (rw - iwf * s) / 2.0, ry + (rh - ihf * s) / 2.0)
-            }
-            ImageFit::Cover => {
-                let s = (rw / iwf).max(rh / ihf);
-                (s, s, rx + (rw - iwf * s) / 2.0, ry + (rh - ihf * s) / 2.0)
-            }
-        };
+        let dest = geometry::image_placement(rect, iwf, ihf, fit);
+        let (sx, sy) = (self.px(dest.w) / iwf, self.px(dest.h) / ihf);
+        let (tx, ty) = (self.px(dest.x), self.px(dest.y));
 
         // Clip to the node rect so `Cover` doesn't bleed into siblings.
         let mut mask = Mask::new(self.pixmap.width(), self.pixmap.height());
@@ -312,16 +311,18 @@ impl Renderer for TinySkiaRenderer<'_> {
         stroke_width: f32,
         corner_radius: f32,
     ) {
-        let Some(skr) = self.sk_rect(rect) else {
+        if self.sk_rect(rect).is_none() {
+            return;
+        }
+        // Sub-half-pixel radii are drawn square (indistinguishable at this dpi).
+        let radius = if self.px(corner_radius) > 0.5 {
+            corner_radius
+        } else {
+            0.0
+        };
+        let Some(path) = self.sk_path(&geometry::rounded_rect(rect, radius)) else {
             return;
         };
-        let radius_px = self.px(corner_radius);
-        let path = if radius_px > 0.5 {
-            rounded_rect_path(skr, radius_px)
-        } else {
-            Some(PathBuilder::from_rect(skr))
-        };
-        let Some(path) = path else { return };
 
         if let Some(fill) = fill {
             let mut paint = Paint::default();
@@ -354,23 +355,14 @@ impl Renderer for TinySkiaRenderer<'_> {
         let Some(fonts) = self.fonts else {
             return;
         };
-        let props = TextProps {
-            content: text.content.clone(),
-            font_size: text.font_size,
-            font_family: text.font_family.clone(),
-            font_weight: text.font_weight,
-            color: text.color,
-            align: text.align,
-            line_height: text.line_height,
-        };
-        let shaped = fonts.shape(&props, rect.w);
+        let shaped = fonts.shape(&geometry::text_props(text), rect.w);
         let scale = self.scale;
 
         for line in &shaped.lines {
-            let align_off = align_offset(text.align, line.width, rect.w);
+            let align_off = geometry::align_offset(text.align, line.width, rect.w);
             for g in &line.glyphs {
-                let pen_x = (rect.x + align_off + g.x) * scale;
-                let pen_y = (rect.y + line.baseline) * scale;
+                let pen_x = (rect.x + align_off + g.x + g.x_offset) * scale;
+                let pen_y = (rect.y + line.baseline - g.y_offset) * scale;
                 let (key, ox, oy) = CacheKey::new(
                     g.font_id,
                     g.glyph_id,
@@ -393,7 +385,7 @@ impl Renderer for TinySkiaRenderer<'_> {
             return;
         }
         if let Some(fill) = path.fill {
-            if let Some(p) = self.polyline(&path.points, path.closed) {
+            if let Some(p) = self.sk_path(&geometry::polyline(&path.points, path.closed)) {
                 self.fill_shape(&p, fill);
             }
         }
@@ -401,31 +393,14 @@ impl Renderer for TinySkiaRenderer<'_> {
             return;
         };
 
-        // Arrowheads: pull the shaft back into each head (by half its length) so
-        // a butt/square/round cap never pokes out past the tip, then stroke the
-        // shaft and fill the heads in the stroke color.
-        let mut shaft = path.points.clone();
-        let mut heads = Vec::new();
-        if !path.closed && path.head_size > 0.0 {
-            let n = shaft.len();
-            if path.head.at_end() {
-                if let Some(h) = arrow_head(&path.points, n - 1, -1, path.head_size) {
-                    shaft[n - 1] = h.shaft_end;
-                    heads.push(h.triangle);
-                }
-            }
-            if path.head.at_start() {
-                if let Some(h) = arrow_head(&path.points, 0, 1, path.head_size) {
-                    shaft[0] = h.shaft_end;
-                    heads.push(h.triangle);
-                }
-            }
-        }
-        if let Some(p) = self.polyline(&shaft, path.closed) {
+        // Stroke the shaft (pulled back into any arrowheads), then fill the
+        // heads in the stroke color. Shared with the vector backends.
+        let arrow = geometry::arrow_geometry(path);
+        if let Some(p) = self.sk_path(&geometry::polyline(&arrow.shaft, path.closed)) {
             self.stroke_shape(&p, stroke);
         }
-        for tri in heads {
-            if let Some(p) = self.polyline(&tri, true) {
+        for tri in arrow.heads {
+            if let Some(p) = self.sk_path(&geometry::polyline(&tri, true)) {
                 self.fill_shape(&p, stroke.color);
             }
         }
@@ -444,88 +419,16 @@ impl Renderer for TinySkiaRenderer<'_> {
     }
 
     fn draw_image(&mut self, rect: Rect, src: &Path, fit: ImageFit) {
-        let resolved = if src.is_absolute() {
-            src.to_path_buf()
-        } else {
-            self.base_dir.join(src)
-        };
+        let resolved = geometry::resolve_image(self.base_dir, src);
         if self.try_draw_image(rect, &resolved, fit) {
             return;
         }
         tracing::warn!(path = %resolved.display(), "image unavailable; drawing placeholder");
         // Light-gray placeholder box with a thin border so a missing image is
         // obvious in the editor without panicking.
-        let fill = Color::parse_hex("#e7e4dd").unwrap_or(Color::WHITE);
-        let border = Color::parse_hex("#b6b2a7").unwrap_or(Color::BLACK);
-        self.fill_rect(rect, Some(fill), Some(border), 1.0, 0.0);
+        let (fill, border) = geometry::placeholder_colors();
+        self.fill_rect(rect, Some(fill), Some(border), geometry::PLACEHOLDER_BORDER, 0.0);
     }
-}
-
-/// An arrowhead triangle plus where the shaft should now end.
-struct Head {
-    triangle: [Point; 3],
-    shaft_end: Point,
-}
-
-/// Arrowhead of length `len` at `pts[tip]`, pointing away from the nearest
-/// distinct neighbour found by walking `step` (+1/-1). Its base is 0.8x `len`
-/// wide. `None` when every other point coincides with the tip.
-fn arrow_head(pts: &[Point], tip: usize, step: isize, len: f32) -> Option<Head> {
-    let t = pts[tip];
-    let mut i = tip as isize + step;
-    let (ux, uy, seg) = loop {
-        let p = *pts.get(usize::try_from(i).ok()?)?;
-        let (dx, dy) = (t.x - p.x, t.y - p.y);
-        let d = (dx * dx + dy * dy).sqrt();
-        if d > 1e-6 {
-            break (dx / d, dy / d, d);
-        }
-        i += step;
-    };
-    let base = Point::new(t.x - ux * len, t.y - uy * len);
-    let half = 0.4 * len;
-    let back = (0.5 * len).min(seg);
-    Some(Head {
-        triangle: [
-            t,
-            Point::new(base.x - uy * half, base.y + ux * half),
-            Point::new(base.x + uy * half, base.y - ux * half),
-        ],
-        shaft_end: Point::new(t.x - ux * back, t.y - uy * back),
-    })
-}
-
-/// Horizontal offset (points) to apply to a line of the given width inside a
-/// box of width `box_w`, per the text alignment.
-fn align_offset(align: crate::geom::TextAlign, line_w: f32, box_w: f32) -> f32 {
-    use crate::geom::TextAlign::*;
-    match align {
-        Left | Justify => 0.0,
-        Center => ((box_w - line_w) / 2.0).max(0.0),
-        Right => (box_w - line_w).max(0.0),
-    }
-}
-
-/// Build a rounded-rectangle path. The radius is clamped to half the shorter
-/// side so corners never overlap.
-fn rounded_rect_path(r: SkRect, radius: f32) -> Option<tiny_skia::Path> {
-    let radius = radius.min(r.width() / 2.0).min(r.height() / 2.0);
-    // Cubic control offset for a quarter-circle approximation.
-    let k = radius * 0.5522847;
-    let (l, t, rt, b) = (r.left(), r.top(), r.right(), r.bottom());
-
-    let mut pb = PathBuilder::new();
-    pb.move_to(l + radius, t);
-    pb.line_to(rt - radius, t);
-    pb.cubic_to(rt - radius + k, t, rt, t + radius - k, rt, t + radius);
-    pb.line_to(rt, b - radius);
-    pb.cubic_to(rt, b - radius + k, rt - radius + k, b, rt - radius, b);
-    pb.line_to(l + radius, b);
-    pb.cubic_to(l + radius - k, b, l, b - radius + k, l, b - radius);
-    pb.line_to(l, t + radius);
-    pb.cubic_to(l, t + radius - k, l + radius - k, t, l + radius, t);
-    pb.close();
-    pb.finish()
 }
 
 /// Natural pixel size of an image file, without fully decoding it. Returns

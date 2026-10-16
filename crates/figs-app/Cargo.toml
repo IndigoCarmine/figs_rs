@@ -11,7 +11,7 @@ name = "figs-editor"
 path = "src/main.rs"
 
 [dependencies]
-figs-core = { path = "../figs-core" }
+figs-core = { path = "../figs-core", features = ["pdf"] }
 eframe = "0.29"
 rfd = "0.15"
 toml = { workspace = true }

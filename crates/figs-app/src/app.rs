@@ -281,10 +281,12 @@ impl FigsApp {
         }
     }
 
-    pub fn export_png(&mut self) {
+    /// Export the current document as PNG, PDF or SVG (`ext`), after a save
+    /// dialog.
+    pub fn export(&mut self, ext: &str) {
         let Some(path) = rfd::FileDialog::new()
-            .add_filter("PNG", &["png"])
-            .set_file_name("figure.png")
+            .add_filter(ext.to_ascii_uppercase(), &[ext])
+            .set_file_name(format!("figure.{ext}"))
             .save_file()
         else {
             return;
@@ -302,7 +304,11 @@ impl FigsApp {
                     fonts: Some(&self.fonts),
                     base_dir: &self.base_dir,
                 };
-                figs_core::render_png(&computed, &opts).map_err(|e| e.to_string())
+                match ext {
+                    "pdf" => figs_core::render_pdf(&computed, &opts).map_err(|e| e.to_string()),
+                    "svg" => Ok(figs_core::render_svg(&computed, &opts).into_bytes()),
+                    _ => figs_core::render_png(&computed, &opts).map_err(|e| e.to_string()),
+                }
             })
             .and_then(|bytes| std::fs::write(&path, bytes).map_err(|e| e.to_string()));
         if let Err(e) = result {
@@ -376,8 +382,14 @@ impl FigsApp {
                     if ui.button("Save As").clicked() {
                         self.save_as();
                     }
-                    if ui.button("Export PNG").clicked() {
-                        self.export_png();
+                    for (label, ext) in [
+                        ("Export PNG", "png"),
+                        ("Export PDF", "pdf"),
+                        ("Export SVG", "svg"),
+                    ] {
+                        if ui.button(label).clicked() {
+                            self.export(ext);
+                        }
                     }
                     if ui.button("Export TOML").clicked() {
                         self.export_toml();

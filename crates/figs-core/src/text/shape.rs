@@ -34,6 +34,15 @@ pub struct ShapedGlyph {
     pub font_size: f32,
     /// Glyph origin x, relative to the block left (points).
     pub x: f32,
+    /// Advance width (points).
+    pub advance: f32,
+    /// Shaping offsets from the pen position (points; `y_offset` positive is
+    /// up, as in OpenType). Non-zero mainly for marks/accents.
+    pub x_offset: f32,
+    pub y_offset: f32,
+    /// Byte range of the glyph's cluster in the source `content`, used by
+    /// vector backends to map glyphs back to text (PDF copy/paste).
+    pub text_range: std::ops::Range<usize>,
 }
 
 /// Shape `text` under `max_width` (points). A non-finite or non-positive width
@@ -67,10 +76,20 @@ pub fn shape(
     buffer.set_text(&text.content, attrs, Shaping::Advanced);
     buffer.shape_until_scroll(false);
 
+    // Glyph `start`/`end` are relative to their buffer line (paragraph); turn
+    // them into offsets into the whole `content`.
+    let mut line_starts = Vec::with_capacity(buffer.lines.len());
+    let mut acc = 0usize;
+    for line in &buffer.lines {
+        line_starts.push(acc);
+        acc += line.text().len() + line.ending().as_str().len();
+    }
+
     let mut lines = Vec::new();
     let mut max_w = 0.0f32;
     for run in buffer.layout_runs() {
         max_w = max_w.max(run.line_w);
+        let base = line_starts.get(run.line_i).copied().unwrap_or(0);
         let glyphs = run
             .glyphs
             .iter()
@@ -79,6 +98,10 @@ pub fn shape(
                 glyph_id: g.glyph_id,
                 font_size: g.font_size,
                 x: g.x,
+                advance: g.w,
+                x_offset: g.x_offset * g.font_size,
+                y_offset: g.y_offset * g.font_size,
+                text_range: base + g.start..base + g.end,
             })
             .collect();
         lines.push(ShapedLine {
