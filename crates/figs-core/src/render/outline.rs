@@ -91,7 +91,13 @@ impl OutlineCache {
                     continue;
                 };
                 let k = g.font_size / outline.units_per_em;
-                let map = |p: Point| Point::new(origin.x + p.x * k, origin.y - p.y * k);
+                let shear = if g.synthetic_italic {
+                    geometry::italic_shear()
+                } else {
+                    0.0
+                };
+                let map =
+                    |p: Point| Point::new(origin.x + (p.x + shear * p.y) * k, origin.y - p.y * k);
                 out.extend(outline.segments.iter().map(|s| match *s {
                     PathSegment::MoveTo(p) => PathSegment::MoveTo(map(p)),
                     PathSegment::LineTo(p) => PathSegment::LineTo(map(p)),

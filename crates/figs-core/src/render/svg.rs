@@ -36,9 +36,10 @@ use std::path::Path;
 
 use crate::geom::{
     Affine, Brush, Color, ImageFit, LineCap, LineJoin, PathSegment, Point, Rect, StrokeStyle,
+    TextAlign,
 };
 use crate::layout::{ClipRegion, ComputedLayout, PageGeom, PathPaint, TextBox};
-use crate::text::FontStore;
+use crate::text::{DecorationKind, FontStore, ShapedText};
 
 use super::geometry;
 use super::outline::OutlineCache;
@@ -117,6 +118,19 @@ impl<'a> SvgRenderer<'a> {
         });
         self.glyphs.insert((face, gid), entry.clone());
         entry
+    }
+
+    /// `<rect>`s for the `kind` decoration bars of a shaped text box.
+    fn decorations(
+        &mut self,
+        shaped: &ShapedText,
+        rect: Rect,
+        align: TextAlign,
+        kind: DecorationKind,
+    ) {
+        for (r, color) in geometry::decoration_rects(shaped, rect, align, kind) {
+            self.rect_element(r, Some(&Brush::Solid(color)), None, 0.0);
+        }
     }
 
     /// Write an image element (and its clip, for `cover`). Returns false when
@@ -576,7 +590,10 @@ impl Renderer for SvgRenderer<'_> {
                 self.body.push_str(&el);
             }
         }
-        let mut uses = String::new();
+        self.decorations(&shaped, rect, text.align, DecorationKind::Underline);
+        // (fill colour, `<use>` element) per drawn glyph.
+        let mut uses: Vec<(Color, String)> = Vec::new();
+        let shear = geometry::italic_shear();
         for line in &shaped.lines {
             let align_off = geometry::align_offset(text.align, line.width, rect.w);
             let baseline = rect.y + line.baseline;
@@ -584,31 +601,54 @@ impl Renderer for SvgRenderer<'_> {
                 let Some((id, upem)) = self.glyph_def(fonts, g.font_id, g.glyph_id) else {
                     continue;
                 };
-                // Font units (y up) -> points (y down) at the pen position.
-                let s = fmt_decimals(g.font_size / upem, 7);
+                // Font units (y up) -> points (y down) at the pen position;
+                // a synthetic italic adds the shear `x += t·y`.
+                let k = g.font_size / upem;
+                let s = fmt_decimals(k, 7);
+                let c = if g.synthetic_italic {
+                    fmt_decimals(k * shear, 7)
+                } else {
+                    "0".to_string()
+                };
                 let x = num(rect.x + align_off + g.x + g.x_offset);
                 let y = num(baseline - g.y_offset);
-                let _ = writeln!(
-                    uses,
-                    "<use xlink:href=\"#{id}\" transform=\"matrix({s} 0 0 -{s} {x} {y})\"/>"
-                );
+                uses.push((
+                    g.color,
+                    format!(
+                        "<use xlink:href=\"#{id}\" transform=\"matrix({s} 0 {c} -{s} {x} {y})\"/>\n"
+                    ),
+                ));
             }
         }
-        if uses.is_empty() {
-            return;
+        if !uses.is_empty() {
+            let fill = |c: Color| {
+                let mut a = format!(" fill=\"{}\"", hex(c));
+                if c.a < 1.0 {
+                    let _ = write!(a, " fill-opacity=\"{}\"", num(c.a.max(0.0)));
+                }
+                a
+            };
+            let label = escape_attr(&text.content);
+            if uses.iter().all(|(c, _)| *c == uses[0].0) {
+                // One colour: a single group carries label and fill.
+                let _ = writeln!(self.body, "<g aria-label=\"{label}\"{}>", fill(uses[0].0));
+                for (_, u) in &uses {
+                    self.body.push_str(u);
+                }
+            } else {
+                // Rich text: one labelled group, a fill group per colour run.
+                let _ = writeln!(self.body, "<g aria-label=\"{label}\">");
+                for chunk in uses.chunk_by(|a, b| a.0 == b.0) {
+                    let _ = writeln!(self.body, "<g{}>", fill(chunk[0].0));
+                    for (_, u) in chunk {
+                        self.body.push_str(u);
+                    }
+                    self.body.push_str("</g>\n");
+                }
+            }
+            self.body.push_str("</g>\n");
         }
-        let mut g = format!(
-            "<g aria-label=\"{}\" fill=\"{}\"",
-            escape_attr(&text.content),
-            hex(text.color)
-        );
-        if text.color.a < 1.0 {
-            let _ = write!(g, " fill-opacity=\"{}\"", num(text.color.a.max(0.0)));
-        }
-        g.push_str(">\n");
-        self.body.push_str(&g);
-        self.body.push_str(&uses);
-        self.body.push_str("</g>\n");
+        self.decorations(&shaped, rect, text.align, DecorationKind::Strike);
     }
 
     fn draw_image(&mut self, rect: Rect, src: &Path, fit: ImageFit) {

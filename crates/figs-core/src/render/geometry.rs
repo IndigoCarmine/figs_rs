@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use crate::geom::{Color, ImageFit, PathSegment, Point, Rect, TextAlign};
 use crate::layout::TextBox;
 use crate::schema::TextProps;
+use crate::text::{DecorationKind, ShapedText};
 
 /// Cubic control-point factor for a quarter-circle approximation.
 pub const KAPPA: f32 = 0.552_284_8;
@@ -107,7 +108,46 @@ pub fn text_props(text: &TextBox) -> TextProps {
         align: text.align,
         line_height: text.line_height,
         stroke: text.stroke.clone(),
+        font_style: text.font_style,
+        underline: text.underline,
+        strike: text.strike,
+        letter_spacing: text.letter_spacing,
+        spans: text.spans.clone(),
     }
+}
+
+/// The `kind` bars (underline / line-through) of `shaped` placed in a text
+/// box at `rect` (page points): one filled rectangle per decoration, with its
+/// colour. Backends fill underlines before the glyphs and line-throughs after.
+pub fn decoration_rects(
+    shaped: &ShapedText,
+    rect: Rect,
+    align: TextAlign,
+    kind: DecorationKind,
+) -> Vec<(Rect, Color)> {
+    shaped
+        .decorations
+        .iter()
+        .filter(|d| d.kind == kind)
+        .filter_map(|d| {
+            let line = shaped.lines.get(d.line)?;
+            let off = align_offset(align, line.width, rect.w);
+            let r = Rect::new(
+                rect.x + off + d.x,
+                rect.y + d.y - d.thickness / 2.0,
+                d.width,
+                d.thickness,
+            );
+            (r.w > 0.0 && r.h > 0.0).then_some((r, d.color))
+        })
+        .collect()
+}
+
+/// `tan` of the synthetic-italic slant: a glyph point `h` above the baseline
+/// moves `h × italic_shear()` to the right (every backend uses this one value;
+/// swash's raster fake italic uses the same angle).
+pub fn italic_shear() -> f32 {
+    crate::schema::span::SYNTHETIC_ITALIC_DEG.to_radians().tan()
 }
 
 /// Where an image of `iw`×`ih` pixels lands for a node `rect` under `fit`.

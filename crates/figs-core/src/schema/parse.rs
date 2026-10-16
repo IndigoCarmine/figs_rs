@@ -15,6 +15,8 @@ use crate::geom::{
 };
 use crate::units::Unit;
 
+use super::span::{FontStyle, RawSpan};
+
 /// `skip_serializing_if` helper for `f32` fields whose clean default is zero.
 fn is_zero_f32(v: &f32) -> bool {
     *v == 0.0
@@ -128,8 +130,13 @@ pub struct RawPage {
     /// [`crate::paint`]). White when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background: Option<Paint>,
-    /// Default font family for text nodes that don't name one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Default font family list for text nodes that don't name one: a string
+    /// (`"Arial, Yu Gothic"`) or an array of names (see [`RawNode::font_family`]).
+    #[serde(
+        default,
+        deserialize_with = "super::span::family_list_opt",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub font_family: Option<String>,
 }
 
@@ -244,10 +251,34 @@ pub struct RawNode {
     /// Font size in points (never affected by the page unit).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub font_size: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Ordered font-family list, authoritative per character: each character
+    /// uses the first listed family that has a glyph for it (`"Arial, Yu
+    /// Gothic"` sets Latin in Arial and Japanese in Yu Gothic). A string with
+    /// comma-separated names or an array of names; stored comma-joined.
+    #[serde(
+        default,
+        deserialize_with = "super::span::family_list_opt",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub font_family: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub font_weight: Option<u16>,
+    /// `normal` / `italic` (a real italic face when the family has one, else
+    /// a synthesized slant).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_style: Option<FontStyle>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub underline: bool,
+    /// Line-through.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub strike: bool,
+    /// Tracking: extra space after every character, in em of the font size
+    /// (`0.1` = a tenth of the size). Spans may override it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub letter_spacing: Option<f32>,
+    /// Inline rich-text runs appended after `content` (see [`RawSpan`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spans: Vec<RawSpan>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<Color>,
     #[serde(skip_serializing_if = "Option::is_none")]

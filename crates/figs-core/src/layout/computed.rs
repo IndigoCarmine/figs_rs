@@ -233,9 +233,24 @@ impl PathPaint {
 }
 
 /// Resolved text ready to be shaped/painted within its node rect.
+///
+/// Backends shape it with [`crate::text::FontStore::shape`] (the same call
+/// layout measured with, so the geometry is identical) and paint the result:
+/// every [`crate::text::ShapedGlyph`] carries its own face, size, colour,
+/// baseline shift (folded into `y_offset`) and synthetic-italic flag, and
+/// [`crate::text::ShapedText::decorations`] lists the underline /
+/// line-through bars.
 #[derive(Debug, Clone)]
 pub struct TextBox {
+    /// Full text (`content` + every span's text).
     pub content: String,
+    /// Inline style overrides over byte ranges of `content`.
+    pub spans: Vec<crate::schema::TextSpan>,
+    pub font_style: crate::schema::FontStyle,
+    pub underline: bool,
+    pub strike: bool,
+    /// Tracking, em of the font size.
+    pub letter_spacing: f32,
     pub font_size: f32,
     pub font_family: Option<String>,
     pub font_weight: Option<u16>,
