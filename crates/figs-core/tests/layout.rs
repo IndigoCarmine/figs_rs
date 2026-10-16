@@ -1176,3 +1176,111 @@ fn auto_height_centered_column_image_fills_width() {
         l.page.height_pt
     );
 }
+
+/// `stretch` only stretches children whose cross size is unconstrained: an
+/// explicit `width` in a column (`height` in a row) wins, and the child sits
+/// at the cross start, after its margin (CSS `align-items: stretch`).
+#[test]
+fn explicit_cross_size_wins_over_stretch() {
+    let l = lay(r##"
+        [page]
+        width = 200
+        height = 200
+        unit = "pt"
+        root = "col"
+        [nodes.col]
+        type = "column"
+        padding = 10
+        spacing = 5
+        cross_axis_alignment = "stretch"
+        children = ["fixed", "free", "turned", "inner"]
+        [nodes.fixed]
+        type = "rect"
+        width = 60
+        height = 20
+        margin = { left = 15 }
+        [nodes.free]
+        type = "rect"
+        height = 20
+        margin = { left = 15 }
+        [nodes.turned]
+        type = "rect"
+        width = 10
+        height = 40
+        rotate = 90
+        [nodes.inner]
+        type = "row"
+        width = 100
+        height = 20
+        cross_axis_alignment = "stretch"
+        children = ["a", "b"]
+        [nodes.a]
+        type = "rect"
+        flex = 1
+        [nodes.b]
+        type = "rect"
+        flex = 1
+    "##);
+    assert_rect(rect_of(&l, "fixed"), 25.0, 10.0, 60.0, 20.0);
+    assert_rect(rect_of(&l, "free"), 25.0, 35.0, 165.0, 20.0);
+    // A quarter-turned child's footprint width is its own height: 40, kept.
+    let turned = l.nodes.iter().find(|n| n.id == "turned").unwrap().bounds();
+    assert_rect(turned, 10.0, 60.0, 40.0, 10.0);
+    // The kept width is the one its children are laid out in.
+    assert_rect(rect_of(&l, "inner"), 10.0, 75.0, 100.0, 20.0);
+    assert_rect(rect_of(&l, "a"), 10.0, 75.0, 50.0, 20.0);
+    assert_rect(rect_of(&l, "b"), 60.0, 75.0, 50.0, 20.0);
+}
+
+#[test]
+fn explicit_height_wins_over_stretch_in_a_row() {
+    let l = lay(r##"
+        [page]
+        width = 200
+        height = 100
+        unit = "pt"
+        root = "row"
+        [nodes.row]
+        type = "row"
+        cross_axis_alignment = "stretch"
+        children = ["fixed", "free"]
+        [nodes.fixed]
+        type = "rect"
+        width = 50
+        height = 30
+        margin = { top = 4 }
+        [nodes.free]
+        type = "rect"
+        width = 50
+    "##);
+    assert_rect(rect_of(&l, "fixed"), 0.0, 4.0, 50.0, 30.0);
+    assert_rect(rect_of(&l, "free"), 50.0, 0.0, 50.0, 100.0);
+}
+
+/// The same on an auto-height page, where measure hands stretched children
+/// a tight width: an explicit width is not tightened there either (it
+/// decides the aspect height, and so the page height).
+#[test]
+fn explicit_width_wins_over_stretch_when_measuring() {
+    let l = lay(r##"
+        [page]
+        width = 200
+        height = "auto"
+        unit = "pt"
+        root = "col"
+        [nodes.col]
+        type = "column"
+        cross_axis_alignment = "stretch"
+        children = ["box"]
+        [nodes.box]
+        type = "rect"
+        width = 40
+        aspect_ratio = 2.0
+    "##);
+    assert_rect(rect_of(&l, "box"), 0.0, 0.0, 40.0, 20.0);
+    assert!(
+        (l.page.height_pt - 20.0).abs() < 0.01,
+        "{}",
+        l.page.height_pt
+    );
+}

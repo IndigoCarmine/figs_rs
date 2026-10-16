@@ -290,7 +290,7 @@ fn baseline_slot_and_node_kind_are_checked() {
         anchor = [0, "baseline"]
     "#;
     let e = Document::from_toml(rect).unwrap_err().to_string();
-    assert!(e.contains("only a text node has a baseline"), "{e}");
+    assert!(e.contains("only a text node or a column/row/stack"), "{e}");
 }
 
 #[test]
@@ -452,4 +452,243 @@ fn script_baseline_setters_round_trip() {
     ] {
         assert!(eval_script(bad).is_err(), "{bad}");
     }
+}
+
+// ---- container baselines ----
+
+/// The first / last baseline of laid-out text node `id`, on the page.
+fn page_baselines(fs: &FontStore, l: &ComputedLayout, id: &str) -> (f32, f32) {
+    let t = node(l, id);
+    let (a, b) = baselines(fs, t);
+    (t.rect.y + a, t.rect.y + b)
+}
+
+/// A 300 x 300 pt stack holding container `c` (with `extra` keys) of: a
+/// 12 pt rect (no baseline), text `a` (two lines) and text `b`.
+fn container_page(fam: &str, kind: &str, extra: &str) -> String {
+    format!(
+        r##"
+        [page]
+        width = 300
+        height = 300
+        unit = "pt"
+        root = "s"
+        [nodes.s]
+        type = "stack"
+        children = ["c"]
+        [nodes.c]
+        type = "{kind}"
+        children = ["r", "a", "b"]
+        {extra}
+        [nodes.r]
+        type = "rect"
+        width = 12
+        height = 12
+        [nodes.a]
+        type = "text"
+        content = "Alpha\nbeta"
+        font_family = "{fam}"
+        font_size = 14
+        [nodes.b]
+        type = "text"
+        content = "Gamma"
+        font_family = "{fam}"
+        font_size = 24
+        "##
+    )
+}
+
+#[test]
+fn a_column_has_the_baselines_of_its_first_and_last_text() {
+    let fs = FontStore::new();
+    let Some(fam) = installed(&fs).first().copied() else {
+        eprintln!("no candidate family installed; skipping");
+        return;
+    };
+    // The rect before the texts has no baseline: `a` gives the first.
+    let first = container_page(
+        fam,
+        "column",
+        r#"padding = 7
+        spacing = 3
+        x = 40
+        y = 100
+        anchor = [0, "baseline"]"#,
+    );
+    let l = layout(&Document::from_toml(&first).unwrap(), &fs);
+    assert!((page_baselines(&fs, &l, "a").0 - 100.0).abs() < 1e-3);
+    assert!((node(&l, "c").rect.x - 40.0).abs() < 1e-3);
+    // The last baseline is the last text's (`b`), centred columns too.
+    let last = container_page(
+        fam,
+        "column",
+        r#"spacing = 3
+        main_axis_alignment = "center"
+        height = 200
+        x = 40
+        y = 250
+        anchor = [0, "last_baseline"]"#,
+    );
+    let l = layout(&Document::from_toml(&last).unwrap(), &fs);
+    assert!((page_baselines(&fs, &l, "b").1 - 250.0).abs() < 1e-3);
+}
+
+#[test]
+fn a_row_and_a_stack_have_the_baseline_of_their_first_text() {
+    let fs = FontStore::new();
+    let Some(fam) = installed(&fs).first().copied() else {
+        eprintln!("no candidate family installed; skipping");
+        return;
+    };
+    for (kind, extra) in [
+        ("row", r#"cross_axis_alignment = "center""#),
+        ("row", r#"cross_axis_alignment = "baseline""#),
+        ("stack", ""),
+    ] {
+        let src = container_page(
+            fam,
+            kind,
+            &format!(
+                r#"{extra}
+                padding = 5
+                x = 20
+                y = 150
+                anchor = [0, "baseline"]"#
+            ),
+        );
+        let l = layout(&Document::from_toml(&src).unwrap(), &fs);
+        let a = page_baselines(&fs, &l, "a").0;
+        assert!((a - 150.0).abs() < 1e-3, "{kind} {extra}: {a}");
+        if extra.contains("baseline") {
+            // A baseline row: every text on that line.
+            assert!((page_baselines(&fs, &l, "b").0 - 150.0).abs() < 1e-3);
+        }
+    }
+}
+
+#[test]
+fn containers_take_part_in_baseline_rows() {
+    // A row of a label and a column of two lines (a list item): the
+    // column's first line shares the label's baseline.
+    let fs = FontStore::new();
+    let Some(fam) = installed(&fs).first().copied() else {
+        eprintln!("no candidate family installed; skipping");
+        return;
+    };
+    let src = format!(
+        r##"
+        [page]
+        width = 300
+        height = 200
+        unit = "pt"
+        root = "row"
+        [nodes.row]
+        type = "row"
+        spacing = 4
+        cross_axis_alignment = "baseline"
+        children = ["mark", "item"]
+        [nodes.mark]
+        type = "text"
+        content = "•"
+        font_family = "{fam}"
+        font_size = 30
+        [nodes.item]
+        type = "column"
+        padding = {{ top = 6 }}
+        children = ["l1", "l2"]
+        [nodes.l1]
+        type = "text"
+        content = "first line"
+        font_family = "{fam}"
+        font_size = 12
+        [nodes.l2]
+        type = "text"
+        content = "second line"
+        font_family = "{fam}"
+        font_size = 12
+        "##
+    );
+    let l = layout(&Document::from_toml(&src).unwrap(), &fs);
+    let mark = page_baselines(&fs, &l, "mark").0;
+    let line = page_baselines(&fs, &l, "l1").0;
+    assert!((mark - line).abs() < 1e-3, "{mark} vs {line}");
+}
+
+#[test]
+fn a_quarter_turned_container_anchors_its_baseline_on_x() {
+    let fs = FontStore::new();
+    let Some(fam) = installed(&fs).first().copied() else {
+        eprintln!("no candidate family installed; skipping");
+        return;
+    };
+    let src = container_page(
+        fam,
+        "column",
+        r#"rotate = -90
+        x = 60
+        y = 200
+        anchor = ["baseline", 1]"#,
+    );
+    let l = layout(&Document::from_toml(&src).unwrap(), &fs);
+    // Reading upwards: the first baseline of `a` (in the column's frame) is
+    // the vertical line x = 60 on the page.
+    let a = node(&l, "a");
+    let (first, _) = baselines(&fs, a);
+    let p = a
+        .transform
+        .unwrap()
+        .apply(Point::new(a.rect.x, a.rect.y + first));
+    assert!((p.x - 60.0).abs() < 1e-3, "{p:?}");
+    let c = node(&l, "c").bounds();
+    assert!((c.y + c.h - 200.0).abs() < 1e-3, "{c:?}");
+}
+
+#[test]
+fn a_container_without_text_sits_on_its_bottom_edge() {
+    let src = r##"
+        [page]
+        width = 100
+        height = 100
+        unit = "pt"
+        root = "s"
+        [nodes.s]
+        type = "stack"
+        children = ["c"]
+        [nodes.c]
+        type = "column"
+        x = 10
+        y = 50
+        anchor = [0, "baseline"]
+        children = ["r"]
+        [nodes.r]
+        type = "rect"
+        width = 20
+        height = 30
+    "##;
+    let l = layout(&Document::from_toml(src).unwrap(), &NullMeasurer);
+    assert_eq!(node(&l, "c").rect, Rect::new(10.0, 20.0, 20.0, 30.0));
+}
+
+#[test]
+fn script_at_baseline_places_a_container() {
+    let fs = FontStore::new();
+    let Some(fam) = installed(&fs).first().copied() else {
+        eprintln!("no candidate family installed; skipping");
+        return;
+    };
+    let src = format!(
+        r#"page(300, 200, stack([
+            col([text("one").font("{fam}").size(18), text("two").font("{fam}").size(18)])
+                .pad(4).at_baseline(30, 120),
+        ])).unit("pt")"#
+    );
+    let l = layout(&Document::from_script(&src).unwrap(), &fs);
+    let t = l
+        .nodes
+        .iter()
+        .find(|n| matches!(&n.content, PaintContent::Text(t) if t.content == "one"))
+        .unwrap();
+    let (first, _) = baselines(&fs, t);
+    assert!((t.rect.y + first - 120.0).abs() < 1e-3);
+    assert!((t.rect.x - 34.0).abs() < 1e-3, "pad 4 from x = 30");
 }

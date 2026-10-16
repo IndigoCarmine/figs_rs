@@ -61,12 +61,15 @@ You provide: hierarchy, style, content, and constraints (`flex`, `aspect_ratio`,
   (`[vertical, horizontal]`, `[top, horizontal, bottom]`,
   `[top, right, bottom, left]`). `x`/`y` are only read by a `stack` parent (see
   below); under `column`/`row` and on the root they are ignored. A text's
-  `anchor` may name its baseline: `anchor = [0, "baseline"]` (see
-  [Baselines](#baselines)).
+  (or a column/row/stack's) `anchor` may name its baseline:
+  `anchor = [0, "baseline"]` (see [Baselines](#baselines)).
 - **Container** (`column`/`row`): `children`, `spacing`, `main_axis_alignment`
   (`start`/`center`/`end`/`space_between`/`space_around`/`space_evenly`),
   `cross_axis_alignment` (`start`/`center`/`end`/`stretch`/`baseline` — rows
-  only, see [Baselines](#baselines)).
+  only, see [Baselines](#baselines)). `stretch` fills the cross axis only
+  for children whose cross size is unconstrained: a child with its own
+  `width` (in a column; `height` in a row) keeps it and sits at the start,
+  after its margin, as with CSS `align-items: stretch`.
 - **stack**: `children`, `viewbox` (plus the shared `padding`).
 - **Decoration** (`column`/`row`/`stack`): `fill` (colour or gradient),
   `stroke`, `stroke_width`, `stroke_align`, `corner_radius` (alias `radius`),
@@ -78,7 +81,9 @@ You provide: hierarchy, style, content, and constraints (`flex`, `aspect_ratio`,
   `font_style` (`normal`/`italic`), `color`, `align`, `line_height` (multiple
   of font size), `letter_spacing` (em), `underline`, `strike`, inline `spans`
   (see [Rich text](#rich-text-spans)), `wrap` (`false`: never wrap — see
-  [Unwrapped text](#unwrapped-text-wrap--false)), and an outline: `stroke`,
+  [Unwrapped text](#unwrapped-text-wrap--false)), `fit_width`
+  (`"tracking"`/`"scale"`: each line exactly as wide as the box — see
+  [Fitting a line to its box](#fitting-a-line-to-its-box-fit_width)), and an outline: `stroke`,
   `stroke_width`, `join` (see [Text outline](#text-outline)); typography
   switches `script_metrics`, `font_synthesis`, `synthetic_bold_width`,
   `synthetic_slant` (also on `[page]`, see
@@ -660,7 +665,31 @@ so it goes in the slot *across* the baseline: `y` for upright and `180°`
 text, `x` for a quarter-turned one — `rotate = -90, anchor = ["baseline", 1]`
 is a label reading upwards with its baseline on `x` and its start at `y`.
 (A paint-only angle uses the unrotated box.) Anything else is an error: a
-baseline in the wrong slot, in both, or on a non-text node.
+baseline in the wrong slot, in both, or on a node that can't have one (a
+rect, image, shape).
+
+**Containers have baselines too** (CSS inline-block, Flutter
+`RenderFlex.computeDistanceToActualBaseline`): a `column`, `row` or `stack`
+reports the **first baseline of its first child** (in `children` order) that
+has one, and the **last baseline of its last child** that has one, offset by
+where layout puts that child — padding, spacing, main-axis alignment, a
+`contain` stack's shrunken box included. In a baseline-aligned row every
+text shares that line; otherwise it is the first text child's. Nesting
+works (a column of rows of texts), and children without a baseline (rects,
+images, containers with no text inside) are skipped. A container with no
+text anywhere has none: anchored by `"baseline"` it sits on its bottom edge,
+as in a baseline row. So a list can be put on a spec baseline by its first
+line, `bullets(..).at_baseline(4, 11.6)`, and a row of a label and a
+multi-line block aligns the label with the block's first line under
+`cross("baseline")`.
+
+Rotation works as for text, on the container as a whole: its baseline is
+found in its own (unrotated) frame and turns with it, so a quarter-turned
+column anchors with `["baseline", ay]` and `.at_baseline` works for any
+quarter turn. Inside the container, only children whose baseline runs
+horizontally *in the container's frame* count — a child turned a quarter
+turn inside it is skipped, like a quarter-turned text in a baseline row; a
+paint-only angle (child or container) uses the unrotated box.
 
 In scripts, `.anchor(0.5, "last_baseline")`, or `.at_baseline(x, y)`: the
 **pen origin** of the first line (left end of its baseline) at (`x`, `y`)
@@ -669,10 +698,10 @@ for any quarter turn — the anchor is derived from the node's final `rotate`
 `["baseline", 1]` at `-90`).
 
 `cross_axis_alignment = "baseline"` (script: `.cross("baseline")`) lines up
-the **first baselines** of a row's texts — mixed fonts and sizes share one
+the **first baselines** of a row's children — mixed fonts and sizes share one
 line, placed as low as the child reaching furthest above it needs; the row
 measures as the tallest part above plus the tallest part below. A child
-without a horizontal baseline (not text, or quarter-turned text) sits on it
+without a horizontal baseline (no text inside, or quarter-turned) sits on it
 with its bottom edge. In a column it acts as `start`.
 
 #### Unwrapped text (`wrap = false`)
@@ -687,6 +716,41 @@ breaks between words, and inside a word only when the word alone is wider
 than the box, which is what used to inflate a rotated label's footprint).
 
 See [`examples/baselines_strokes.figs`](examples/baselines_strokes.figs).
+
+#### Fitting a line to its box (`fit_width`)
+
+When a layout is reproduced with a substitute font — or the original's
+advance widths differ slightly from the installed face — a title set at the
+right size still ends a few millimetres short or long. `fit_width` makes
+**every line exactly as wide as the text's box**:
+
+```toml
+[nodes.title]
+type = "text"
+content = "Fictional Society Annual Meeting"
+font_size = 80
+width = 63.7          # the drawn width
+fit_width = "tracking" # or "scale"
+```
+
+- `"tracking"`: the same extra letter spacing (positive or negative) after
+  every character but the last, like `letter_spacing` — the first glyph
+  starts at the left edge, the last one ends at the right edge; sizes and
+  line height are unchanged.
+- `"scale"`: the line is scaled uniformly — font size, tracking, baseline
+  shifts and its line box together — so glyphs keep their shape; the box
+  grows or shrinks in height with it.
+- A fitted text **never wraps**: each paragraph (`\n`) is one line, fitted on
+  its own (so every line of a two-line title spans the box). `align` no longer
+  matters.
+- The box width is an explicit `width`, or one the parent imposes (a
+  stretched column, a filling stack child, a flex share). A text sized by its
+  content is left exactly as it is.
+- It is done in shaping, so layout (the box height of `"scale"`, baselines)
+  and PNG, PDF (still real text) and SVG all use the same glyph positions.
+
+In scripts: `.fit_width()` (tracking) or `.fit_width("scale")`, with
+`.width(w)`. See [`examples/fine_layout.figs`](examples/fine_layout.figs).
 
 ### Rotation
 
@@ -964,7 +1028,8 @@ setters:
   [User coordinates](#user-coordinates-viewbox--anchors) and
   [Baselines](#baselines).
 - **offset** (read by a `stack` parent): `.at(x, y)`, `.x(n)`, `.y(n)` — e.g.
-  `stack([image("a.png"), text("(a)").at(0.2, 0.2)])`; on text,
+  `stack([image("a.png"), text("(a)").at(0.2, 0.2)])`; on text (or a
+  `col`/`row`/`stack`, by the first baseline of the text inside),
   `.at_baseline(x, y)` puts the left end of the first baseline there (any
   quarter turn).
 - **text**: `.size(n)`, `.weight(n)` / `.bold()`, `.italic()`, `.color(hex)`,
@@ -974,6 +1039,8 @@ setters:
   `.synthetic_slant(deg)`,
   `.align("left"|"center"|"right"|"justify")` / `.center()`, `.line_height(n)`,
   `.nowrap()` / `.wrap(bool)` (see [Unwrapped text](#unwrapped-text-wrap--false)),
+  `.fit_width()` / `.fit_width("scale")` (see
+  [Fitting a line to its box](#fitting-a-line-to-its-box-fit_width)),
   and an outline painted behind the glyphs: `.stroke(hex)`, `.stroke_width(n)`,
   `.join("round"|"miter"|"bevel")` (see [Text outline](#text-outline)).
   Rich text: `text([span("ΔG"), span("300K").sub(), …])` (see
@@ -1003,6 +1070,7 @@ setters:
   see [Curves](#curves).
 - **image**: `.fit("contain"|"cover"|"fill")`, `.smooth(false)`.
 - **page**: `.unit("cm"|…)`, `.background(hex | gradient)`, `.dpi(n)`,
+  `.min_stroke_px(px)` (see [Output formats](#output-formats)),
   `.font(name | list | #{ latin, cjk, symbol, fallback })`, and the text
   defaults `.scripts(..)`, `.font_synthesis(..)`, `.synthetic_bold_width(em)`,
   `.synthetic_slant(deg)`.
@@ -1685,12 +1753,19 @@ Modeled on Flutter's `BoxConstraints`/`RenderFlex`:
   sit flush with the box edge — the box is the font's metrics, with no extra
   padding; add `spacing`/`pad` for breathing room. With [spans](#rich-text-spans)
   each line box follows its largest run; super/subscripts count at their base
-  size, unshifted. `wrap = false` text measures at its natural width.
+  size, unshifted. `wrap = false` text measures at its natural width. A text
+  with an explicit `width` is wrapped (measured) at that width, as it is
+  drawn.
 - **baselines**: the measurer also reports a text block's first/last baseline
   (`LeafMeasure::text_baselines`, shaped at the box width; a measurer without
-  fonts falls back to a 0.8 / 0.2 em ascent/descent with half-leading). Stacks
-  use it for baseline anchors and rows for `cross_axis_alignment = "baseline"`,
-  in measure and arrange alike. See [Baselines](#baselines).
+  fonts falls back to a 0.8 / 0.2 em ascent/descent with half-leading). A
+  container's baseline is its child's, found by laying its children out at
+  its size (the same slot computation arrange uses). Stacks use them for
+  baseline anchors and rows for `cross_axis_alignment = "baseline"`, in
+  measure and arrange alike. See [Baselines](#baselines).
+- **stretch**: a stretched cross axis is handed to a child (tight, in measure
+  and arrange) only when the child has no explicit size on it; a sized child
+  keeps its size and is placed at the start.
 
 ## Output formats
 
@@ -1729,6 +1804,19 @@ the vector formats keep that exactness at any zoom.
   MediaBox is exactly `page.width × page.height` pt.
 - `dpi` only affects PNG (and caps the resolution of shadow rasters embedded in
   PDF/SVG, at most 300 dpi).
+- **Hairlines.** PDF viewers draw every stroke at least one device pixel wide,
+  so a 0.25 pt border is a crisp line at any zoom; a raster at 100 dpi
+  anti-aliases it into a faint 0.35 px smear. `[page] min_stroke_px = 1`
+  (Rhai `page(..).min_stroke_px(1)`, or `figs build … --min-stroke-px 1`,
+  which overrides the page) makes the PNG backend (and the editor preview)
+  draw every shape stroke — rect, ellipse, line/arrow/path, container border
+  — at least that many pixels wide at the page `dpi`. The widening is applied
+  to the layout before painting, so an inside/outside-aligned border keeps
+  its outer/inner edge on the outline, and shadows follow it. Glyph outlines
+  (text `stroke`, synthetic bold) and filled shapes (e.g. table rules drawn
+  as thin rects) are not touched. Default `0`: exact widths. PDF and SVG
+  always keep the exact width — there is no portable way to ask a PDF viewer
+  for a minimum (it applies its own), and SVG's `vector-effect` has none.
 - **Rotation** is applied per node from the IR transform: PNG draws through a
   tiny-skia `Transform` (rotated text is filled from glyph outlines, since glyph
   bitmaps only blit upright), PDF wraps the node in `q … cm … Q` (rotated text

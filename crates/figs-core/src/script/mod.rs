@@ -273,6 +273,7 @@ fn blank_node(kind: NodeKind) -> RawNode {
         align: None,
         line_height: None,
         wrap: None,
+        fit_width: None,
         script_metrics: None,
         font_synthesis: None,
         synthetic_bold_width: None,
@@ -490,6 +491,7 @@ fn page_fn(
             font_synthesis: None,
             synthetic_bold_width: None,
             synthetic_slant: None,
+            min_stroke_px: None,
         },
         root,
     })
@@ -618,6 +620,19 @@ fn baseline_origin_anchor(rotate: f32) -> [AnchorValue; 2] {
         // Upright, or a paint-only angle (the unrotated box counts).
         _ => [f(0.0), b],
     }
+}
+
+/// `.fit_width(mode)` on a text node.
+fn fit_width_setter(n: ScriptNode, mode: &str) -> NodeResult {
+    if n.node.kind != NodeKind::Text {
+        return Err(err("`fit_width` applies to a text node"));
+    }
+    let fit = crate::schema::FitWidth::parse(mode).ok_or_else(|| {
+        err(format!(
+            r#"`fit_width`: unknown mode `{mode}` ("tracking", "scale")"#
+        ))
+    })?;
+    Ok(set_node(n, |r| r.fit_width = Some(fit)))
 }
 
 /// Validate a built gradient, reporting under the builder's name.
@@ -898,13 +913,19 @@ fn build_engine(base_dir: Option<&Path>) -> Engine {
             Ok(set_node(n, |r| r.anchor = Some(a)))
         },
     );
-    // Place a text by the left end of its first baseline (its pen origin),
-    // whatever its rotation.
+    // Place a text (or a container, by the first baseline of a text inside)
+    // by the left end of its first baseline (its pen origin), whatever its
+    // rotation.
     engine.register_fn(
         "at_baseline",
         |ctx: NativeCallContext, mut n: ScriptNode, x: Dynamic, y: Dynamic| -> NodeResult {
-            if n.node.kind != NodeKind::Text {
-                return Err(err("`at_baseline` applies to a text node"));
+            if !matches!(
+                n.node.kind,
+                NodeKind::Text | NodeKind::Column | NodeKind::Row | NodeKind::Stack
+            ) {
+                return Err(err(
+                    "`at_baseline` applies to a text node or a col/row/stack",
+                ));
             }
             let [x, y] = nums("at_baseline", "x, y", [x, y])?;
             let site = sites::RawSite::here(&ctx, "at_baseline");
@@ -1078,6 +1099,14 @@ fn build_engine(base_dir: Option<&Path>) -> Engine {
             return Err(err("`wrap` applies to a text node"));
         }
         Ok(set_node(n, |r| r.wrap = Some(on)))
+    });
+    // Fit each line to the box width: `.fit_width()` adjusts the letter
+    // spacing, `.fit_width("scale")` the size.
+    engine.register_fn("fit_width", |n: ScriptNode| -> NodeResult {
+        fit_width_setter(n, "tracking")
+    });
+    engine.register_fn("fit_width", |n: ScriptNode, mode: &str| -> NodeResult {
+        fit_width_setter(n, mode)
     });
     reg_enum(&mut engine, "cap", parse_cap, |r, v| r.cap = Some(v));
     // Outline corner join (shapes and text strokes).
@@ -1266,6 +1295,16 @@ fn build_engine(base_dir: Option<&Path>) -> Engine {
     engine.register_fn("font", |d: ScriptDoc, s: &str| {
         set_doc(d, |pg| pg.font_family = Some(s.to_string()))
     });
+    // PNG: draw shape strokes at least this many device pixels wide.
+    engine.register_fn(
+        "min_stroke_px",
+        |d: ScriptDoc, v: Dynamic| -> Result<ScriptDoc, Box<EvalAltResult>> {
+            let x = dyn_to_f32(&v)
+                .filter(|x| x.is_finite() && *x >= 0.0)
+                .ok_or_else(|| err("`min_stroke_px` expects a non-negative number (pixels)"))?;
+            Ok(set_doc(d, |pg| pg.min_stroke_px = Some(x)))
+        },
+    );
 
     // Rich text: `span(..)`, `text([..])`, span setters, `markup(..)`.
     rich::register(&mut engine);

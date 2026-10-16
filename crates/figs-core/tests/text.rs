@@ -169,3 +169,41 @@ fn layout_sizes_text_node_from_shaping() {
     assert_block_height(t.rect.h, 1, 24.0, 20.0);
     assert!(t.rect.w > 0.0);
 }
+
+/// A wrapping text with an explicit `width` narrower than its parent is
+/// measured (wrapped) at that width, so its box is as tall as the lines the
+/// backends draw in it.
+#[test]
+fn explicit_width_text_is_measured_at_its_width() {
+    let src = r#"
+        [page]
+        width = 400
+        height = 300
+        unit = "pt"
+        root = "c"
+
+        [nodes.c]
+        type = "column"
+        children = ["t"]
+
+        [nodes.t]
+        type = "text"
+        content = "several words that wrap in a narrow box"
+        font_size = 10
+        width = 60
+    "#;
+    let fs = store();
+    let computed = layout(&Document::from_toml(src).unwrap(), &fs);
+    let t = computed.nodes.iter().find(|n| n.id == "t").unwrap();
+    let figs_core::layout::PaintContent::Text(tb) = &t.content else {
+        panic!("text")
+    };
+    let shaped = fs.shape(&figs_core::render::geometry::text_props(tb), t.rect.w);
+    assert!(shaped.lines.len() > 1);
+    assert!(
+        (t.rect.h - shaped.size.h).abs() < 1e-3,
+        "{} vs {}",
+        t.rect.h,
+        shaped.size.h
+    );
+}

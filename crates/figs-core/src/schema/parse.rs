@@ -152,6 +152,13 @@ pub struct RawPage {
     /// Slant of a synthetic italic, degrees (default 14; PowerPoint 18.43).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub synthetic_slant: Option<f32>,
+    /// PNG only: draw every shape stroke (rect, ellipse, line/arrow/path,
+    /// container border) at least this many device pixels wide at the page
+    /// `dpi`, as PDF viewers do with hairlines, so a 0.25 pt border stays a
+    /// crisp line in a 100 dpi render. Default `0` (off: exact widths). PDF
+    /// and SVG are unaffected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_stroke_px: Option<f32>,
 }
 
 /// The discriminant of a node, from its `type` field.
@@ -333,6 +340,13 @@ pub struct RawNode {
     /// longer than its axis stays one line instead of breaking).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wrap: Option<bool>,
+    /// Make every line exactly as wide as the box (`"tracking"`: adjust the
+    /// letter spacing, `"scale"`: scale the size). Each paragraph is one
+    /// line, as with `wrap = false`. The box width is an explicit `width`,
+    /// or one the parent imposes (stretch, a stack fill); a text sized by
+    /// its content is left as is. See [`super::FitWidth`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fit_width: Option<super::FitWidth>,
     /// Overrides `[page] script_metrics` for this text node.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub script_metrics: Option<ScriptMetrics>,

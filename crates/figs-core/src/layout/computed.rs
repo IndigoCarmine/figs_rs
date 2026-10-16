@@ -27,6 +27,10 @@ pub struct PageGeom {
     pub background: Option<Brush>,
     /// True when `height_pt` was derived from the content (`height = "auto"`).
     pub auto_height: bool,
+    /// The raster backend draws every shape stroke at least this many device
+    /// pixels wide (`0` = off, the default; see
+    /// [`crate::render::widen_hairlines`]). Vector output ignores it.
+    pub min_stroke_px: f32,
 }
 
 impl ComputedLayout {
@@ -316,6 +320,8 @@ pub struct TextBox {
     /// `false`: shape without wrapping (each paragraph one line), whatever
     /// the rect width.
     pub wrap: bool,
+    /// Fit every line to the rect width (see [`crate::schema::FitWidth`]).
+    pub fit_width: Option<crate::schema::FitWidth>,
     /// Script metrics and synthetic bold/slant.
     pub typography: crate::schema::TextTypography,
 }

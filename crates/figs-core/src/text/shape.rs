@@ -31,7 +31,7 @@ use cosmic_text::{
 use std::sync::Arc;
 
 use crate::geom::{Color, LineCap, LineJoin, Size, StrokeStyle};
-use crate::schema::span::{FontSpec, FontStyle, FontSynthesis};
+use crate::schema::span::{FitWidth, FontSpec, FontStyle, FontSynthesis};
 use crate::schema::TextProps;
 
 use super::classify::{self, Slot};
@@ -477,7 +477,10 @@ pub(crate) fn shape(
     default_family: Option<&str>,
 ) -> ShapedText {
     let runs = styled_runs(text, default_family);
-    let width = (text.wrap && max_width.is_finite() && max_width > 0.0).then_some(max_width);
+    let bounded = max_width.is_finite() && max_width > 0.0;
+    // A fitted text never wraps; each of its lines is fitted to `max_width`.
+    let fit = text.fit_width.filter(|_| bounded);
+    let width = (text.wrap && text.fit_width.is_none() && bounded).then_some(max_width);
     let node_line = (text.font_size * text.line_height).max(1.0);
     let mut scratch = ShapeBuffer::default();
     let typo = text.typography;
@@ -548,7 +551,25 @@ pub(crate) fn shape(
         keep_scripts_attached(&mut layout, para, &runs);
         kinsoku(&mut layout, para);
 
-        for ll in &layout {
+        for ll in &mut layout {
+            // `fit_width`: stretch/squeeze the line to the box width; a
+            // scaled line has its runs' sizes scaled to match.
+            let scaled;
+            let runs: &[StyledRun] = match fit {
+                Some(FitWidth::Tracking) => {
+                    fit_tracking(ll, &runs, max_width);
+                    &runs
+                }
+                Some(FitWidth::Scale) => match fit_scale(ll, &runs, max_width) {
+                    Some(k) => {
+                        scaled = scaled_runs(&runs, k);
+                        &scaled
+                    }
+                    None => &runs,
+                },
+                None => &runs,
+            };
+            let ll = &*ll;
             let style_of =
                 |g: &cosmic_text::LayoutGlyph| &runs[g.metadata.min(runs.len() - 1)].style;
             let (mut lh, mut ascent, mut descent) = (0.0f32, 0.0f32, 0.0f32);
@@ -582,7 +603,7 @@ pub(crate) fn shape(
                 &mut decorations,
                 system,
                 cache,
-                &runs,
+                runs,
                 ll,
                 line_index,
                 baseline,
@@ -647,6 +668,78 @@ pub(crate) fn shape(
         decorations,
         strokes,
     }
+}
+
+/// The width a laid-out line is aligned by: its advance without the
+/// trailing tracking of its last character.
+fn line_width(ll: &cosmic_text::LayoutLine, runs: &[StyledRun]) -> f32 {
+    let trailing = ll
+        .glyphs
+        .last()
+        .map_or(0.0, |g| runs[g.metadata.min(runs.len() - 1)].style.tracking);
+    ll.w - trailing
+}
+
+/// `fit_width = "tracking"`: spread `target - width` evenly over the gaps
+/// between the line's clusters (after every cluster but the last, like
+/// `letter_spacing`), so the line is exactly `target` wide. A line of one
+/// cluster is left alone.
+fn fit_tracking(ll: &mut cosmic_text::LayoutLine, runs: &[StyledRun], target: f32) {
+    let n = ll.glyphs.len();
+    let starts = |i: usize, g: &[cosmic_text::LayoutGlyph]| i == 0 || g[i].start != g[i - 1].start;
+    let clusters = (0..n).filter(|&i| starts(i, &ll.glyphs)).count();
+    if clusters < 2 {
+        return;
+    }
+    let extra = (target - line_width(ll, runs)) / (clusters - 1) as f32;
+    let mut k = 0usize;
+    for i in 0..n {
+        if i > 0 && starts(i, &ll.glyphs) {
+            k += 1;
+        }
+        let ends = i + 1 == n || ll.glyphs[i + 1].start != ll.glyphs[i].start;
+        let g = &mut ll.glyphs[i];
+        g.x += k as f32 * extra;
+        if ends && k + 1 < clusters {
+            g.w += extra;
+        }
+    }
+    ll.w += (clusters - 1) as f32 * extra;
+}
+
+/// `fit_width = "scale"`: scale the line's glyphs (positions, advances,
+/// sizes) by `target / width` about its start; returns the factor (`None`
+/// for an empty line), which the caller applies to the runs' sizes so line
+/// metrics, shifts and decorations scale with it.
+fn fit_scale(ll: &mut cosmic_text::LayoutLine, runs: &[StyledRun], target: f32) -> Option<f32> {
+    let w = line_width(ll, runs);
+    if ll.glyphs.is_empty() || w <= 0.0 {
+        return None;
+    }
+    let k = target / w;
+    for g in &mut ll.glyphs {
+        g.x *= k;
+        g.w *= k;
+        // Offsets are in em of the glyph size, so they scale with it.
+        g.font_size *= k;
+    }
+    ll.w *= k;
+    Some(k)
+}
+
+/// `runs` with every size scaled by `k` (see [`fit_scale`]); outlines keep
+/// their width.
+fn scaled_runs(runs: &[StyledRun], k: f32) -> Vec<StyledRun> {
+    runs.iter()
+        .map(|r| {
+            let mut r = r.clone();
+            r.style.font_size *= k;
+            r.style.base_size *= k;
+            r.style.shift *= k;
+            r.style.tracking *= k;
+            r
+        })
+        .collect()
 }
 
 /// U+2060 WORD JOINER: UAX #14 never breaks on either side of it.

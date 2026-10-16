@@ -1015,18 +1015,24 @@ pub fn image_size(path: &Path) -> Option<(u32, u32)> {
 }
 
 /// Render a computed layout to PNG bytes.
+///
+/// With [`PageGeom::min_stroke_px`] set, every shape stroke thinner than that
+/// many pixels is drawn that wide (see [`super::widen_hairlines`]).
 pub fn render_png(layout: &ComputedLayout, opts: &RenderOptions) -> Result<Vec<u8>, PngError> {
+    let layout = super::widen_hairlines(layout);
     let mut r = TinySkiaRenderer::new(&layout.page, opts)?;
-    paint(layout, &mut r);
+    paint(&layout, &mut r);
     r.into_png()
 }
 
-/// Render a computed layout to straight RGBA (for on-screen preview).
+/// Render a computed layout to straight RGBA (for on-screen preview), with
+/// the same hairline widening as [`render_png`].
 pub fn render_rgba(
     layout: &ComputedLayout,
     opts: &RenderOptions,
 ) -> Result<RenderedImage, PngError> {
+    let layout = super::widen_hairlines(layout);
     let mut r = TinySkiaRenderer::new(&layout.page, opts)?;
-    paint(layout, &mut r);
+    paint(&layout, &mut r);
     Ok(r.into_rgba())
 }

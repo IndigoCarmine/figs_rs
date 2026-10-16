@@ -18,6 +18,6 @@ pub use resolve::{
     RectProps, ResolveError, TextProps,
 };
 pub use span::{
-    parse_family_list, FontSpec, FontStyle, FontSynthesis, RawSpan, Script, ScriptMetrics,
-    SpanStyle, TextSpan, TextTypography,
+    parse_family_list, FitWidth, FontSpec, FontStyle, FontSynthesis, RawSpan, Script,
+    ScriptMetrics, SpanStyle, TextSpan, TextTypography,
 };

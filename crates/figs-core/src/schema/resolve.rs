@@ -21,7 +21,7 @@ use crate::path::arc_to_cubics;
 
 use super::parse::RawPage;
 use super::parse::{NodeKind, RawDocument, RawNode, RawSegment};
-use super::span::{FontSpec, FontStyle, TextSpan, TextTypography};
+use super::span::{FitWidth, FontSpec, FontStyle, TextSpan, TextTypography};
 
 /// Default raster resolution for PNG output when `page.dpi` is unset.
 pub const DEFAULT_DPI: f32 = 300.0;
@@ -82,6 +82,9 @@ pub struct PageInfo {
     pub background: Option<Paint>,
     /// Default font family for text nodes that don't name one.
     pub font_family: Option<String>,
+    /// Minimum stroke width in device pixels for raster output (`0` = off;
+    /// see [`super::RawPage::min_stroke_px`]).
+    pub min_stroke_px: f32,
 }
 
 /// A fully resolved document. Nodes are stored flat and addressed by index;
@@ -302,6 +305,9 @@ pub struct TextProps {
     /// Wrap lines to the available width (default). `false`: each paragraph
     /// is one line whatever the width (see [`RawNode::wrap`]).
     pub wrap: bool,
+    /// Fit every line to the box width (see [`FitWidth`]); such a text
+    /// never wraps. `None`: natural widths.
+    pub fit_width: Option<FitWidth>,
     /// Script metrics and synthetic bold/slant (node value, else the page's).
     pub typography: TextTypography,
 }
@@ -323,6 +329,7 @@ impl Default for TextProps {
             letter_spacing: 0.0,
             spans: Vec::new(),
             wrap: true,
+            fit_width: None,
             typography: TextTypography::default(),
         }
     }
@@ -469,7 +476,16 @@ pub fn resolve(raw: RawDocument) -> Result<Document, ResolveError> {
         })?;
     }
 
+    let min_stroke_px = raw.page.min_stroke_px.unwrap_or(0.0);
+    if !(min_stroke_px.is_finite() && min_stroke_px >= 0.0) {
+        return Err(ResolveError::InvalidField {
+            node: "page".to_string(),
+            field: "min_stroke_px",
+            reason: format!("must be a non-negative number of pixels, got {min_stroke_px}"),
+        });
+    }
     let page = PageInfo {
+        min_stroke_px,
         width_pt: factor * raw.page.width,
         height_pt: raw.page.height.fixed().map(|h| factor * h),
         dpi: raw.page.dpi.unwrap_or(DEFAULT_DPI),
@@ -621,9 +637,10 @@ fn check_finite(id: &str, field: &'static str, v: f32) -> Result<(), ResolveErro
     }
 }
 
-/// `anchor`: finite fractions; a baseline only on a text node, in the slot
-/// across its baseline in the parent's frame (`y` unless the text is turned
-/// by an odd quarter turn, then `x`), and in one slot at most.
+/// `anchor`: finite fractions; a baseline only on a text node or a container
+/// (`column` / `row` / `stack`, which has its children's baselines), in the
+/// slot across its baseline in the parent's frame (`y` unless the node is
+/// turned by an odd quarter turn, then `x`), and in one slot at most.
 fn check_anchor(id: &str, raw: &RawNode, anchor: &[AnchorValue; 2]) -> Result<(), ResolveError> {
     let invalid = |reason: String| ResolveError::InvalidField {
         node: id.to_string(),
@@ -640,9 +657,12 @@ fn check_anchor(id: &str, raw: &RawNode, anchor: &[AnchorValue; 2]) -> Result<()
     if slots.is_empty() {
         return Ok(());
     }
-    if raw.kind != NodeKind::Text {
+    if !matches!(
+        raw.kind,
+        NodeKind::Text | NodeKind::Column | NodeKind::Row | NodeKind::Stack
+    ) {
         return Err(invalid(
-            "only a text node has a baseline (use a fraction)".into(),
+            "only a text node or a column/row/stack (the baseline of a text inside) has a baseline (use a fraction)".into(),
         ));
     }
     if slots.len() > 1 {
@@ -654,7 +674,7 @@ fn check_anchor(id: &str, raw: &RawNode, anchor: &[AnchorValue; 2]) -> Result<()
     let want = if turned { 0 } else { 1 };
     if slots[0] != want {
         let reason = if turned {
-            "this text is turned a quarter turn, so its baseline runs vertically: put \"baseline\" in the x slot ([\"baseline\", ay])"
+            "this node is turned a quarter turn, so its baseline runs vertically: put \"baseline\" in the x slot ([\"baseline\", ay])"
         } else {
             "the baseline runs horizontally: put \"baseline\" in the y slot ([ax, \"baseline\"])"
         };
@@ -720,6 +740,13 @@ fn convert_node(
             node: id.to_string(),
             field: "wrap",
             reason: "only a text node wraps".into(),
+        });
+    }
+    if raw.fit_width.is_some() && raw.kind != NodeKind::Text {
+        return Err(ResolveError::InvalidField {
+            node: id.to_string(),
+            field: "fit_width",
+            reason: "only a text node is fitted to its width".into(),
         });
     }
     let is_container = matches!(raw.kind, NodeKind::Column | NodeKind::Row | NodeKind::Stack);
@@ -845,6 +872,7 @@ fn convert_node(
                 spans,
                 letter_spacing,
                 wrap: raw.wrap.unwrap_or(true),
+                fit_width: raw.fit_width,
                 // Set with the page defaults once every node is converted.
                 typography: TextTypography::default(),
                 font_style: raw.font_style.unwrap_or_default(),

@@ -34,6 +34,8 @@ enum Command {
         /// Output path. Extension selects the format: .png, .pdf or .svg.
         #[arg(short, long)]
         output: PathBuf,
+        #[command(flatten)]
+        flags: RenderFlags,
     },
     /// Render, then re-render whenever the input or a file it uses changes.
     ///
@@ -46,7 +48,19 @@ enum Command {
         /// Output path. Extension selects the format: .png, .pdf or .svg.
         #[arg(short, long)]
         output: PathBuf,
+        #[command(flatten)]
+        flags: RenderFlags,
     },
+}
+
+/// Render settings that override the document's page settings.
+#[derive(clap::Args, Debug, PartialEq, Clone, Copy, Default)]
+struct RenderFlags {
+    /// PNG only: draw every shape stroke at least PX device pixels wide, as
+    /// PDF viewers do with hairlines (overrides the page's `min_stroke_px`;
+    /// 0 = exact widths).
+    #[arg(long, value_name = "PX")]
+    min_stroke_px: Option<f32>,
 }
 
 fn main() -> Result<()> {
@@ -59,12 +73,20 @@ fn main() -> Result<()> {
 
     let cli = Cli::parse();
     match cli.command {
-        Command::Build { input, output } => {
-            let built = build(&input, &output, &mut FontStore::new())?;
+        Command::Build {
+            input,
+            output,
+            flags,
+        } => {
+            let built = build(&input, &output, &mut FontStore::new(), flags)?;
             eprintln!("{}", built.summary);
             Ok(())
         }
-        Command::Watch { input, output } => watch(&input, &output),
+        Command::Watch {
+            input,
+            output,
+            flags,
+        } => watch(&input, &output, flags),
     }
 }
 
@@ -114,9 +136,14 @@ fn base_dir(input: &Path) -> &Path {
 
 /// Read, lay out and render `input` to `output`. `fonts` is reused across
 /// builds (loading system fonts is the slow part of a cold start).
-fn build(input: &Path, output: &Path, fonts: &mut FontStore) -> Result<Built> {
+fn build(input: &Path, output: &Path, fonts: &mut FontStore, flags: RenderFlags) -> Result<Built> {
     // Validate the output format before doing any work.
     let format = Format::from_path(output)?;
+    if let Some(px) = flags.min_stroke_px {
+        if !(px.is_finite() && px >= 0.0) {
+            bail!("--min-stroke-px must be a non-negative number of pixels, got {px}");
+        }
+    }
     let src = std::fs::read_to_string(input)
         .with_context(|| format!("reading input `{}`", input.display()))?;
     let doc = match input.extension().and_then(|e| e.to_str()) {
@@ -138,7 +165,10 @@ fn build(input: &Path, output: &Path, fonts: &mut FontStore) -> Result<Built> {
     // also drives `height = "auto"` pages). Setting it also drops cached image
     // aspects, so a rebuild sees edited images.
     fonts.set_image_base_dir(Some(base_dir.to_path_buf()));
-    let computed = layout(&doc, fonts);
+    let mut computed = layout(&doc, fonts);
+    if let Some(px) = flags.min_stroke_px {
+        computed.page.min_stroke_px = px;
+    }
     let opts = RenderOptions {
         fonts: Some(fonts),
         base_dir,
@@ -185,9 +215,15 @@ enum Event {
 /// One watch-mode rebuild: build, print a one-line result, and return the files
 /// to watch next. On error the previous dependency list is kept (the broken
 /// document can't say what it needs), so fixing an image still triggers a build.
-fn rebuild(input: &Path, output: &Path, fonts: &mut FontStore, deps: &mut Vec<PathBuf>) -> bool {
+fn rebuild(
+    input: &Path,
+    output: &Path,
+    fonts: &mut FontStore,
+    flags: RenderFlags,
+    deps: &mut Vec<PathBuf>,
+) -> bool {
     let start = Instant::now();
-    match build(input, output, fonts) {
+    match build(input, output, fonts, flags) {
         Ok(built) => {
             eprintln!(
                 "ok  {} in {} ms",
@@ -214,7 +250,7 @@ fn watch_set(input: &Path, output: &Path, deps: &[PathBuf]) -> Vec<PathBuf> {
         .collect()
 }
 
-fn watch(input: &Path, output: &Path) -> Result<()> {
+fn watch(input: &Path, output: &Path, flags: RenderFlags) -> Result<()> {
     // A bad output extension never fixes itself: fail fast.
     Format::from_path(output)?;
 
@@ -231,7 +267,7 @@ fn watch(input: &Path, output: &Path) -> Result<()> {
 
     let mut fonts = FontStore::new();
     let mut deps = Vec::new();
-    rebuild(input, output, &mut fonts, &mut deps);
+    rebuild(input, output, &mut fonts, flags, &mut deps);
     watcher.set_files(watch_set(input, output, &deps));
     eprintln!(
         "watching {} and {} dependenc{} (Ctrl+C to stop)",
@@ -264,7 +300,7 @@ fn watch(input: &Path, output: &Path) -> Result<()> {
             .collect();
         names.dedup();
         eprintln!("changed: {}", names.join(", "));
-        rebuild(input, output, &mut fonts, &mut deps);
+        rebuild(input, output, &mut fonts, flags, &mut deps);
         watcher.set_files(watch_set(input, output, &deps));
     }
     eprintln!("stopped watching");
@@ -298,14 +334,26 @@ mod tests {
             parse(&["build", "fig.toml", "-o", "out.png"]).unwrap(),
             Command::Build {
                 input: "fig.toml".into(),
-                output: "out.png".into()
+                output: "out.png".into(),
+                flags: RenderFlags::default(),
+            }
+        );
+        assert_eq!(
+            parse(&["build", "fig.toml", "-o", "out.png", "--min-stroke-px", "1"]).unwrap(),
+            Command::Build {
+                input: "fig.toml".into(),
+                output: "out.png".into(),
+                flags: RenderFlags {
+                    min_stroke_px: Some(1.0)
+                },
             }
         );
         assert_eq!(
             parse(&["watch", "fig.figs", "--output", "out.pdf"]).unwrap(),
             Command::Watch {
                 input: "fig.figs".into(),
-                output: "out.pdf".into()
+                output: "out.pdf".into(),
+                flags: RenderFlags::default(),
             }
         );
         // The output is required; so is the input.
@@ -368,7 +416,13 @@ mod tests {
 
         let mut fonts = FontStore::new();
         let mut deps = Vec::new();
-        assert!(rebuild(&input, &output, &mut fonts, &mut deps));
+        assert!(rebuild(
+            &input,
+            &output,
+            &mut fonts,
+            RenderFlags::default(),
+            &mut deps
+        ));
         let abs = |name: &str| figs_core::deps::absolutize(dir, Path::new(name));
         assert_eq!(deps, vec![abs("a.png")]);
         let first = std::fs::read_to_string(&output).unwrap();
@@ -377,19 +431,37 @@ mod tests {
 
         // Editing the image is picked up (the aspect cache is dropped).
         write_png(&dir.join("a.png"), 10.0, 10.0);
-        assert!(rebuild(&input, &output, &mut fonts, &mut deps));
+        assert!(rebuild(
+            &input,
+            &output,
+            &mut fonts,
+            RenderFlags::default(),
+            &mut deps
+        ));
         let second = std::fs::read_to_string(&output).unwrap();
         assert!(second.contains("height=\"100"), "{second}");
 
         // A broken edit reports an error and keeps the previous dependencies.
         std::fs::write(&input, "[page\n").unwrap();
-        assert!(!rebuild(&input, &output, &mut fonts, &mut deps));
+        assert!(!rebuild(
+            &input,
+            &output,
+            &mut fonts,
+            RenderFlags::default(),
+            &mut deps
+        ));
         assert_eq!(deps, vec![abs("a.png")]);
         assert_eq!(std::fs::read_to_string(&output).unwrap(), second);
 
         // Fixing it with a different image switches the dependency.
         std::fs::write(&input, doc("sub/b.png")).unwrap();
-        assert!(rebuild(&input, &output, &mut fonts, &mut deps));
+        assert!(rebuild(
+            &input,
+            &output,
+            &mut fonts,
+            RenderFlags::default(),
+            &mut deps
+        ));
         assert_eq!(deps, vec![abs("sub/b.png")]);
         let set = watch_set(&input, &output, &deps);
         assert_eq!(set, vec![abs("fig.toml"), abs("sub/b.png")]);
