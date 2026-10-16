@@ -19,6 +19,7 @@ use crate::geom::{
 use crate::path::arc_to_cubics;
 
 use super::parse::{NodeKind, RawDocument, RawNode, RawSegment};
+use super::span::{FontStyle, TextSpan};
 
 /// Default raster resolution for PNG output when `page.dpi` is unset.
 pub const DEFAULT_DPI: f32 = 300.0;
@@ -219,10 +220,15 @@ pub struct ImageProps {
     pub fit: ImageFit,
 }
 
+/// A resolved text node: the node-level style plus optional inline spans.
 #[derive(Debug, Clone)]
 pub struct TextProps {
+    /// The full text: `content` followed by every span's text.
     pub content: String,
     pub font_size: f32,
+    /// Ordered family list (comma-separated, see
+    /// [`parse_family_list`](super::span::parse_family_list)); `None` = the
+    /// page / store default.
     pub font_family: Option<String>,
     pub font_weight: Option<u16>,
     pub color: Color,
@@ -233,6 +239,46 @@ pub struct TextProps {
     /// fill). Purely visual: it never affects measurement, and may overhang
     /// the text box by half its width. Joins default to round.
     pub stroke: Option<StrokeStyle>,
+    pub font_style: FontStyle,
+    pub underline: bool,
+    pub strike: bool,
+    /// Tracking in em of each character's font size, added after every
+    /// character (cluster).
+    pub letter_spacing: f32,
+    /// Styled byte ranges of `content` (sorted, non-overlapping); bytes
+    /// outside every span use the node style.
+    pub spans: Vec<TextSpan>,
+}
+
+impl Default for TextProps {
+    fn default() -> Self {
+        TextProps {
+            content: String::new(),
+            font_size: DEFAULT_FONT_SIZE,
+            font_family: None,
+            font_weight: None,
+            color: Color::BLACK,
+            align: TextAlign::default(),
+            line_height: DEFAULT_LINE_HEIGHT,
+            stroke: None,
+            font_style: FontStyle::Normal,
+            underline: false,
+            strike: false,
+            letter_spacing: 0.0,
+            spans: Vec::new(),
+        }
+    }
+}
+
+impl TextProps {
+    /// Plain (span-less) text with the default style.
+    pub fn plain(content: impl Into<String>, font_size: f32) -> Self {
+        TextProps {
+            content: content.into(),
+            font_size,
+            ..Default::default()
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -351,6 +397,60 @@ pub fn resolve(raw: RawDocument) -> Result<Document, ResolveError> {
     })
 }
 
+/// The full text of a text node (`content` then every span's text) and the
+/// byte range + overrides of each span.
+fn text_spans(id: &str, raw: &RawNode) -> Result<(String, Vec<TextSpan>), ResolveError> {
+    let mut content = raw.content.clone().unwrap_or_default();
+    let mut spans = Vec::with_capacity(raw.spans.len());
+    let invalid = |reason: String| ResolveError::InvalidField {
+        node: id.to_string(),
+        field: "spans",
+        reason,
+    };
+    for s in &raw.spans {
+        if let Some(size) = s.font_size {
+            if !(size.is_finite() && size > 0.0) {
+                return Err(invalid(format!(
+                    "span `{}`: font_size must be positive, got {size}",
+                    s.text
+                )));
+            }
+        }
+        for (field, v) in [
+            ("baseline_shift", s.baseline_shift),
+            ("letter_spacing", s.letter_spacing),
+        ] {
+            if v.is_some_and(|v| !v.is_finite()) {
+                return Err(invalid(format!(
+                    "span `{}`: {field} must be finite",
+                    s.text
+                )));
+            }
+        }
+        let start = content.len();
+        content.push_str(&s.text);
+        if !s.text.is_empty() {
+            spans.push(TextSpan {
+                range: start..content.len(),
+                style: s.style(),
+            });
+        }
+    }
+    Ok((content, spans))
+}
+
+fn check_finite(id: &str, field: &'static str, v: f32) -> Result<(), ResolveError> {
+    if v.is_finite() {
+        Ok(())
+    } else {
+        Err(ResolveError::InvalidField {
+            node: id.to_string(),
+            field,
+            reason: format!("must be a finite number, got {v}"),
+        })
+    }
+}
+
 fn convert_node(
     id: &str,
     raw: &RawNode,
@@ -448,16 +548,23 @@ fn convert_node(
             })
         }
         NodeKind::Text => {
-            let content = raw
-                .content
-                .clone()
-                .ok_or_else(|| ResolveError::MissingField {
+            if raw.content.is_none() && raw.spans.is_empty() {
+                return Err(ResolveError::MissingField {
                     node: id.to_string(),
                     kind: "text",
                     field: "content",
-                })?;
+                });
+            }
+            let (content, spans) = text_spans(id, raw)?;
+            let letter_spacing = raw.letter_spacing.unwrap_or(0.0);
+            check_finite(id, "letter_spacing", letter_spacing)?;
             NodeType::Text(TextProps {
                 content,
+                spans,
+                letter_spacing,
+                font_style: raw.font_style.unwrap_or_default(),
+                underline: raw.underline,
+                strike: raw.strike,
                 font_size: raw.font_size.unwrap_or(DEFAULT_FONT_SIZE),
                 font_family: raw.font_family.clone(),
                 font_weight: raw.font_weight,

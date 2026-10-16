@@ -14,10 +14,10 @@ use tiny_skia::{
 };
 
 use crate::geom::{
-    Affine, Color, ImageFit, LineCap, LineJoin, PathSegment, Point, Rect, StrokeStyle,
+    Affine, Color, ImageFit, LineCap, LineJoin, PathSegment, Point, Rect, StrokeStyle, TextAlign,
 };
 use crate::layout::{ComputedLayout, PageGeom, PathPaint, TextBox};
-use crate::text::FontStore;
+use crate::text::{DecorationKind, FontStore, ShapedGlyph, ShapedText};
 
 use super::geometry;
 use super::outline::OutlineCache;
@@ -173,10 +173,13 @@ impl<'a> TinySkiaRenderer<'a> {
                 self.stroke_shape(&p, stroke);
             }
         }
+        self.draw_decorations(&shaped, rect, text.align, DecorationKind::Underline);
         let device = Transform::from_scale(self.scale, self.scale).pre_concat(self.page_xf());
-        let mut paint = Paint::default();
-        paint.set_color(sk_color(text.color));
-        paint.anti_alias = true;
+        let mut paint = Paint {
+            anti_alias: true,
+            ..Paint::default()
+        };
+        let shear = geometry::italic_shear();
 
         for line in &shaped.lines {
             let align_off = geometry::align_offset(text.align, line.width, rect.w);
@@ -186,7 +189,9 @@ impl<'a> TinySkiaRenderer<'a> {
                 let pen_y = rect.y + line.baseline - g.y_offset;
                 if let Some((path, upem)) = self.glyph_outline(fonts, g.font_id, g.glyph_id) {
                     let k = g.font_size / upem;
-                    let t = device.pre_concat(Transform::from_row(k, 0.0, 0.0, -k, pen_x, pen_y));
+                    let kx = if g.synthetic_italic { k * shear } else { 0.0 };
+                    paint.set_color(sk_color(g.color));
+                    let t = device.pre_concat(Transform::from_row(k, 0.0, kx, -k, pen_x, pen_y));
                     self.pixmap
                         .fill_path(&path, &paint, FillRule::Winding, t, None);
                     continue;
@@ -196,11 +201,10 @@ impl<'a> TinySkiaRenderer<'a> {
                     g.glyph_id,
                     g.font_size * self.scale,
                     (0.0, 0.0),
-                    CacheKeyFlags::empty(),
+                    glyph_flags(g),
                 );
                 let image = fonts.with_system(|sys| self.swash.get_image(sys, key).clone());
-                let Some(glyph) = image.as_ref().and_then(|img| glyph_pixmap(img, text.color))
-                else {
+                let Some(glyph) = image.as_ref().and_then(|img| glyph_pixmap(img, g.color)) else {
                     continue;
                 };
                 let img = image.as_ref().expect("checked above");
@@ -219,6 +223,23 @@ impl<'a> TinySkiaRenderer<'a> {
                     ..Default::default()
                 };
                 self.pixmap.draw_pixmap(0, 0, glyph.as_ref(), &pp, t, None);
+            }
+        }
+        self.draw_decorations(&shaped, rect, text.align, DecorationKind::Strike);
+    }
+
+    /// Fill the decoration bars of one kind (underlines go under the glyphs,
+    /// line-throughs over them), under the node transform.
+    fn draw_decorations(
+        &mut self,
+        shaped: &ShapedText,
+        rect: Rect,
+        align: TextAlign,
+        kind: DecorationKind,
+    ) {
+        for (r, color) in geometry::decoration_rects(shaped, rect, align, kind) {
+            if let Some(p) = self.sk_path(&geometry::rounded_rect(r, 0.0)) {
+                self.fill_shape(&p, color);
             }
         }
     }
@@ -366,6 +387,15 @@ impl<'a> TinySkiaRenderer<'a> {
             mask.as_ref(),
         );
         true
+    }
+}
+
+/// Raster flags of a shaped glyph (synthetic italic).
+fn glyph_flags(g: &ShapedGlyph) -> CacheKeyFlags {
+    if g.synthetic_italic {
+        CacheKeyFlags::FAKE_ITALIC
+    } else {
+        CacheKeyFlags::empty()
     }
 }
 
@@ -580,26 +610,30 @@ impl Renderer for TinySkiaRenderer<'_> {
             }
         }
 
+        self.draw_decorations(&shaped, rect, text.align, DecorationKind::Underline);
         for line in &shaped.lines {
             let align_off = geometry::align_offset(text.align, line.width, rect.w);
             for g in &line.glyphs {
                 let pen_x = (rect.x + align_off + g.x + g.x_offset) * scale;
                 let pen_y = (rect.y + line.baseline - g.y_offset) * scale;
+                // Synthetic italic: swash shears the bitmap about the pen
+                // position by the same angle the vector backends use.
                 let (key, ox, oy) = CacheKey::new(
                     g.font_id,
                     g.glyph_id,
                     g.font_size * scale,
                     (pen_x, pen_y),
-                    CacheKeyFlags::empty(),
+                    glyph_flags(g),
                 );
                 // SwashCache wants `&mut FontSystem`; clone the cached image so
                 // the font-system borrow is released before we touch the pixmap.
                 let image = fonts.with_system(|sys| self.swash.get_image(sys, key).clone());
                 if let Some(image) = image {
-                    blit_glyph(&mut self.pixmap, &image, ox, oy, text.color);
+                    blit_glyph(&mut self.pixmap, &image, ox, oy, g.color);
                 }
             }
         }
+        self.draw_decorations(&shaped, rect, text.align, DecorationKind::Strike);
     }
 
     fn draw_path(&mut self, path: &PathPaint) {

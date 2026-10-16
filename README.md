@@ -60,8 +60,11 @@ You provide: hierarchy, style, content, and constraints (`flex`, `aspect_ratio`,
   (`start`/`center`/`end`/`space_between`/`space_around`/`space_evenly`),
   `cross_axis_alignment` (`start`/`center`/`end`/`stretch`).
 - **stack**: `children`, `viewbox` (plus the shared `padding`).
-- **text**: `content`, `font_size` (pt), `font_family`, `font_weight`, `color`,
-  `align`, `line_height` (multiple of font size), and an outline: `stroke`,
+- **text**: `content`, `font_size` (pt), `font_family` (an ordered fallback
+  list: `"Arial, Yu Gothic"` or `["Arial", "Yu Gothic"]`), `font_weight`,
+  `font_style` (`normal`/`italic`), `color`, `align`, `line_height` (multiple
+  of font size), `letter_spacing` (em), `underline`, `strike`, inline `spans`
+  (see [Rich text](#rich-text-spans)), and an outline: `stroke`,
   `stroke_width`, `join` (see [Text outline](#text-outline)).
 - **image**: `src`, `fit` (`contain`/`cover`/`fill`).
 - **rect**: `fill`, `stroke`, `stroke_width`, `corner_radius`.
@@ -107,6 +110,125 @@ stroke_width = 0.07    # cm here: the rim reaches 0.035 cm past the glyphs
 In Rhai: `text("(a)").bold().stroke("#ffffff").stroke_width(0.07)` (`.join(..)`
 to change the join). The framework's `halo(t, color, r)` is exactly this with
 `stroke_width = 2r`.
+
+### Rich text (spans)
+
+A text node can mix styles inside one paragraph: `spans` is a list of runs,
+each with its own text and optional overrides. Anything a span leaves unset
+inherits the node's style; the node's `content` (if any) comes first, unstyled.
+
+```toml
+[nodes.dg]
+type = "text"
+font_size = 11
+font_family = "Arial, Yu Gothic"        # Latin in Arial, Japanese in Yu Gothic
+spans = [
+  { text = "ΔG" },
+  { text = "300K", script = "sub" },
+  { text = " = " },
+  { text = "−27.5", color = "#e0635a", font_weight = 700 },
+  { text = " kJ mol" },
+  { text = "−1", script = "super" },
+]
+```
+
+| Span field | Meaning |
+|---|---|
+| `text` | the run's text (required) |
+| `font_family` | family list for this run; **replaces** the node's list |
+| `font_size` | pt; with `script`, the *base* size the script is derived from |
+| `font_weight` | 100–900 (nearest installed face, CSS matching order) |
+| `font_style` (alias `style`) | `"italic"` / `"normal"` |
+| `color` | hex |
+| `underline`, `strike` | `true` / `false` (can switch off a node-level one) |
+| `script` | `"super"` (`"sup"`) / `"sub"`: size × **0.65**, baseline **+0.35 em** / **−0.15 em** (em of the base size) |
+| `baseline_shift` | exact shift in em of the base size, positive = up (overrides `script`'s) |
+| `letter_spacing` | tracking in em of the run's font size |
+
+- **Line height.** A line box is `size × line_height` of the largest run on
+  the line, with the largest ascent + descent box centred in it (CSS
+  half-leading), so a 2× span makes its line taller. **Super/subscripts count
+  with their base size and unshifted**, so `mol⁻¹` or an affiliation `¹`
+  never pushes lines apart; only at the block's very top/bottom does a raised
+  or lowered glyph that would poke out of the box grow it (nothing clips).
+- **Wrapping** treats the paragraph as one text: breaks can fall inside or
+  between spans exactly as in unstyled text, and alignment, `line_height`,
+  `stroke` and `rotate` work unchanged.
+- **Underline / line-through** are bars from the face's own metrics
+  (`post`/`OS/2` underline and strikeout position and thickness; size-based
+  fallbacks when a face has none). An underline sits at the unshifted
+  baseline at the run's base size, so a subscript's underline lines up with
+  its neighbours'; a line-through follows the (shifted) glyphs. Bars are
+  filled in the run's colour, underlines under the glyphs, line-throughs over
+  them; they are not part of a text `stroke`.
+- **`letter_spacing`** (node or span, **em** of the font size, so it scales
+  with the text) is added after every character — after every *cluster*, so a
+  ligature or a base + combining mark gets it once — before line breaking, so
+  wrapping sees it. Kerning and ligatures are kept. The trailing spacing of a
+  line's last character is not counted in its width, so centred and
+  right-aligned tracked titles stay centred on their ink.
+
+#### Fonts: fallback lists, weights, italic
+
+- **The author's list is authoritative, per character.** `font_family =
+  "Arial, Yu Gothic"` sets each character in the *first* listed family that
+  has a glyph for it: Latin, digits, Greek (`Δ μ`), `−` and spaces in Arial;
+  kana, kanji and full-width punctuation (`、。（）`) in Yu Gothic. Combining
+  marks, variation selectors and joiners stay with the preceding character.
+  Names match case-insensitively, localized names too (`游ゴシック`); the
+  generic `sans-serif` / `serif` / `monospace` map to the system defaults.
+  Families that aren't installed are skipped; with none installed the
+  generic `sans-serif` face is used. `[page] font_family` (Rhai
+  `page(..).font("…")`) is the default list for nodes that name none.
+- **What's left to the system.** Only characters no listed family covers fall
+  through to cosmic-text's fallback: the requested face, then a per-script
+  platform list, then a few common fonts, then any face that has the glyph.
+  Its script lists are **Windows**: Yu Gothic for kana (and for kanji only
+  when the locale is exactly `ja`; otherwise Microsoft YaHei UI, i.e. Chinese
+  glyph shapes), then Segoe UI / Segoe UI Emoji / Segoe UI Symbol;
+  **macOS**: Hiragino Sans (kana; kanji on `ja`, else PingFang SC), then
+  `.SF NS`, Menlo, Apple Color Emoji, Geneva, Arial Unicode MS; **Linux**:
+  Noto Sans CJK JA (kana; kanji on `ja`, else Noto Sans CJK SC), then Noto
+  Sans, DejaVu Sans, FreeSans, Noto symbols/emoji. Naming the Japanese face in
+  the list avoids all of this.
+- **Weights** pick the nearest installed face in CSS order (for 400: 400,
+  500, lighter, bolder; above 500: bolder first). There is no synthetic bold:
+  a family with only a regular face (MS Mincho) stays regular.
+- **Italic** uses the family's real italic face when it has one (Arial
+  Italic, Times New Roman Italic), else an oblique face, else the upright face
+  **slanted by 14°** (a synthetic oblique — Yu Gothic, MS Mincho, BIZ UD
+  Gothic have no italics). The slant is a shear about each glyph's baseline
+  origin, identical in PNG (swash's fake italic), PDF (a `cm` shear around the
+  run; still real text) and SVG / rotated text / outlines (sheared outlines).
+
+#### Japanese line breaking
+
+Breaks follow UAX #14 (cosmic-text + `unicode-linebreak`): no break before
+closing punctuation `、。，．）」』】` etc., none after opening brackets
+`（「『【`, breaks allowed between ideographs and kana, Latin words kept whole.
+Small kana and `ー` are treated as non-starters (the strict rule: `ッ`, `ャ`,
+`ー` don't start a line; `チェッ` and `マー` stay together). One case UAX #14
+can't help with is a "word" wider than the line (a long Latin word, a long run
+of small kana, a box only a couple of characters wide), which is broken
+between arbitrary glyphs. There figs fixes up the result: an opening bracket
+left at a line end moves to the next line, and closing punctuation left at a
+line start hangs at the end of the previous line (*burasage*; it may overhang
+the box by that one glyph). A small kana can still start a line in such a
+box. Tests sweep a mixed paragraph across widths.
+
+In scripts the core builders mirror the model 1:1:
+
+```rhai
+text([span("ΔG"), span("300K").sub(), " = ", span("−27.5").color("#e0635a").bold()])
+```
+
+`text([...])` takes spans and plain strings (nested arrays are flattened).
+Span setters: `.bold()`, `.weight(n)`, `.italic()`, `.upright()`, `.color(hex)`,
+`.size(pt)`, `.sup()`, `.sub()`, `.shift(em)`, `.underline()`, `.strike()`,
+`.font(name | "A, B" | ["A", "B"])`, `.tracking(em)`. The same `.italic()`,
+`.underline()`, `.strike()`, `.tracking(em)`, `.font([...])` on a text node set
+the style every span inherits. The framework's [markup](#rich-text-markup)
+writes the same spans concisely.
 
 ### Auto page height
 
@@ -493,10 +615,13 @@ setters:
   [User coordinates](#user-coordinates-viewbox--anchors).
 - **offset** (read by a `stack` parent): `.at(x, y)`, `.x(n)`, `.y(n)` — e.g.
   `stack([image("a.png"), text("(a)").at(0.2, 0.2)])`.
-- **text**: `.size(n)`, `.weight(n)` / `.bold()`, `.color(hex)`, `.font(name)`,
+- **text**: `.size(n)`, `.weight(n)` / `.bold()`, `.italic()`, `.color(hex)`,
+  `.font(name | "A, B" | ["A", "B"])`, `.tracking(em)`, `.underline()`, `.strike()`,
   `.align("left"|"center"|"right"|"justify")` / `.center()`, `.line_height(n)`,
   and an outline painted behind the glyphs: `.stroke(hex)`, `.stroke_width(n)`,
   `.join("round"|"miter"|"bevel")` (see [Text outline](#text-outline)).
+  Rich text: `text([span("ΔG"), span("300K").sub(), …])` (see
+  [Rich text](#rich-text-spans)).
 - **container** (`col`/`row`): `.spacing(n)`, `.main("space_between"|…)`,
   `.cross("start"|"center"|"end"|"stretch")` / `.stretch()`.
 - **rect**: `.fill(hex)`, `.stroke(hex)`, `.stroke_width(n)`, `.radius(n)`.
@@ -510,7 +635,7 @@ setters:
   `.arc(r, x, y, #{ sweep, large, rotation })` (`r` a number or `[rx, ry]`) —
   see [Curves](#curves).
 - **image**: `.fit("contain"|"cover"|"fill")`.
-- **page**: `.unit("cm"|…)`, `.background(hex)`, `.dpi(n)`, `.font(name)`.
+- **page**: `.unit("cm"|…)`, `.background(hex)`, `.dpi(n)`, `.font(name | list)`.
 
 Build it like any document (extension selects the front-end):
 
@@ -552,7 +677,8 @@ Components (lengths in cm, font sizes in pt):
 | `style(preset)` / `style(map)` / `style(preset, map)` | Switch a bundle of defaults in one line: `style("nature");` at the top of the script. See [Style presets](#style-presets). |
 | `page(preset, root)` | Page of a named size, unit `cm`, in the style's `font_family()` when one is set. Journal presets `"single"` (`single_width()`, default 8.5 cm column) and `"double"` (`double_width()`, default 17.5 cm) fix only the width and get an [auto height](#auto-page-height) that fits the content. Paper presets `"a5"`, `"a4"`, `"a3"`, `"a0"` (poster), `"letter"` are fixed; append `-landscape` to swap their sides (journal presets have no landscape form). The core `page(w, h, root)` is unchanged. |
 | `paper_size(preset)` | `[w, h]` of a preset, to drop down to core: `let s = paper_size("double"); page(s[0], 5, root).unit("cm")`. For journal presets `h` is the string `"auto"`, so `page(s[0], s[1], root)` stays auto. |
-| `title(s)` / `caption(s)` / `label(s)` / `body(s)` | Semantic text: `title_size()` (1.5× base) bold centered / base centered / `label_size()` (1.25× base) bold / base. |
+| `title(s)` / `caption(s)` / `label(s)` / `body(s)` | Semantic text: `title_size()` (1.5× base) bold centered / base centered / `label_size()` (1.25× base) bold / base. `s` may also be a span array: `body(markup("H_2O"))`. |
+| `rich(s)` / `markup(s)` | Rich text from [inline markup](#rich-text-markup): `rich(s)` is `text(markup(s))`, `markup(s)` the span array itself. |
 | `halo(t, color, r)` | Text node `t` with a halo: the core [text outline](#text-outline) in `color`, reaching `r` cm past the glyphs (`.stroke(color).stroke_width(2 * r)`, round joins). Purely visual — lays out exactly like `t` alone, so it drops in anywhere; what panel labels and scale-bar labels use by default. |
 | `vbox(items)` / `hbox(items)` | `col`/`row` with the default gap, stretched cross axis, and bare strings allowed. |
 | `grid(ncols, items)` / `grid(ncols, gap, items)` | Rows of `ncols` equal-flex cells (rows share height equally); the last row is padded with empty cells so widths stay equal. |
@@ -610,6 +736,45 @@ The label and caption defaults derive from `base_size()` / `gap()`, so
 overriding those rescales them too. The inset keeps labels off the panel edge;
 the caption gap is half the grid gap so a caption reads as belonging to the panel
 above it rather than the one below.
+
+#### Rich-text markup
+
+`rich("…")` (or `markup("…")` for the bare span array) writes
+[spans](#rich-text-spans) in one string. The parser is Rust
+([`script/markup.rs`](crates/figs-core/src/script/markup.rs)), framework-only:
+it just produces the core spans, which layout and the backends handle as if
+written out with `span(..)`.
+
+```rhai
+rich("○__佐藤 太郎__^1・A. Tanaka^{1,*}")                // underline, superscripts
+rich("A. Tanaka *et al.*, *Nature* **2021**, *12*, 345–352")
+rich("Δ*G*_{300K} = {#e0635a bold|−27.5} kJ mol^{−1}")   // subscript, colour group
+rich("H_2O, OD_{600}, *K*_n/*K*_e, 4.2 Debye^†, ~~0.38~~")
+rich("{#ffd700 bold|Sodium chloride} = 結晶成長部位").font("Arial, Yu Gothic")
+```
+
+| Markup | Span |
+|---|---|
+| `*text*` / `**text**` | italic / bold |
+| `__text__` / `~~text~~` | underline / line-through |
+| `_x`, `_{text}` | subscript (one character, or a braced group) |
+| `^x`, `^{text}` | superscript |
+| `{spec\|text}` | style group; `spec` = space-separated items: `#rrggbb` colour, `bold`/`b`, `italic`/`i`, `upright`, `underline`/`u`, `strike`/`s`, `sup`, `sub`, `size=12` (pt), `weight=600`, `font=Arial` / `font='Times New Roman'`, `tracking=0.1`, `shift=0.3` (em), `color=#hex` |
+| `\c` | `c` literally: `\*`, `\_`, `\^`, `\{`, `\}`, `\~`, `\\` |
+
+Groups nest (`x^{*n*}` is an italic superscript; `{u|… {#f00|…} …}`).
+`*`, `**`, `__`, `~~` open only when followed by a non-space **and** closed
+later in the same group (by a delimiter preceded by a non-space); otherwise
+they are literal — `5 * 3`, `Tanaka^{1,*}`, `*corresponding author` need no
+escaping. `_`/`^` before a space or the end are literal. Errors (an unmatched
+`}`, a `{` without `|`, an unknown style item, a bad colour, a dangling `\`,
+an unclosed `_{`) name the 1-based character column:
+`rich: markup: in style group: \`#zz\`: invalid colour \`#zz\` (column 4)`.
+
+See [`examples/rich_text.figs`](examples/rich_text.figs) for a poster body
+block (title band with tracking, authors with affiliations, a wrapped
+Japanese/English paragraph, thermodynamics with subscripts and coloured
+values, a serif reference list).
 
 #### Style presets
 
@@ -933,7 +1098,9 @@ Modeled on Flutter's `BoxConstraints`/`RenderFlex`:
   UI at the default 1.2), so accents and descenders never poke out and get
   clipped at a page edge. Spacing between lines is unchanged. Glyphs may still
   sit flush with the box edge — the box is the font's metrics, with no extra
-  padding; add `spacing`/`pad` for breathing room.
+  padding; add `spacing`/`pad` for breathing room. With [spans](#rich-text-spans)
+  each line box follows its largest run; super/subscripts count at their base
+  size, unshifted.
 
 ## Output formats
 
@@ -956,6 +1123,8 @@ the vector formats keep that exactness at any zoom.
 | Shapes | anti-aliased raster | vector paths (dash, cap, alpha) | `<rect>`/`<ellipse>`/`<path>` |
 | Text | rasterized glyphs | **real text**: fonts embedded as subsets, ToUnicode map (selectable, searchable) | **glyph outlines** (`<use>` of per-glyph paths in `<defs>`), exact on every viewer with no font dependency; not selectable (`aria-label` carries the text) |
 | Text `stroke` | glyph outlines stroked (tiny-skia), glyphs blended on top | vector path under the text (text layer unchanged) | one stroked `<path>` before the glyph group |
+| Rich text | per-glyph colour/size/face; scripts on shifted baselines; synthetic italic via swash's skew | one glyph run per (face, size, span) with its fill; the string still appears **once** (all runs share the text and ToUnicode ranges, so `pdftotext` gives `ΔG300K = −27.5`); synthetic italic = `cm` shear | one `aria-label` group (full text) with a `fill` group per colour run; synthetic italic in each `<use>` matrix |
+| Underline / strike | filled bars | filled vector rects | `<rect>`s |
 | Images | resampled | JPEG passed through untouched; other formats embedded losslessly | base64 `data:` URI (PNG/JPEG bytes verbatim) |
 | `cover` | clipped | clip path | `clipPath` |
 | Missing image | gray placeholder | same placeholder | same placeholder |

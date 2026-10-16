@@ -8,9 +8,11 @@
 
 pub mod parse;
 pub mod resolve;
+pub mod span;
 
 pub use parse::{ArcRadius, NodeKind, PageHeight, RawDocument, RawNode, RawPage, RawSegment};
 pub use resolve::{
     Common, Document, EllipseProps, ImageProps, Node, NodeType, PageInfo, PathProps, RectProps,
     ResolveError, TextProps,
 };
+pub use span::{parse_family_list, FontStyle, RawSpan, Script, SpanStyle, TextSpan};

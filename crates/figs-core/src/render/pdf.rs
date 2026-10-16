@@ -34,9 +34,10 @@ use krilla::Document;
 
 use crate::geom::{
     Affine, Color, ImageFit, LineCap, LineJoin as GLineJoin, PathSegment, Rect, StrokeStyle,
+    TextAlign,
 };
 use crate::layout::{ComputedLayout, PageGeom, PathPaint, TextBox};
-use crate::text::FontStore;
+use crate::text::{DecorationKind, FontStore, ShapedText};
 
 use super::geometry;
 use super::outline::OutlineCache;
@@ -103,6 +104,19 @@ impl<'s, 'a> PdfRenderer<'s, 'a> {
         self.surface.set_fill(fill.map(k_fill));
         self.surface.set_stroke(stroke.map(k_stroke));
         self.surface.draw_path(&path);
+    }
+
+    /// Fill the `kind` decoration bars of a shaped text box.
+    fn draw_decorations(
+        &mut self,
+        shaped: &ShapedText,
+        rect: Rect,
+        align: TextAlign,
+        kind: DecorationKind,
+    ) {
+        for (r, color) in geometry::decoration_rects(shaped, rect, align, kind) {
+            self.draw_segs(&geometry::rounded_rect(r, 0.0), Some(color), None);
+        }
     }
 
     /// The embedded font for a cosmic-text face, loading it on first use.
@@ -321,13 +335,19 @@ impl Renderer for PdfRenderer<'_, '_> {
             self.draw_segs(&segs, None, Some(stroke));
         }
 
+        self.draw_decorations(&shaped, rect, text.align, DecorationKind::Underline);
         for line in &shaped.lines {
             let align_off = geometry::align_offset(text.align, line.width, rect.w);
             let baseline = rect.y + line.baseline;
-            // One glyph run per consecutive (face, size): a fallback font
-            // starts a new run.
+            // One glyph run per consecutive (face, size, styled run): a
+            // fallback font or a new span (colour, shift, slant) starts a new
+            // run. Every run passes the whole `content` with its glyphs'
+            // ranges, so the text layer holds the string exactly once.
             for run in line.glyphs.chunk_by(|a, b| {
-                a.font_id == b.font_id && a.font_size.to_bits() == b.font_size.to_bits()
+                a.font_id == b.font_id
+                    && a.font_size.to_bits() == b.font_size.to_bits()
+                    && a.run == b.run
+                    && a.synthetic_italic == b.synthetic_italic
             }) {
                 let first = &run[0];
                 let Some(font) = self.font(fonts, first.font_id) else {
@@ -350,18 +370,33 @@ impl Renderer for PdfRenderer<'_, '_> {
                         y_offset: g.y_offset / size,
                     })
                     .collect();
+                let origin_x = rect.x + align_off + first.x;
+                // Synthetic italic: shear about the run's (shifted) baseline;
+                // the glyphs stay real text.
+                let slant = first.synthetic_italic.then(|| {
+                    let t = geometry::italic_shear();
+                    let pivot = baseline - first.y_offset;
+                    Transform::from_row(1.0, 0.0, -t, 1.0, t * pivot, 0.0)
+                });
+                if let Some(xf) = &slant {
+                    self.surface.push_transform(xf);
+                }
                 self.surface.set_stroke(None);
-                self.surface.set_fill(Some(k_fill(text.color)));
+                self.surface.set_fill(Some(k_fill(first.color)));
                 self.surface.draw_glyphs(
-                    KPoint::from_xy(rect.x + align_off + first.x, baseline),
+                    KPoint::from_xy(origin_x, baseline),
                     &glyphs,
                     font,
                     content,
                     size,
                     false,
                 );
+                if slant.is_some() {
+                    self.surface.pop();
+                }
             }
         }
+        self.draw_decorations(&shaped, rect, text.align, DecorationKind::Strike);
     }
 
     fn draw_image(&mut self, rect: Rect, src: &Path, fit: ImageFit) {
