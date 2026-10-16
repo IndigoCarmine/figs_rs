@@ -9,7 +9,7 @@ use eframe::egui::{self, Color32, Rect, RichText, Sense, Stroke};
 use figs_core::geom::{
     ArrowHead, Color, CrossAxisAlign, Edges, ImageFit, LineCap, MainAxisAlign, TextAlign,
 };
-use figs_core::schema::{NodeKind, PageHeight, RawDocument};
+use figs_core::schema::{NodeKind, PageHeight, RawDocument, RawSegment};
 use figs_core::units::Unit;
 use figs_core::ComputedLayout;
 
@@ -302,6 +302,7 @@ fn inspector(app: &mut FigsApp, ui: &mut egui::Ui, _p: &Palette) {
                         section(ui, "Shape");
                         if kind != NodeKind::Ellipse {
                             changed |= points_editor(ui, &mut node.points, kind == NodeKind::Path);
+                            segments_summary(ui, &node.segments);
                         }
                         if kind == NodeKind::Path {
                             changed |= ui.checkbox(&mut node.closed, "Closed").changed();
@@ -618,6 +619,27 @@ fn points_editor(ui: &mut egui::Ui, pts: &mut Vec<[f32; 2]>, resizable: bool) ->
         });
     }
     changed
+}
+
+/// Read-only list of curve `segments` (continuing after the points); they
+/// are edited in the TOML pane.
+fn segments_summary(ui: &mut egui::Ui, segs: &[RawSegment]) {
+    if segs.is_empty() {
+        return;
+    }
+    ui.label("Segments (edit in TOML)");
+    for (i, s) in segs.iter().enumerate() {
+        let kind = if s.quad.is_some() {
+            "quad"
+        } else if s.cubic.is_some() {
+            "cubic"
+        } else if s.arc.is_some() {
+            "arc"
+        } else {
+            "line"
+        };
+        ui.weak(format!("{}  {kind} to ({}, {})", i + 1, s.to[0], s.to[1]));
+    }
 }
 
 /// Dash pattern as a comma/space separated list of lengths (empty = solid).
@@ -951,11 +973,12 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
                     v.extend(["fill", "stroke", "stroke_width", "corner_radius"])
                 }
                 Some(NodeKind::Line) | Some(NodeKind::Arrow) => v.extend([
-                    "points", "stroke", "stroke_width", "dash", "cap", "head", "head_size",
+                    "points", "segments", "stroke", "stroke_width", "dash", "cap", "head",
+                    "head_size",
                 ]),
                 Some(NodeKind::Path) => v.extend([
-                    "points", "closed", "fill", "stroke", "stroke_width", "dash", "cap", "head",
-                    "head_size",
+                    "points", "segments", "closed", "fill", "stroke", "stroke_width", "dash",
+                    "cap", "head", "head_size",
                 ]),
                 Some(NodeKind::Ellipse) => {
                     v.extend(["fill", "stroke", "stroke_width", "dash", "cap"])
@@ -964,7 +987,8 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
                     "content", "font_size", "font_family", "font_weight", "color", "align",
                     "line_height", "src", "fit", "fill", "stroke", "stroke_width",
                     "corner_radius", "children", "spacing", "main_axis_alignment",
-                    "cross_axis_alignment", "points", "closed", "dash", "cap", "head", "head_size",
+                    "cross_axis_alignment", "points", "segments", "closed", "dash", "cap", "head",
+                    "head_size",
                 ]),
             }
             v.extend(["flex", "width", "height", "aspect_ratio", "margin", "padding", "x", "y"]);
@@ -981,6 +1005,7 @@ fn enum_values(key: &str) -> Vec<&'static str> {
         ],
         "cap" => vec!["butt", "round", "square"],
         "head" => vec!["none", "start", "end", "both"],
+        "sweep" => vec!["cw", "ccw"],
         "fit" => vec!["contain", "cover", "fill"],
         "align" => vec!["left", "center", "right", "justify"],
         "unit" => vec!["cm", "mm", "in", "pt", "px"],

@@ -11,7 +11,7 @@ use tiny_skia::{
     Pixmap, PixmapPaint, PremultipliedColorU8, Rect as SkRect, Stroke, StrokeDash, Transform,
 };
 
-use crate::geom::{Color, ImageFit, LineCap, Point, Rect, StrokeStyle};
+use crate::geom::{Color, ImageFit, LineCap, PathSegment, Point, Rect, StrokeStyle};
 use crate::layout::{ComputedLayout, PageGeom, PathPaint, TextBox};
 use crate::schema::TextProps;
 use crate::text::FontStore;
@@ -130,17 +130,39 @@ impl<'a> TinySkiaRenderer<'a> {
             .stroke_path(path, &paint, &sk_stroke, Transform::identity(), None);
     }
 
-    /// Build a pixel-space polyline through `pts` (points), closing it if asked.
-    fn polyline(&self, pts: &[Point], closed: bool) -> Option<tiny_skia::Path> {
+    /// Build a pixel-space path from IR segments (points).
+    fn sk_path(&self, segments: &[PathSegment]) -> Option<tiny_skia::Path> {
+        let mut pb = PathBuilder::new();
+        for s in segments {
+            match *s {
+                PathSegment::MoveTo(p) => pb.move_to(self.px(p.x), self.px(p.y)),
+                PathSegment::LineTo(p) => pb.line_to(self.px(p.x), self.px(p.y)),
+                PathSegment::QuadTo(c, p) => {
+                    pb.quad_to(self.px(c.x), self.px(c.y), self.px(p.x), self.px(p.y))
+                }
+                PathSegment::CubicTo(c1, c2, p) => pb.cubic_to(
+                    self.px(c1.x),
+                    self.px(c1.y),
+                    self.px(c2.x),
+                    self.px(c2.y),
+                    self.px(p.x),
+                    self.px(p.y),
+                ),
+                PathSegment::Close => pb.close(),
+            }
+        }
+        pb.finish()
+    }
+
+    /// Build a closed pixel-space polygon through `pts` (points).
+    fn polygon(&self, pts: &[Point]) -> Option<tiny_skia::Path> {
         let (first, rest) = pts.split_first()?;
         let mut pb = PathBuilder::new();
         pb.move_to(self.px(first.x), self.px(first.y));
         for p in rest {
             pb.line_to(self.px(p.x), self.px(p.y));
         }
-        if closed {
-            pb.close();
-        }
+        pb.close();
         pb.finish()
     }
 
@@ -389,43 +411,25 @@ impl Renderer for TinySkiaRenderer<'_> {
     }
 
     fn draw_path(&mut self, path: &PathPaint) {
-        if path.points.len() < 2 {
+        if path.segments.len() < 2 {
             return;
         }
         if let Some(fill) = path.fill {
-            if let Some(p) = self.polyline(&path.points, path.closed) {
+            if let Some(p) = self.sk_path(&path.segments) {
                 self.fill_shape(&p, fill);
             }
         }
         let Some(stroke) = &path.stroke else {
             return;
         };
-
-        // Arrowheads: pull the shaft back into each head (by half its length) so
-        // a butt/square/round cap never pokes out past the tip, then stroke the
-        // shaft and fill the heads in the stroke color.
-        let mut shaft = path.points.clone();
-        let mut heads = Vec::new();
-        if !path.closed && path.head_size > 0.0 {
-            let n = shaft.len();
-            if path.head.at_end() {
-                if let Some(h) = arrow_head(&path.points, n - 1, -1, path.head_size) {
-                    shaft[n - 1] = h.shaft_end;
-                    heads.push(h.triangle);
-                }
-            }
-            if path.head.at_start() {
-                if let Some(h) = arrow_head(&path.points, 0, 1, path.head_size) {
-                    shaft[0] = h.shaft_end;
-                    heads.push(h.triangle);
-                }
-            }
-        }
-        if let Some(p) = self.polyline(&shaft, path.closed) {
+        // Shaft pulled back into the heads (so no cap pokes past a tip), then
+        // the heads filled solid in the stroke color.
+        let geo = path.stroke_geometry();
+        if let Some(p) = self.sk_path(&geo.shaft) {
             self.stroke_shape(&p, stroke);
         }
-        for tri in heads {
-            if let Some(p) = self.polyline(&tri, true) {
+        for tri in &geo.heads {
+            if let Some(p) = self.polygon(tri) {
                 self.fill_shape(&p, stroke.color);
             }
         }
@@ -459,40 +463,6 @@ impl Renderer for TinySkiaRenderer<'_> {
         let border = Color::parse_hex("#b6b2a7").unwrap_or(Color::BLACK);
         self.fill_rect(rect, Some(fill), Some(border), 1.0, 0.0);
     }
-}
-
-/// An arrowhead triangle plus where the shaft should now end.
-struct Head {
-    triangle: [Point; 3],
-    shaft_end: Point,
-}
-
-/// Arrowhead of length `len` at `pts[tip]`, pointing away from the nearest
-/// distinct neighbour found by walking `step` (+1/-1). Its base is 0.8x `len`
-/// wide. `None` when every other point coincides with the tip.
-fn arrow_head(pts: &[Point], tip: usize, step: isize, len: f32) -> Option<Head> {
-    let t = pts[tip];
-    let mut i = tip as isize + step;
-    let (ux, uy, seg) = loop {
-        let p = *pts.get(usize::try_from(i).ok()?)?;
-        let (dx, dy) = (t.x - p.x, t.y - p.y);
-        let d = (dx * dx + dy * dy).sqrt();
-        if d > 1e-6 {
-            break (dx / d, dy / d, d);
-        }
-        i += step;
-    };
-    let base = Point::new(t.x - ux * len, t.y - uy * len);
-    let half = 0.4 * len;
-    let back = (0.5 * len).min(seg);
-    Some(Head {
-        triangle: [
-            t,
-            Point::new(base.x - uy * half, base.y + ux * half),
-            Point::new(base.x + uy * half, base.y - ux * half),
-        ],
-        shaft_end: Point::new(t.x - ux * back, t.y - uy * back),
-    })
 }
 
 /// Horizontal offset (points) to apply to a line of the given width inside a

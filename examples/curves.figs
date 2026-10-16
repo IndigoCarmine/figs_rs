@@ -1,0 +1,57 @@
+// Curved annotations: core curve builders (.quad / .cubic / .arc / .to) on
+// `path`, plus the prelude's `curve`, `curved_arrow`, `brace` and `bracket`.
+//
+// Coordinates are page units (cm) in the stack. Bends and depths are measured
+// perpendicular to the chord; positive goes left of the direction of travel
+// (upwards for a left-to-right chord).
+let accent = "#e0635a";
+let ink = "#2f3b4c";
+let soft = "#6aa9e0";
+
+fn node_box(label, x, y) {
+    stack([
+        rect().fill("#eef3f8").stroke("#2f3b4c").stroke_width(0.03).radius(0.15),
+        text(label).size(11).center().margin(0.25),
+    ]).width(2.4).height(1.0).at(x, y)
+}
+
+page(12, 8,
+    stack([
+        rect().fill("#ffffff"),
+
+        // Two states with curved transitions in both directions.
+        node_box("idle", 1.0, 1.0),
+        node_box("busy", 8.6, 1.0),
+        curved_arrow(3.5, 1.3, 8.5, 1.3, 0.7).stroke(accent).stroke_width(0.05),
+        curved_arrow(8.5, 1.8, 3.5, 1.8, 0.7).stroke(ink).stroke_width(0.05).dash([0.15, 0.1]),
+        text("start").size(9).color(accent).at(5.55, 0.05),
+        text("done").size(9).color(ink).at(5.6, 2.6),
+
+        // A self-loop on "busy": a large arc out of the box's bottom edge. The
+        // head follows the curve's tangent at the tip.
+        path([[9.35, 2.05]]).arc(0.5, 10.25, 2.05, #{ large: true, sweep: "ccw" })
+            .stroke(accent).stroke_width(0.05).head("end").head_size(0.2),
+
+        // Three bars spanned by a brace (above) and a bracket (below).
+        rect().fill(soft).width(1.0).height(1.6).at(1.0, 4.8),
+        rect().fill(soft).width(1.0).height(2.2).at(2.4, 4.2),
+        rect().fill(soft).width(1.0).height(1.2).at(3.8, 5.2),
+        brace(1.0, 4.0, 4.8, 4.0, 0.4).stroke(ink).stroke_width(0.035),
+        text("n = 3").size(9).color(ink).at(2.45, 3.1),
+        bracket(1.0, 6.6, 4.8, 6.6, -0.25).stroke(ink).stroke_width(0.035),
+
+        // A smooth S-curve (two cubics) with a head at both ends.
+        path([[6.0, 7.0]])
+            .cubic(7.0, 7.0, 7.0, 5.0, 8.0, 5.0)
+            .cubic(9.0, 5.0, 9.0, 3.4, 10.0, 3.4)
+            .stroke(ink).stroke_width(0.04).head("both"),
+
+        // A filled closed shape mixing straight and curved segments (a tab).
+        path([[10.2, 7.4], [10.2, 6.2]])
+            .quad(10.2, 5.6, 10.8, 5.6)
+            .to(11.0, 5.6)
+            .arc(0.6, 11.6, 6.2)
+            .to(11.6, 7.4)
+            .closed().fill("#f6d9d6").stroke(accent).stroke_width(0.03),
+    ]),
+).unit("cm").background("#ffffff")

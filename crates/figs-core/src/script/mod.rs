@@ -8,7 +8,8 @@
 //! ## Authoring
 //!
 //! Build nodes with `text` / `rect` / `image` / `col` / `row` / `stack` (and the
-//! vector shapes `line` / `arrow` / `ellipse` / `path`), set properties by
+//! vector shapes `line` / `arrow` / `ellipse` / `path`, whose outline continues
+//! with the curve builders `.to` / `.quad` / `.cubic` / `.arc`), set properties by
 //! **chaining methods** (Rhai has no keyword arguments, so chaining is how you get
 //! concise, named-ish properties — no map literals), and finish with a single
 //! `page(width, height, root)` call (`height` may be `"auto"` to fit the content):
@@ -26,12 +27,13 @@
 
 use std::collections::HashMap;
 
-use rhai::{Array, Dynamic, Engine, EvalAltResult, Position};
+use rhai::{Array, Dynamic, Engine, EvalAltResult, Map, Position};
 
 use crate::geom::{
-    ArrowHead, Color, CrossAxisAlign, Edges, ImageFit, LineCap, MainAxisAlign, TextAlign,
+    ArcSweep, ArrowHead, Color, CrossAxisAlign, Edges, ImageFit, LineCap, MainAxisAlign,
+    TextAlign,
 };
-use crate::schema::{NodeKind, PageHeight, RawDocument, RawNode, RawPage};
+use crate::schema::{ArcRadius, NodeKind, PageHeight, RawDocument, RawNode, RawPage, RawSegment};
 use crate::units::Unit;
 
 // ---------------------------------------------------------------------------
@@ -219,6 +221,7 @@ fn blank_node(kind: NodeKind) -> RawNode {
         stroke_width: None,
         corner_radius: None,
         points: Vec::new(),
+        segments: Vec::new(),
         closed: false,
         dash: Vec::new(),
         cap: None,
@@ -294,6 +297,85 @@ fn cast_points(points: Array) -> Result<Vec<[f32; 2]>, Box<EvalAltResult>> {
             }
         })
         .collect()
+}
+
+/// Result of a chainable node setter.
+type NodeResult = Result<ScriptNode, Box<EvalAltResult>>;
+
+/// `N` numbers for the curve builder `name` (signature in `sig`).
+fn nums<const N: usize>(
+    name: &str,
+    sig: &str,
+    args: [Dynamic; N],
+) -> Result<[f32; N], Box<EvalAltResult>> {
+    let mut v = [0.0f32; N];
+    for (o, d) in v.iter_mut().zip(&args) {
+        *o = dyn_to_f32(d).ok_or_else(|| err(format!("`{name}` expects numbers ({sig})")))?;
+    }
+    Ok(v)
+}
+
+/// Append a curve-builder segment to a `path`/`line`/`arrow` node.
+fn push_segment(mut n: ScriptNode, name: &str, seg: RawSegment) -> NodeResult {
+    if !matches!(n.node.kind, NodeKind::Path | NodeKind::Line | NodeKind::Arrow) {
+        return Err(err(format!("`{name}` continues a path/line/arrow outline")));
+    }
+    n.node.segments.push(seg);
+    Ok(n)
+}
+
+/// `.arc(r, x, y[, opts])`: `r` is a number or `[rx, ry]`; `opts` a map with
+/// optional `sweep` ("cw"/"ccw"), `large` (bool) and `rotation` (degrees).
+fn arc_segment(
+    r: Dynamic,
+    x: Dynamic,
+    y: Dynamic,
+    opts: Map,
+) -> Result<RawSegment, Box<EvalAltResult>> {
+    let bad_r = || err("`arc` radius must be a number or [rx, ry]");
+    let radius = match dyn_to_f32(&r) {
+        Some(r) => ArcRadius::Circle(r),
+        None => {
+            let a = r.try_cast::<Array>().ok_or_else(bad_r)?;
+            match a.as_slice() {
+                [rx, ry] => ArcRadius::Ellipse([
+                    dyn_to_f32(rx).ok_or_else(bad_r)?,
+                    dyn_to_f32(ry).ok_or_else(bad_r)?,
+                ]),
+                _ => return Err(bad_r()),
+            }
+        }
+    };
+    let [x, y] = nums("arc", "r, x, y[, opts]", [x, y])?;
+    let mut seg = RawSegment::line([x, y]);
+    seg.arc = Some(radius);
+    for (k, v) in opts {
+        match k.as_str() {
+            "sweep" => {
+                let s = v
+                    .into_string()
+                    .map_err(|_| err(r#"`arc`: `sweep` must be "cw" or "ccw""#))?;
+                seg.sweep = Some(match s.as_str() {
+                    "cw" => ArcSweep::Cw,
+                    "ccw" => ArcSweep::Ccw,
+                    _ => return Err(err(format!("`arc`: invalid sweep `{s}` (cw, ccw)"))),
+                });
+            }
+            "large" => {
+                seg.large = v.as_bool().map_err(|_| err("`arc`: `large` must be true or false"))?;
+            }
+            "rotation" => {
+                seg.rotation =
+                    Some(dyn_to_f32(&v).ok_or_else(|| err("`arc`: `rotation` must be a number"))?);
+            }
+            other => {
+                return Err(err(format!(
+                    "`arc`: unknown option `{other}` (sweep, large, rotation)"
+                )))
+            }
+        }
+    }
+    Ok(seg)
 }
 
 /// `page(width, height, root)`; `height` may be a number or `"auto"` (fit the
@@ -501,6 +583,54 @@ fn build_engine() -> Engine {
         },
     );
     engine.register_fn("closed", |n: ScriptNode| set_node(n, |r| r.closed = true));
+
+    // Curve builders: each appends a segment from the outline's current end
+    // (the last point so far) to (x, y). Page units, node-box frame.
+    engine.register_fn(
+        "to",
+        |n: ScriptNode, x: Dynamic, y: Dynamic| -> NodeResult {
+            let [x, y] = nums("to", "x, y", [x, y])?;
+            push_segment(n, "to", RawSegment::line([x, y]))
+        },
+    );
+    engine.register_fn(
+        "quad",
+        |n: ScriptNode, cx: Dynamic, cy: Dynamic, x: Dynamic, y: Dynamic| -> NodeResult {
+            let [cx, cy, x, y] = nums("quad", "cx, cy, x, y", [cx, cy, x, y])?;
+            let mut seg = RawSegment::line([x, y]);
+            seg.quad = Some([cx, cy]);
+            push_segment(n, "quad", seg)
+        },
+    );
+    engine.register_fn(
+        "cubic",
+        |n: ScriptNode,
+         c1x: Dynamic,
+         c1y: Dynamic,
+         c2x: Dynamic,
+         c2y: Dynamic,
+         x: Dynamic,
+         y: Dynamic|
+         -> NodeResult {
+            let [c1x, c1y, c2x, c2y, x, y] =
+                nums("cubic", "c1x, c1y, c2x, c2y, x, y", [c1x, c1y, c2x, c2y, x, y])?;
+            let mut seg = RawSegment::line([x, y]);
+            seg.cubic = Some([[c1x, c1y], [c2x, c2y]]);
+            push_segment(n, "cubic", seg)
+        },
+    );
+    engine.register_fn(
+        "arc",
+        |n: ScriptNode, r: Dynamic, x: Dynamic, y: Dynamic| -> NodeResult {
+            push_segment(n, "arc", arc_segment(r, x, y, Map::new())?)
+        },
+    );
+    engine.register_fn(
+        "arc",
+        |n: ScriptNode, r: Dynamic, x: Dynamic, y: Dynamic, opts: Map| -> NodeResult {
+            push_segment(n, "arc", arc_segment(r, x, y, opts)?)
+        },
+    );
 
     // font weight (u16, rounded + range-checked).
     engine.register_fn(

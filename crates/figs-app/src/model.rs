@@ -39,6 +39,7 @@ fn blank(kind: NodeKind) -> RawNode {
         stroke_width: None,
         corner_radius: None,
         points: Vec::new(),
+        segments: Vec::new(),
         closed: false,
         dash: Vec::new(),
         cap: None,

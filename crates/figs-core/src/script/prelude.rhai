@@ -120,6 +120,79 @@ fn circle(r) { ellipse().width(2 * r).height(2 * r) }
 fn circle(cx, cy, r) { circle(r).at(cx - r, cy - r) }
 
 // ---------------------------------------------------------------------------
+// Curves (sugar over the core `path` curve builders .quad/.cubic/.arc)
+// ---------------------------------------------------------------------------
+//
+// Coordinates are page units in the shape's own box, as for `line`/`arrow`.
+// `bend`/`depth` offsets are measured perpendicular to the chord from
+// (x1, y1) to (x2, y2): positive goes to the *left* of the direction of travel
+// (upwards for a left-to-right chord), negative to the right.
+
+// Unit left-normal [nx, ny] of the chord (x1, y1) -> (x2, y2), and its length.
+fn chord_frame(name, x1, y1, x2, y2) {
+    let dx = (x2 - x1).to_float();
+    let dy = (y2 - y1).to_float();
+    let len = (dx * dx + dy * dy).sqrt();
+    if len == 0.0 { throw `${name}(): start and end points coincide`; }
+    [dy / len, -dx / len, len]
+}
+
+// A quadratic curve whose midpoint sits `bend` off the chord (0 = straight).
+fn curve(x1, y1, x2, y2, bend) {
+    let f = chord_frame("curve", x1, y1, x2, y2);
+    // A quad's midpoint is halfway between the chord midpoint and the control.
+    let cx = (x1 + x2) / 2.0 + 2.0 * bend * f[0];
+    let cy = (y1 + y2) / 2.0 + 2.0 * bend * f[1];
+    path([[x1, y1]]).quad(cx, cy, x2, y2)
+}
+
+// `curve` with an arrowhead at (x2, y2), following the curve's tangent.
+fn curved_arrow(x1, y1, x2, y2, bend) { curve(x1, y1, x2, y2, bend).head("end") }
+
+// A curly brace spanning the chord, its tip `depth` off it (at the middle) and
+// its ends on (x1, y1) / (x2, y2) — e.g. `brace(0, 0, 6, 0, -0.4)` under a span.
+fn brace(x1, y1, x2, y2, depth) {
+    let f = chord_frame("brace", x1, y1, x2, y2);
+    let nx = f[0];
+    let ny = f[1];
+    let len = f[2];
+    let h = len / 2.0;
+    let d = depth.to_float();
+    let m = d / 2.0;
+    let a = if d.abs() < h { d.abs() } else { h }; // shoulder length along the chord
+    let k = 0.5523;                                // quarter-ellipse handle factor
+    // Control/end points in the chord frame: [along, out].
+    let local = [
+        [0.0, k * m], [a - k * a, m], [a, m],                  // curl out of the start
+        [h - a, m],                                            // straight run
+        [h - a + k * a, m], [h, d - k * m], [h, d],            // up into the tip
+        [h, d - k * m], [h + a - k * a, m], [h + a, m],        // back down
+        [len - a, m],                                          // straight run
+        [len - a + k * a, m], [len, k * m], [len, 0.0],        // curl into the end
+    ];
+    let q = [];
+    for p in local {
+        // along * (unit chord = (-ny, nx)) + out * (unit normal = (nx, ny))
+        q.push([x1 - ny * p[0] + nx * p[1], y1 + nx * p[0] + ny * p[1]]);
+    }
+    path([[x1, y1]])
+        .cubic(q[0][0], q[0][1], q[1][0], q[1][1], q[2][0], q[2][1])
+        .to(q[3][0], q[3][1])
+        .cubic(q[4][0], q[4][1], q[5][0], q[5][1], q[6][0], q[6][1])
+        .cubic(q[7][0], q[7][1], q[8][0], q[8][1], q[9][0], q[9][1])
+        .to(q[10][0], q[10][1])
+        .cubic(q[11][0], q[11][1], q[12][0], q[12][1], x2, y2)
+}
+
+// A square bracket spanning the chord, its back `depth` off it.
+fn bracket(x1, y1, x2, y2, depth) {
+    let f = chord_frame("bracket", x1, y1, x2, y2);
+    let ox = f[0] * depth;
+    let oy = f[1] * depth;
+    path([[x1, y1], [x1 + ox, y1 + oy], [x2 + ox, y2 + oy], [x2, y2]])
+}
+
+// ---------------------------------------------------------------------------
 // Labeled panels (overlay via the core `stack` / `.at`)
 // ---------------------------------------------------------------------------
 

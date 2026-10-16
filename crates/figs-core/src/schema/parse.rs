@@ -10,7 +10,8 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::geom::{
-    ArrowHead, Color, CrossAxisAlign, Edges, ImageFit, LineCap, MainAxisAlign, TextAlign,
+    ArcSweep, ArrowHead, Color, CrossAxisAlign, Edges, ImageFit, LineCap, MainAxisAlign,
+    TextAlign,
 };
 use crate::units::Unit;
 
@@ -238,9 +239,14 @@ pub struct RawNode {
     // ---- vector shapes (line / arrow / ellipse / path; `fill`/`stroke`/
     //      `stroke_width` above are shared) ----
     /// `[x, y]` vertices in the page unit, relative to the node's content-box
-    /// origin. `line`/`arrow` take exactly two, `path` two or more.
+    /// origin, joined by straight lines. Without `segments`, `line`/`arrow`
+    /// take exactly two and `path` two or more.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub points: Vec<[f32; 2]>,
+    /// Further (possibly curved) segments continuing from the last of
+    /// `points`, in order. See [`RawSegment`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub segments: Vec<RawSegment>,
     /// Close a `path` into a polygon (last point joins the first).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub closed: bool,
@@ -257,6 +263,82 @@ pub struct RawNode {
     /// Arrowhead length in the page unit (default: proportional to the stroke width).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub head_size: Option<f32>,
+}
+
+/// One entry of a shape's `segments`: a straight, Bézier or arc segment from
+/// the current point to `to` (page units, same frame as `points`). At most one
+/// of `quad` / `cubic` / `arc` may be given; with none it is a straight line.
+///
+/// ```toml
+/// segments = [
+///   { to = [4, 0] },                              # straight
+///   { quad = [5, -1], to = [6, 0] },              # quadratic: one control point
+///   { cubic = [[7, 1], [8, -1]], to = [9, 0] },   # cubic: two control points
+///   { arc = 1.5, to = [12, 0] },                  # circular arc, radius 1.5
+///   { arc = [2, 1], rotation = 30, large = true, sweep = "ccw", to = [9, 3] },
+/// ]
+/// ```
+///
+/// Arcs follow SVG's endpoint parameterization: of the (up to) four arcs of
+/// the given ellipse joining the two points, `large` picks the one spanning
+/// more than 180° and `sweep` the turning direction; radii too small to span
+/// the chord are scaled up uniformly.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RawSegment {
+    /// Quadratic Bézier control point `[x, y]`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quad: Option<[f32; 2]>,
+    /// Cubic Bézier control points `[[x1, y1], [x2, y2]]`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cubic: Option<[[f32; 2]; 2]>,
+    /// Elliptical arc radius: `r` (circular) or `[rx, ry]`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arc: Option<ArcRadius>,
+    /// Arc only: rotation of the ellipse's x axis, in degrees (clockwise on the page).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rotation: Option<f32>,
+    /// Arc only: take the arc spanning more than 180°.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub large: bool,
+    /// Arc only: turning direction (`cw`, the default, or `ccw`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sweep: Option<ArcSweep>,
+    /// End point `[x, y]`.
+    pub to: [f32; 2],
+}
+
+impl RawSegment {
+    /// A straight segment to `to`.
+    pub fn line(to: [f32; 2]) -> Self {
+        RawSegment {
+            quad: None,
+            cubic: None,
+            arc: None,
+            rotation: None,
+            large: false,
+            sweep: None,
+            to,
+        }
+    }
+}
+
+/// An arc segment's radius: one number (circle) or `[rx, ry]` (ellipse).
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum ArcRadius {
+    Circle(f32),
+    Ellipse([f32; 2]),
+}
+
+impl ArcRadius {
+    /// `(rx, ry)`.
+    pub fn radii(self) -> (f32, f32) {
+        match self {
+            ArcRadius::Circle(r) => (r, r),
+            ArcRadius::Ellipse([rx, ry]) => (rx, ry),
+        }
+    }
 }
 
 /// Error from the raw TOML parsing stage.

@@ -3,7 +3,7 @@
 //! consumes. Every node carries its stable `id` so a canvas hit-test can map
 //! straight back to a TOML node (needed by the Phase 2 editor).
 
-use crate::geom::{ArrowHead, Color, ImageFit, Point, Rect, StrokeStyle, TextAlign};
+use crate::geom::{ArrowHead, Color, ImageFit, PathSegment, Rect, StrokeStyle, TextAlign};
 
 /// A laid-out page: geometry plus a flat list of nodes in paint order
 /// (a parent always appears before its children).
@@ -62,18 +62,33 @@ pub enum PaintContent {
     },
 }
 
-/// A placed polyline/polygon. Unlike other content it may paint outside the
-/// node rect: points are absolute page coordinates (points, top-left origin).
+/// A placed vector outline (`line`, `arrow`, `path`). Unlike other content it
+/// may paint outside the node rect: segments are absolute page coordinates
+/// (points, top-left origin, y down).
 #[derive(Debug, Clone)]
 pub struct PathPaint {
-    pub points: Vec<Point>,
-    pub closed: bool,
+    /// One subpath: a leading `MoveTo`, then `LineTo` / `QuadTo` / `CubicTo`,
+    /// then optionally a trailing `Close` (arcs are already cubics).
+    pub segments: Vec<PathSegment>,
     pub fill: Option<Color>,
     pub stroke: Option<StrokeStyle>,
-    /// Arrowheads (filled with the stroke color); ignored when `closed`.
+    /// Arrowheads (filled with the stroke color); ignored when closed.
     pub head: ArrowHead,
     /// Arrowhead length; its base is 0.8x as wide.
     pub head_size: f32,
+}
+
+impl PathPaint {
+    /// Whether the outline is closed (ends with `Close`).
+    pub fn is_closed(&self) -> bool {
+        matches!(self.segments.last(), Some(PathSegment::Close))
+    }
+
+    /// The stroked shaft (pulled back into any arrowheads) and the head
+    /// triangles to fill in the stroke color — shared by every backend.
+    pub fn stroke_geometry(&self) -> crate::path::StrokeGeometry {
+        crate::path::stroke_geometry(&self.segments, self.head, self.head_size)
+    }
 }
 
 /// Resolved text ready to be shaped/painted within its node rect.
