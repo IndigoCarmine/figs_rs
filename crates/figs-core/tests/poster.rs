@@ -754,3 +754,395 @@ fn components_take_rich_text() {
         .iter()
         .any(|s| s.script == Some(Script::Sub) && s.text == "2"));
 }
+
+// ---- section effects, node titles ---------------------------------------------
+
+/// The (dx, dy, blur, spread, colour) of a raw node's shadow.
+fn shadow_of(n: &RawNode) -> (f32, f32, f32, f32, String) {
+    let s = n.shadow.as_ref().expect("a shadow");
+    (
+        s.dx,
+        s.dy,
+        s.blur,
+        s.spread,
+        s.color.map(|c| c.to_hex()).unwrap_or_default(),
+    )
+}
+
+fn assert_shadow(n: &RawNode, dx: f32, dy: f32, blur: f32, spread: f32, color: &str) {
+    let (a, b, c, d, e) = shadow_of(n);
+    approx(a, dx);
+    approx(b, dy);
+    approx(c, blur);
+    approx(d, spread);
+    assert_eq!(e, color);
+}
+
+#[test]
+fn section_effects_are_off_in_poster_and_on_in_poster_dark() {
+    let d = raw(r#"style("poster"); page(30, 20, section("A", rect())).unit("cm")"#);
+    let (bar_id, bar) = children(&d, "root")[0];
+    let (_, t) = children(&d, bar_id)[0];
+    assert!(bar.shadow.is_none() && bar.glow.is_none());
+    assert!(t.shadow.is_none() && t.glow.is_none());
+
+    // The PowerPoint look: a subtle dark glow and a tight soft shadow on the
+    // title, a soft 40 % shadow under the bar.
+    let d = raw(r#"style("poster-dark"); page(30, 20, section("A", rect())).unit("cm")"#);
+    let (bar_id, bar) = children(&d, "root")[0];
+    let (_, t) = children(&d, bar_id)[0];
+    assert_eq!(
+        t.content.as_deref(),
+        Some("1. A"),
+        "the title is still the text"
+    );
+    assert_shadow(bar, 0.06, 0.07, 0.2, 0.0, "#00000066");
+    assert!(bar.glow.is_none());
+    let g = t.glow.as_ref().expect("a title glow");
+    approx(g.blur, 0.1);
+    assert_eq!(g.color, hex("#00000099"));
+    assert_shadow(t, 0.04, 0.05, 0.08, 0.0, "#000000b3");
+
+    // The looks scale with the text.
+    let d = raw(
+        r#"style("poster-dark", #{ base_size: 12 }); page(30, 20, section("A", rect())).unit("cm")"#,
+    );
+    let (bar_id, bar) = children(&d, "root")[0];
+    approx(bar.shadow.as_ref().unwrap().blur, 0.1);
+    approx(children(&d, bar_id)[0].1.glow.as_ref().unwrap().blur, 0.05);
+}
+
+#[test]
+fn section_effect_hooks_take_maps() {
+    for prelude in [
+        r##"style(#{ section_title_glow: #{ blur: 0.3, color: "#ff0000" },
+                    section_title_shadow: #{ dx: 1, dy: 2, blur: 3, spread: 0.5 },
+                    section_bar_shadow: #{ dy: 0.2, color: "#0000ff80" } });"##,
+        r##"fn section_title_glow() { #{ blur: 0.3, color: "#ff0000" } }
+            fn section_title_shadow() { #{ dx: 1, dy: 2, blur: 3, spread: 0.5 } }
+            fn section_bar_shadow() { #{ dy: 0.2, color: "#0000ff80" } }"##,
+    ] {
+        let d = raw(&format!(
+            "{prelude} page(30, 20, section(\"A\", rect())).unit(\"cm\")"
+        ));
+        let (bar_id, bar) = children(&d, "root")[0];
+        let (_, t) = children(&d, bar_id)[0];
+        let g = t.glow.as_ref().unwrap();
+        approx(g.blur, 0.3);
+        assert_eq!(g.color, hex("#ff0000"));
+        assert_shadow(t, 1.0, 2.0, 3.0, 0.5, "#00000080");
+        assert_shadow(bar, 0.0, 0.2, 0.0, 0.0, "#0000ff80");
+    }
+    // `true` switches the look on in the light style; `false` off in the dark.
+    let d = raw(
+        r#"style("poster", #{ section_bar_shadow: true }); page(30, 20, section("A", rect())).unit("cm")"#,
+    );
+    assert_shadow(children(&d, "root")[0].1, 0.06, 0.07, 0.2, 0.0, "#00000066");
+    let d = raw(
+        r#"style("poster-dark", #{ section_title_glow: false }); page(30, 20, section("A", rect())).unit("cm")"#,
+    );
+    let bar_id = children(&d, "root")[0].0;
+    assert!(children(&d, bar_id)[0].1.glow.is_none());
+
+    assert!(
+        fail(r#"style(#{ section_title_glow: 3 }); page(1, 1, section("A", rect()))"#)
+            .contains("expected false, true or a map")
+    );
+    assert!(fail(
+        r#"style(#{ section_title_glow: #{ dx: 1 } }); page(1, 1, section("A", rect()))"#
+    )
+    .contains("unknown key \"dx\""));
+}
+
+#[test]
+fn section_takes_a_text_node_title() {
+    let src = r##"
+        fn section_bar_height() { 30 }
+        fn section_title_size() { 72 }
+        page(200, 100, section(text("X").color("#ff0000"), rect())).unit("pt")
+    "##;
+    let d = raw(src);
+    let l = lay_fixed(src);
+    // The node keeps its own look; the number goes before it in the title
+    // style, a space (0.28 em) apart, the pair centred on the bar.
+    let (_, x) = text_node(&d, "X");
+    assert_eq!(x.font_size, None);
+    assert_eq!(x.color, hex("#ff0000"));
+    let (_, n) = text_node(&d, "1.");
+    assert_eq!(n.font_size, Some(72.0));
+    assert_eq!(n.color, hex("#ffffff"));
+    let a = text_rect(&l, "1.");
+    let b = text_rect(&l, "X");
+    approx(b.x - (a.x + a.w), 72.0 * 0.28 * 2.54 / 72.0);
+    approx((a.x + b.x + b.w) / 2.0, 100.0);
+    approx(a.y + a.h / 2.0, 15.0);
+    approx(b.y + b.h / 2.0, 15.0);
+    // Effects go on a row around the title, so the node's own stay.
+    let d = raw(
+        r#"style("poster-dark"); page(30, 20, section("", text("X").glow(0.5), rect())).unit("cm")"#,
+    );
+    let (bar_id, _) = children(&d, "root")[0];
+    let (wrap_id, wrap) = children(&d, bar_id)[0];
+    assert_eq!(wrap.kind, NodeKind::Row);
+    assert!(wrap.glow.is_some() && wrap.shadow.is_some());
+    approx(children(&d, wrap_id)[0].1.glow.as_ref().unwrap().blur, 0.5);
+    assert_eq!(texts(&d), ["X"]);
+    // `section_title` is the bar's title style, to chain setters on.
+    let d = raw(r#"style("poster"); page(30, 20, section_title("T"))"#);
+    approx(d.nodes["root"].font_size.unwrap(), 24.0 * 2.23);
+    assert_eq!(d.nodes["root"].align, Some(TextAlign::Center));
+}
+
+// ---- grid options ---------------------------------------------------------------
+
+#[test]
+fn columns_take_per_gutter_separators_and_gutters() {
+    let src = r#"
+        fn separator_inset() { 5 }
+        fn separator_width() { 1 }
+        page(190, 50, columns([rect(), rect(), rect(), rect()], #{
+            gutter: [10, 20, 10],
+            separators: [20, false, #{ start: 2, end: 30 }],
+        })).unit("pt")
+    "#;
+    let d = raw(src);
+    let l = lay_fixed(src);
+    let kids = children(&d, "root");
+    assert_eq!(kids.len(), 7, "4 columns + 3 gutters");
+    assert_eq!(d.nodes["root"].spacing, 0.0);
+    // (190 - 40) / 4 = 37.5 per column.
+    for (i, x, w) in [
+        (0, 0.0, 37.5),
+        (1, 37.5, 10.0),
+        (2, 47.5, 37.5),
+        (3, 85.0, 20.0),
+        (4, 105.0, 37.5),
+        (5, 142.5, 10.0),
+        (6, 152.5, 37.5),
+    ] {
+        let r = rect_of(&l, kids[i].0);
+        approx(r.x, x);
+        approx(r.w, w);
+    }
+    // A partial separator from the inset (the middle of the bars) down to
+    // 20; none in the plain gutter; one from 2 to 30.
+    let seps = separators(&l);
+    assert_eq!(seps.len(), 2);
+    let (a, b, _) = &seps[0];
+    assert_eq!((a[0], a[1], b[0], b[1]), (42.5, 5.0, 42.5, 20.0));
+    let (a, b, _) = &seps[1];
+    assert_eq!((a[0], a[1], b[0], b[1]), (147.5, 2.0, 147.5, 30.0));
+
+    // Quoted "from" / "until" are aliases.
+    let l = lay_fixed(
+        r#"fn separator_inset() { 5 }
+           page(110, 50, columns([rect(), rect()], #{ gutter: 10, separators: [#{ "until": 25 }] })).unit("pt")"#,
+    );
+    let (a, b, _) = &separators(&l)[0];
+    assert_eq!((a[1], b[1]), (5.0, 25.0));
+
+    // Options as the second argument; one gutter and no separators stays
+    // plain spacing.
+    let d = raw(
+        r#"page(110, 50, columns([rect(), rect()], #{ gutter: 4, separators: false })).unit("pt")"#,
+    );
+    assert_eq!(children(&d, "root").len(), 2);
+    approx(d.nodes["root"].spacing, 4.0);
+
+    assert!(
+        fail(r#"page(1, 1, columns([rect(), rect(), rect()], #{ separators: [true] }))"#)
+            .contains("3 items have 2 gaps but separators has 1 values")
+    );
+    assert!(
+        fail(r#"page(1, 1, columns([rect(), rect()], #{ separators: ["x"] }))"#)
+            .contains("a separator is true, false")
+    );
+    assert!(
+        fail(r#"page(1, 1, columns([rect(), rect()], #{ separators: [#{ stop: 1 }] }))"#)
+            .contains("unknown separator key")
+    );
+    assert!(fail(
+        r#"page(1, 1, columns([rect(), rect()], #{ separators: [#{ start: 3, end: 2 }] }))"#
+    )
+    .contains("must end below its start"));
+    assert!(fail(r#"page(1, 1, columns([rect()], [1], #{ gap: 1 }))"#)
+        .contains("unknown option \"gap\""));
+}
+
+#[test]
+fn rows_take_per_gap_sizes_and_separators() {
+    let src = r#"
+        fn separator_width() { 1 }
+        page(100, 230, rows([rect(), rect(), rect()], [1, 1, 1], #{
+            gaps: [10, 20], separators: [false, true],
+        })).unit("pt")
+    "#;
+    let d = raw(src);
+    let l = lay_fixed(src);
+    let kids = children(&d, "root");
+    assert_eq!(kids.len(), 5);
+    let h = 200.0 / 3.0;
+    approx(rect_of(&l, kids[0].0).y, 0.0);
+    approx(rect_of(&l, kids[2].0).y, h + 10.0);
+    approx(rect_of(&l, kids[4].0).y, 2.0 * h + 30.0);
+    approx(rect_of(&l, kids[4].0).h, h);
+    // The separator is centred in the 20 pt gap.
+    let seps = separators(&l);
+    assert_eq!(seps.len(), 1);
+    approx(seps[0].0[1], 2.0 * h + 20.0);
+
+    let d = raw(r#"page(100, 100, rows([rect(), rect()], #{ gaps: 5 })).unit("pt")"#);
+    assert_eq!(children(&d, "root").len(), 2);
+    approx(d.nodes["root"].spacing, 5.0);
+    assert!(
+        fail(r#"page(1, 1, rows([rect(), rect()], #{ gaps: [1, 2] }))"#).contains("has 2 values")
+    );
+    assert!(
+        fail(r#"page(1, 1, rows([rect(), rect()], #{ separators: [3] }))"#)
+            .contains("separators are true or false")
+    );
+}
+
+// ---- table padding and spans ------------------------------------------------------
+
+#[test]
+fn table_padding_per_axis() {
+    let base =
+        r#"fn table_rule_width() { 1 } fn table_header_rule_width() { 3 } fn table_pad() { 2 }"#;
+    // Option: 6 left/right, 2 top/bottom.
+    let l = lay_fixed(&format!(
+        r#"{base} page(101, 100, table([["a", "b"], ["c", "d"]], #{{ pad_x: 6 }})).unit("pt")"#
+    ));
+    assert_xywh(text_rect(&l, "a"), 7.0, 3.0, 37.0, 10.0);
+    assert_xywh(text_rect(&l, "b"), 57.0, 3.0, 37.0, 10.0);
+    assert_xywh(text_rect(&l, "c"), 7.0, 20.0, 37.0, 10.0);
+    // Hook: 5 top/bottom, the sides keep `table_pad()`.
+    let l = lay_fixed(&format!(
+        r#"{base} fn table_pad_y() {{ 5 }} page(101, 100, table([["a", "b"], ["c", "d"]])).unit("pt")"#
+    ));
+    assert_xywh(text_rect(&l, "a"), 3.0, 6.0, 45.0, 10.0);
+    assert_xywh(text_rect(&l, "c"), 3.0, 1.0 + 20.0 + 3.0 + 5.0, 45.0, 10.0);
+    // `pad` sets both; style keys too.
+    let l = lay_fixed(&format!(
+        r#"{base} style(#{{ table_pad_x: 4 }}); page(101, 100, table([["a"]], #{{ pad: 1 }})).unit("pt")"#
+    ));
+    assert_xywh(text_rect(&l, "a"), 2.0, 2.0, 97.0, 10.0);
+    let l = lay_fixed(&format!(
+        r#"{base} style(#{{ table_pad_x: 4 }}); page(101, 100, table([["a"]])).unit("pt")"#
+    ));
+    assert_xywh(text_rect(&l, "a"), 5.0, 3.0, 91.0, 10.0);
+}
+
+#[test]
+fn table_cells_span_columns() {
+    let base =
+        r#"fn table_rule_width() { 1 } fn table_header_rule_width() { 3 } fn table_pad() { 2 }"#;
+    let l = lay_fixed(&format!(
+        r#"{base} page(151, 100, table([["a", "b", "c"], [colspan(2, "ab"), "c2"], ["x", colspan(2, "yz")]])).unit("pt")"#
+    ));
+    // Flex columns: (151 - 4 rules) / 3 = 49; a two-column cell covers
+    // 49 + 1 + 49 = 99: the covered rule as two 0.5 blanks around a 98 cell.
+    assert_xywh(text_rect(&l, "ab"), 1.5 + 2.0, 20.0, 94.0, 10.0);
+    assert_xywh(text_rect(&l, "c2"), 103.0, 20.0, 45.0, 10.0);
+    assert_xywh(text_rect(&l, "yz"), 51.5 + 2.0, 35.0, 94.0, 10.0);
+    // Vertical rules: 4 in the header, 3 in each spanning row.
+    let vert = filled_rects(&l)
+        .into_iter()
+        .filter(|r| r.w == 1.0 && r.h == 14.0)
+        .count();
+    assert_eq!(vert, 10);
+    // Length columns: the span's width is theirs plus the rule between.
+    let l = lay_fixed(
+        r#"fn table_rule_width() { 1 } fn table_pad() { 2 }
+           page(200, 100, table([["a", "b"], [colspan(2, "ab")]], #{ widths: ["2cm", "3cm"] })).unit("cm")"#,
+    );
+    approx(text_rect(&l, "ab").w, (5.0 + 1.0 - 4.0) * CM);
+    let d = raw(r#"page(10, 10, table([[colspan(2, "h")], ["a", "b"]]))"#);
+    assert_eq!(text_node(&d, "h").1.font_weight, Some(700));
+
+    assert!(fail(r#"page(1, 1, table([["a", "b"], [colspan(3, "x")]]))"#).contains("rows differ"));
+    assert!(fail(r#"page(1, 1, table([[colspan(0, "x")]]))"#).contains("positive integer"));
+    assert!(fail(r#"page(1, 1, table([["a"], [#{ text: "x" }]]))"#).contains("colspan, content"));
+    assert!(fail(
+        r#"page(1, 1, table([["a", "b"], [colspan(2, "x")]], #{ widths: ["auto", 1] }))"#
+    )
+    .contains("\"auto\" columns"));
+    assert!(
+        fail(r#"page(1, 1, table([["a", "b"], [colspan(2, "x")]], #{ widths: ["2cm", 1] }))"#)
+            .contains("only lengths or only flex")
+    );
+}
+
+// ---- marks, author spans ------------------------------------------------------------
+
+#[test]
+fn subheading_and_bullet_marks_style_on_their_own() {
+    let d = raw(
+        r#"style("poster", #{ subheading_mark_bold: true, subheading_mark_size: 40 }); page(10, 10, subheading(markup("S *x*")))"#,
+    );
+    let root = &d.nodes["root"];
+    approx(root.font_size.unwrap(), 24.0 * 1.335);
+    assert_eq!(root.spans[0].text, "■ ");
+    assert_eq!(root.spans[0].font_weight, Some(700));
+    assert_eq!(root.spans[0].font_size, Some(40.0));
+    assert_eq!(plain(root), "■ S x");
+    assert_eq!(root.spans[1].font_weight, None);
+    // Bold only: the size is left to the node.
+    let d = raw(r#"style(#{ subheading_mark_bold: true }); page(10, 10, subheading("S"))"#);
+    let root = &d.nodes["root"];
+    assert_eq!(root.spans[0].font_size, None);
+    assert_eq!(root.spans[1].text, "S");
+
+    // A bigger / smaller bullet mark is moved so the baselines meet.
+    let k = 0.93 * 2.54 / 72.0;
+    let src = |m: f32| {
+        format!(
+            r#"fn bullet_indent() {{ 15 }} fn bullet_size() {{ 24 }} fn bullet_mark_size() {{ {m} }}
+               page(100, 100, bullets(["one"])).unit("pt")"#
+        )
+    };
+    let l = lay_fixed(&src(12.0));
+    approx(text_rect(&l, "•").y, 12.0 * k);
+    approx(text_rect(&l, "one").y, 0.0);
+    approx(text_rect(&l, "•").w, 15.0);
+    let l = lay_fixed(&src(36.0));
+    approx(text_rect(&l, "•").y, 0.0);
+    approx(text_rect(&l, "one").y, 12.0 * k);
+    let d = raw(&src(36.0));
+    assert_eq!(text_node(&d, "•").1.font_size, Some(36.0));
+    assert_eq!(text_node(&d, "one").1.font_size, Some(24.0));
+}
+
+#[test]
+fn author_line_takes_rich_names_and_affiliations() {
+    let d = raw(r##"page(80, 10, author_line(
+        [#{ name: markup("*A*"), aff: 2, presenter: true }, markup("{#ff0000|B}")],
+        [markup("U*1*"), "U2"]))"##);
+    let root = &d.nodes["root"];
+    assert_eq!(
+        spans(root),
+        [
+            ("（", false),
+            ("U", false),
+            ("1", false),
+            ("1", true),
+            ("・U2", false),
+            ("2", true),
+            ("）○", false),
+            ("A", false),
+            ("2", true),
+            ("・", false),
+            ("B", false),
+        ]
+        .map(|(s, sup)| (s.to_string(), sup))
+    );
+    assert!(root.spans[2].font_style.is_some(), "italic kept");
+    assert_eq!(root.spans[10].color, hex("#ff0000"));
+    // A single rich affiliation (not a list of spans) is one affiliation.
+    let d = raw(r#"page(80, 10, author_line(["A"], markup("Univ *X*")))"#);
+    assert_eq!(texts(&d), ["（Univ X）A"]);
+    // In the header too.
+    let d =
+        raw(r#"page(80, 10, poster_header(#{ authors: [markup("**A**")], affiliations: ["U"] }))"#);
+    assert!(texts(&d).iter().any(|s| s == "（U）A"));
+}

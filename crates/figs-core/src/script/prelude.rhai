@@ -155,11 +155,13 @@ fn style_presets() {
     };
     // The dark conference-poster look (see the "Poster" section): a navy
     // page gradient lit from the top, top-lit section bars with a hairline
-    // pale-cyan border, amber notes, table cells a shade off the page.
+    // pale-cyan border, amber notes, table cells a shade off the page; the
+    // titles in a subtle dark glow and soft shadow, the bars' soft shadow.
     let poster_dark = #{
         poster_bg: linear(90, [[0, "#28314c"], [0.12, "#181e2e"], [0.38, "#10141f"], [1, "#080a10"]]),
         section_bar_fill: linear(90, [[0, "#3d4a73"], [0.56, "#181d2d"], [1, "#080a10"]]),
         section_bar_border: "#caeefb", note_color: "#ffc000", table_fill: "#121622",
+        section_title_glow: true, section_title_shadow: true, section_bar_shadow: true,
     };
     #{
         "default": #{},   // quoted: `default` is reserved in Rhai
@@ -204,6 +206,8 @@ fn style_keys() {
         "bullet_indent", "bullet_gap", "subheading_mark", "subheading_size", "table_size",
         "table_rule", "table_rule_width", "table_header_rule_width", "table_rules",
         "table_pad", "table_fill", "table_header_fill",
+        "section_title_glow", "section_title_shadow", "section_bar_shadow", "table_pad_x",
+        "table_pad_y", "subheading_mark_bold", "subheading_mark_size", "bullet_mark_size",
     ]
 }
 
@@ -471,44 +475,399 @@ fn circle(cx, cy, r) { circle(r).at(cx - r, cy - r) }
 // then a triangular head `head_w` across and `head_len` long. One closed
 // `path` (7 corners) filled with `accent()` — chain `.fill(linear(0, [...]))`
 // for a gradient, `.stroke(..)` for an outline, `.shadow(..)` for depth.
+// `opts`: `both: true` puts a head on (x1, y1) too (10 corners, ⇔).
 fn block_arrow(x1, y1, x2, y2, shaft_w, head_w, head_len) {
+    block_arrow(x1, y1, x2, y2, shaft_w, head_w, head_len, #{})
+}
+
+fn block_arrow(x1, y1, x2, y2, shaft_w, head_w, head_len, opts) {
+    shape_opts("block_arrow", opts, ["both"]);
+    let both = plot_opt(opts, "both", false);
     let f = chord_frame("block_arrow", x1, y1, x2, y2);
     let nx = f[0];
     let ny = f[1];
     let len = f[2];
     let hl = head_len.to_float();
-    if hl > len { hl = len; }
-    // Unit along the chord: (-ny, nx); base of the head on the chord.
+    let room = if both { len / 2.0 } else { len };
+    if hl > room { hl = room; }
+    // Unit along the chord: (-ny, nx); bases of the heads on the chord.
     let bx = x2 - (-ny) * hl;
     let by = y2 - nx * hl;
+    let ax = x1 + (-ny) * hl;
+    let ay = y1 + nx * hl;
     let s = shaft_w / 2.0;
     let h = head_w / 2.0;
-    path([
-        [x1 + nx * s, y1 + ny * s], [bx + nx * s, by + ny * s], [bx + nx * h, by + ny * h],
+    let pts = if both {
+        [[x1, y1], [ax + nx * h, ay + ny * h], [ax + nx * s, ay + ny * s]]
+    } else {
+        [[x1 + nx * s, y1 + ny * s]]
+    };
+    pts += [
+        [bx + nx * s, by + ny * s], [bx + nx * h, by + ny * h],
         [x2, y2],
-        [bx - nx * h, by - ny * h], [bx - nx * s, by - ny * s], [x1 - nx * s, y1 - ny * s],
-    ]).closed().fill(accent())
+        [bx - nx * h, by - ny * h], [bx - nx * s, by - ny * s],
+    ];
+    pts += if both {
+        [[ax - nx * s, ay - ny * s], [ax - nx * h, ay - ny * h]]
+    } else {
+        [[x1 - nx * s, y1 - ny * s]]
+    };
+    path(pts).closed().fill(accent())
 }
 
-// The equilibrium arrows ⇌ between (x1, y1) and (x2, y2): two harpoons
-// (half-barb heads, `head_style("barb_left")`) `gap` apart (default 4 ×
-// `annotation_width()`), the upper one pointing at (x2, y2), the lower one
-// back at (x1, y1), barbs on the outside. A `stack` of two `arrow`s in
-// `fg()` (black by default), `annotation_width()` wide.
-fn equilibrium(x1, y1, x2, y2) { equilibrium(x1, y1, x2, y2, annotation_width() * 4.0) }
-
-fn equilibrium(x1, y1, x2, y2, gap) {
-    let f = chord_frame("equilibrium", x1, y1, x2, y2);
-    let ox = f[0] * gap / 2.0;
-    let oy = f[1] * gap / 2.0;
-    let w = annotation_width();
-    let fwd = arrow(x1 + ox, y1 + oy, x2 + ox, y2 + oy).head_style("barb_left").stroke_width(w);
-    let back = arrow(x2 - ox, y2 - oy, x1 - ox, y1 - oy).head_style("barb_left").stroke_width(w);
-    if fg() != "" {
-        fwd = fwd.stroke(fg());
-        back = back.stroke(fg());
+// `opts` checked against the option names `keys` of shape `who`.
+fn shape_opts(who, opts, keys) {
+    if type_of(opts) != "map" { throw `${who}(): options must be a map (got ${type_of(opts)})`; }
+    for k in opts.keys() {
+        if !keys.contains(k) { throw `${who}(): unknown option "${k}" (${list_names(keys)})`; }
     }
-    stack([fwd, back])
+}
+
+// A length option: a number, or a multiple of `w` as a string ("3x").
+fn shape_len(who, v, w) {
+    let t = type_of(v);
+    if t == "i64" || t == "f64" { return v.to_float(); }
+    if t == "string" && v.ends_with("x") {
+        let s = v.sub_string(0, v.len() - 1);
+        try { return parse_float(s) * w; } catch { }
+    }
+    throw `${who}(): expected a length or a multiple like "3x" (got ${v})`;
+}
+
+// The equilibrium arrows ⇌ between (x1, y1) and (x2, y2), `gap` apart, the
+// upper one pointing at (x2, y2), the lower one back at (x1, y1), barbs on
+// the outside; in `fg()` (black by default), `annotation_width()` wide.
+// `equilibrium(x1, y1, x2, y2, gap)` or `(.., opts)`, a map of
+//   gap         between the two arrows (default 4 × the width)
+//   width       stroke width (default `annotation_width()`)
+//   barb        "straight" (default): harpoons, the core half-barb heads
+//               (`head_style("barb_left")`); "hook": plain shafts, each with
+//               a curved barb that leaves the tip along the shaft and bends
+//               outwards (the PowerPoint ⇌), 1.5 × the width, round caps
+//   head_size   barb length along the shaft (straight: the core default
+//               5 × width; hook: 0.4 × the chord, at most 20 × width)
+//   head_width  how far the barb reaches out, a length or "3x" of the
+//               width (straight: core default; hook: 0.4 × head_size)
+// A `stack` of the arrows (and hooks): core setters chain on it.
+fn equilibrium(x1, y1, x2, y2) { equilibrium(x1, y1, x2, y2, #{}) }
+
+fn equilibrium(x1, y1, x2, y2, opts) {
+    if type_of(opts) != "map" { opts = #{ gap: opts }; }
+    shape_opts("equilibrium", opts, ["gap", "width", "barb", "head_size", "head_width"]);
+    let w = plot_opt(opts, "width", annotation_width()).to_float();
+    let gap = plot_opt(opts, "gap", w * 4.0);
+    let barb = plot_opt(opts, "barb", "straight");
+    let f = chord_frame("equilibrium", x1, y1, x2, y2);
+    let nx = f[0];
+    let ny = f[1];
+    let ox = nx * gap / 2.0;
+    let oy = ny * gap / 2.0;
+    let c = fg();
+    let parts = [];
+    if barb == "straight" {
+        for a in [arrow(x1 + ox, y1 + oy, x2 + ox, y2 + oy), arrow(x2 - ox, y2 - oy, x1 - ox, y1 - oy)] {
+            a = a.head_style("barb_left").stroke_width(w);
+            if opts.contains("head_size") { a = a.head_size(opts.head_size); }
+            if opts.contains("head_width") { a = a.head_width(opts.head_width); }
+            parts.push(a);
+        }
+    } else if barb == "hook" {
+        let hs = plot_opt(opts, "head_size", if f[2] * 0.4 < w * 20.0 { f[2] * 0.4 } else { w * 20.0 }).to_float();
+        let hw = if opts.contains("head_width") {
+            shape_len("equilibrium", opts.head_width, w)
+        } else { hs * 0.4 };
+        // Each tip, the unit back along its shaft, and outwards.
+        let ends = [
+            [x2 + ox, y2 + oy, ny, -nx, nx, ny],
+            [x1 - ox, y1 - oy, -ny, nx, -nx, -ny],
+        ];
+        parts.push(line(x1 + ox, y1 + oy, x2 + ox, y2 + oy).stroke_width(w));
+        parts.push(line(x2 - ox, y2 - oy, x1 - ox, y1 - oy).stroke_width(w));
+        for e in ends {
+            // Local [back, out] -> page: tangent to the shaft at the tip,
+            // curling out to (head_size, head_width).
+            let c1 = hook_pt(e, hs * 0.57, 0.0);
+            let c2 = hook_pt(e, hs * 1.01, hw * 0.41);
+            let q = hook_pt(e, hs, hw);
+            parts.push(path([[e[0], e[1]]]).cubic(c1[0], c1[1], c2[0], c2[1], q[0], q[1])
+                .stroke_width(w * 1.5).cap("round"));
+        }
+    } else {
+        throw `equilibrium(): unknown barb "${barb}" (straight, hook)`;
+    }
+    if c != "" {
+        let out = [];
+        for x in parts { out.push(x.stroke(c)); }
+        parts = out;
+    }
+    stack(parts)
+}
+
+// Point `a` back along and `o` out from a tip `e` = [x, y, back.., out..].
+fn hook_pt(e, a, o) { [e[0] + e[2] * a + e[4] * o, e[1] + e[3] * a + e[5] * o] }
+
+// The point at `deg` degrees (0 = +x, clockwise on the page) on the circle of
+// radius `rad` about (cx, cy).
+fn arc_pt(cx, cy, rad, deg) {
+    let t = deg.to_float() * PI() / 180.0;
+    [cx + rad * t.cos(), cy + rad * t.sin()]
+}
+
+// A circular block arrow: a band `w` wide centred on the circle of radius `r`
+// about (cx, cy), from angle `a0` to its tip at `a1` (degrees, 0 = pointing
+// right, increasing clockwise on the page as for `rotate`; `a1 < a0` runs
+// anticlockwise; less than a full turn). The head is `head_width` across
+// (default 2 × w) and `head_len` long along the circle (default w), its tip
+// on the centre line. One closed `path` of arcs and corners, filled with
+// `accent()`. `opts`: head_width, head_len, both (a head at `a0` too).
+fn arc_arrow(cx, cy, r, a0, a1, w) { arc_arrow(cx, cy, r, a0, a1, w, #{}) }
+
+fn arc_arrow(cx, cy, r, a0, a1, w, opts) {
+    shape_opts("arc_arrow", opts, ["head_width", "head_len", "both"]);
+    let r = r.to_float();
+    let w = w.to_float();
+    if !(w > 0.0) || !(r > w / 2.0) {
+        throw `arc_arrow(): need 0 < w < 2 r (got r = ${r}, w = ${w})`;
+    }
+    let span = (a1 - a0).to_float();
+    if span == 0.0 || span.abs() >= 360.0 {
+        throw `arc_arrow(): the angles must differ by less than a full turn (got ${a0} to ${a1})`;
+    }
+    let dir = if span > 0.0 { 1.0 } else { -1.0 };
+    let hw = plot_opt(opts, "head_width", w * 2.0).to_float();
+    let hl = plot_opt(opts, "head_len", w).to_float();
+    let both = plot_opt(opts, "both", false);
+    // Head length as an angle, leaving the band at least a sliver.
+    let dh = hl / r * 180.0 / PI();
+    let room = span.abs() / (if both { 2.0 } else { 1.0 }) * 0.999;
+    if dh > room { dh = room; }
+    let ah = a1 - dir * dh;
+    let a_s = if both { a0 + dir * dh } else { a0 };
+    let ro = r + w / 2.0;
+    let ri = r - w / 2.0;
+    let large = (ah - a_s).abs() > 180.0;
+    let fwd = if dir > 0.0 { "cw" } else { "ccw" };
+    let back = if dir > 0.0 { "ccw" } else { "cw" };
+    let p = if both {
+        let t = arc_pt(cx, cy, r, a0);
+        let c = arc_pt(cx, cy, r + hw / 2.0, a_s);
+        let b = arc_pt(cx, cy, ro, a_s);
+        path([t]).to(c[0], c[1]).to(b[0], b[1])
+    } else {
+        path([arc_pt(cx, cy, ro, a0)])
+    };
+    let e = arc_pt(cx, cy, ro, ah);
+    p = p.arc(ro, e[0], e[1], #{ sweep: fwd, large: large });
+    for q in [arc_pt(cx, cy, r + hw / 2.0, ah), arc_pt(cx, cy, r, a1),
+              arc_pt(cx, cy, r - hw / 2.0, ah), arc_pt(cx, cy, ri, ah)] {
+        p = p.to(q[0], q[1]);
+    }
+    let e = arc_pt(cx, cy, ri, a_s);
+    p = p.arc(ri, e[0], e[1], #{ sweep: back, large: large });
+    if both {
+        let c = arc_pt(cx, cy, r - hw / 2.0, a_s);
+        p = p.to(c[0], c[1]);
+    }
+    p.closed().fill(accent())
+}
+
+// A bent block arrow along a centre line: a band `w` wide following `points`
+// with a triangular head at the last point. `points` start with [x, y]; each
+// further entry is a straight run to [x, y], a quadratic [cx, cy, x, y] or a
+// cubic [c1x, c1y, c2x, c2y, x, y] (the arguments of the `path` builder's
+// `.quad` / `.cubic`). The outline is the centre line (curves flattened)
+// offset by w / 2 on both sides: mitred joins, bevelled past a miter of 4 ×
+// (corners sharper than ~30°), so keep curves wider than the band. Options:
+//   radius      round every corner between straight runs with this radius
+//               (at most half of either run); 0 (default) keeps them sharp
+//   head_width  across the head (default 2 × w)
+//   head_len    along the line (default w)
+//   both        a head at the first point too
+// One closed `path`, filled with `accent()`.
+fn block_arrow_along(points, w) { block_arrow_along(points, w, #{}) }
+
+fn block_arrow_along(points, w, opts) {
+    let who = "block_arrow_along";
+    shape_opts(who, opts, ["radius", "head_width", "head_len", "both"]);
+    let w = w.to_float();
+    if !(w > 0.0) { throw `${who}(): the width must be positive (got ${w})`; }
+    let hw = plot_opt(opts, "head_width", w * 2.0).to_float();
+    let hl = plot_opt(opts, "head_len", w).to_float();
+    let both = plot_opt(opts, "both", false);
+    let entries = along_round(along_entries(who, points), plot_opt(opts, "radius", 0).to_float());
+    let cl = along_flatten(entries);
+    if cl.len() < 2 { throw `${who}(): the centre line has no length`; }
+    let cum = [0.0];
+    for i in 1..cl.len() { cum.push(cum[i - 1] + along_dist(cl[i - 1], cl[i])); }
+    let total = cum[cum.len() - 1];
+    let room = total / (if both { 2.0 } else { 1.0 }) * 0.999;
+    if hl > room { hl = room; }
+    let s0 = if both { hl } else { 0.0 };
+    let shaft = along_cut(cl, cum, s0, total - hl);
+    let h = w / 2.0;
+    // Normals: the head axes at the ends, the segments in between.
+    let tip = cl[cl.len() - 1];
+    let base = shaft[shaft.len() - 1];
+    let n_end = along_normal(base, tip);
+    let n_start = if both { along_normal(cl[0], shaft[0]) } else { along_normal(shaft[0], shaft[1]) };
+    let left = [along_off(shaft[0], n_start, h)];
+    let right = [along_off(shaft[0], n_start, -h)];
+    for i in 1..shaft.len() - 1 {
+        let q = shaft[i];
+        let na = along_normal(shaft[i - 1], q);
+        let nb = along_normal(q, shaft[i + 1]);
+        let k = 1.0 + na[0] * nb[0] + na[1] * nb[1];
+        if k < 1e-6 {
+            // Doubling back: a flat end on both sides.
+            left += [along_off(q, na, h), along_off(q, nb, h)];
+            right += [along_off(q, na, -h), along_off(q, nb, -h)];
+            continue;
+        }
+        let m = [(na[0] + nb[0]) / k, (na[1] + nb[1]) / k];
+        if (m[0] * m[0] + m[1] * m[1]).sqrt() <= 4.0 {
+            left.push(along_off(q, m, h));
+            right.push(along_off(q, m, -h));
+        } else {
+            // Past the miter limit: bevel the outer side.
+            let turns_left = (shaft[i + 1][0] - q[0]) * na[0] + (shaft[i + 1][1] - q[1]) * na[1] > 0.0;
+            if turns_left {
+                left.push(along_off(q, m, h));
+                right += [along_off(q, na, -h), along_off(q, nb, -h)];
+            } else {
+                left += [along_off(q, na, h), along_off(q, nb, h)];
+                right.push(along_off(q, m, -h));
+            }
+        }
+    }
+    left.push(along_off(base, n_end, h));
+    right.push(along_off(base, n_end, -h));
+    let pts = [];
+    if both {
+        pts += [cl[0], along_off(shaft[0], n_start, hw / 2.0)];
+    }
+    pts += left;
+    pts += [along_off(base, n_end, hw / 2.0), tip, along_off(base, n_end, -hw / 2.0)];
+    right.reverse();
+    pts += right;
+    if both { pts.push(along_off(shaft[0], n_start, -hw / 2.0)); }
+    path(pts).closed().fill(accent())
+}
+
+// The entries of a `block_arrow_along` centre line, as floats, checked.
+fn along_entries(who, points) {
+    if type_of(points) != "array" || points.len() < 2 {
+        throw `${who}(): expected an array of at least two points`;
+    }
+    let out = [];
+    for e in points {
+        let n = if type_of(e) == "array" { e.len() } else { 0 };
+        if (out.len() == 0 && n != 2) || ![2, 4, 6].contains(n) {
+            throw `${who}(): entries are [x, y], [cx, cy, x, y] or [c1x, c1y, c2x, c2y, x, y]; the first is [x, y]`;
+        }
+        let v = [];
+        for x in e { v.push(x.to_float()); }
+        out.push(v);
+    }
+    out
+}
+
+// Corners between straight runs rounded with radius `rad`: the corner point
+// becomes a quadratic from `rad` before it to `rad` after it.
+fn along_round(entries, rad) {
+    if !(rad > 0.0) { return entries; }
+    let out = [entries[0]];
+    let n = entries.len();
+    for i in 1..n {
+        let v = entries[i];
+        if v.len() == 2 && i + 1 < n && entries[i + 1].len() == 2 {
+            let prev = entries[i - 1];
+            let p = [prev[prev.len() - 2], prev[prev.len() - 1]];
+            let nx = entries[i + 1];
+            let d1 = along_dist(p, v);
+            let d2 = along_dist(v, nx);
+            if d1 > 0.0 && d2 > 0.0 {
+                let r = rad;
+                if r > d1 / 2.0 { r = d1 / 2.0; }
+                if r > d2 / 2.0 { r = d2 / 2.0; }
+                let a = [v[0] + (p[0] - v[0]) / d1 * r, v[1] + (p[1] - v[1]) / d1 * r];
+                let b = [v[0] + (nx[0] - v[0]) / d2 * r, v[1] + (nx[1] - v[1]) / d2 * r];
+                out.push(a);
+                out.push([v[0], v[1], b[0], b[1]]);
+                continue;
+            }
+        }
+        out.push(v);
+    }
+    out
+}
+
+// The centre line as a polyline: curves sampled at 24 points each,
+// repeated points dropped.
+fn along_flatten(entries) {
+    let pts = [entries[0]];
+    let cur = entries[0];
+    for i in 1..entries.len() {
+        let e = entries[i];
+        let end = [e[e.len() - 2], e[e.len() - 1]];
+        if e.len() == 2 {
+            pts.push(end);
+        } else {
+            let k = 24;
+            for j in 1..=k {
+                let t = j.to_float() / k.to_float();
+                let u = 1.0 - t;
+                pts.push(if e.len() == 4 {
+                    [u * u * cur[0] + 2.0 * u * t * e[0] + t * t * end[0],
+                     u * u * cur[1] + 2.0 * u * t * e[1] + t * t * end[1]]
+                } else {
+                    [u * u * u * cur[0] + 3.0 * u * u * t * e[0] + 3.0 * u * t * t * e[2] + t * t * t * end[0],
+                     u * u * u * cur[1] + 3.0 * u * u * t * e[1] + 3.0 * u * t * t * e[3] + t * t * t * end[1]]
+                });
+            }
+        }
+        cur = end;
+    }
+    let out = [pts[0]];
+    for p in pts {
+        if along_dist(out[out.len() - 1], p) > 1e-9 { out.push(p); }
+    }
+    out
+}
+
+fn along_dist(a, b) {
+    let dx = b[0] - a[0];
+    let dy = b[1] - a[1];
+    (dx * dx + dy * dy).sqrt()
+}
+
+// Unit left normal of a -> b (as `chord_frame`: upwards for a rightward run).
+fn along_normal(a, b) {
+    let d = along_dist(a, b);
+    [(b[1] - a[1]) / d, -(b[0] - a[0]) / d]
+}
+
+fn along_off(p, n, d) { [p[0] + n[0] * d, p[1] + n[1] * d] }
+
+// The part of polyline `cl` (cumulative lengths `cum`) from arc length s0
+// to s1, with interpolated ends.
+fn along_cut(cl, cum, s0, s1) {
+    let out = [along_at(cl, cum, s0)];
+    for i in 0..cl.len() {
+        if cum[i] > s0 + 1e-9 && cum[i] < s1 - 1e-9 { out.push(cl[i]); }
+    }
+    out.push(along_at(cl, cum, s1));
+    out
+}
+
+fn along_at(cl, cum, s) {
+    for i in 1..cl.len() {
+        if s <= cum[i] || i == cl.len() - 1 {
+            let seg = cum[i] - cum[i - 1];
+            let t = if seg > 0.0 { (s - cum[i - 1]) / seg } else { 0.0 };
+            return [cl[i - 1][0] + (cl[i][0] - cl[i - 1][0]) * t, cl[i - 1][1] + (cl[i][1] - cl[i - 1][1]) * t];
+        }
+    }
+    cl[0]
 }
 
 // ---------------------------------------------------------------------------
@@ -1896,6 +2255,20 @@ fn section_bar_border() { style_get("section_bar_border", "") }
 fn section_bar_border_width() { style_get("section_bar_border_width", base_size() * 0.000367) }
 fn section_bar_radius() { style_get("section_bar_radius", 0) }
 
+// Effects of the section titles and bars: `false` (default in "poster") for
+// none, `true` for the PowerPoint look ("poster-dark"), or a map for your
+// own — #{ blur, color } for the glow, #{ dx, dy, blur, spread, color } for
+// a shadow (cm; colours with alpha; see the core `.glow` / `.shadow`).
+//   section_title_glow    a subtle dark halo hugging the glyphs: blur
+//                         0.1 cm, 60 % black (at 24 pt; scales with the text)
+//   section_title_shadow  a tight soft drop shadow: (0.04, 0.05) cm, blur
+//                         0.08 cm, 70 % black
+//   section_bar_shadow    the bars' soft drop shadow: (0.06, 0.07) cm, blur
+//                         0.2 cm, 40 % black
+fn section_title_glow() { style_get("section_title_glow", false) }
+fn section_title_shadow() { style_get("section_title_shadow", false) }
+fn section_bar_shadow() { style_get("section_bar_shadow", false) }
+
 // Padding around a section's content (cm) and the gap between its items.
 fn section_pad() { style_get("section_pad", base_size() * 0.0125) }
 fn section_gap() { style_get("section_gap", base_size() * 0.02) }
@@ -1947,9 +2320,18 @@ fn bullet_size() { style_get("bullet_size", base_size()) }
 fn bullet_indent() { style_get("bullet_indent", bullet_size() * 0.044) }
 fn bullet_gap() { style_get("bullet_gap", bullet_size() * 0.004) }
 
+// The bullet mark's size (pt), independent of the text (default the same);
+// a mark of another size stays on the first line's baseline.
+fn bullet_mark_size() { style_get("bullet_mark_size", bullet_size()) }
+
 // `subheading`: the mark before it ("" for none) and its size (pt; 32 pt at 24).
 fn subheading_mark() { style_get("subheading_mark", "■") }
 fn subheading_size() { style_get("subheading_size", base_size() * 1.335) }
+
+// The subheading mark on its own: bold (default false: as the text) and its
+// size (pt; default the subheading's), e.g. a bold "■" as in PowerPoint.
+fn subheading_mark_bold() { style_get("subheading_mark_bold", false) }
+fn subheading_mark_size() { style_get("subheading_mark_size", subheading_size()) }
 
 // `table`: text size (pt), rule colour, rule width (cm; 1 pt at 24 pt), the
 // header rule (3x), rules ("grid", "rows": horizontal only, "booktabs": top,
@@ -1964,6 +2346,10 @@ fn table_rule_width() { style_get("table_rule_width", base_size() * 0.00147) }
 fn table_header_rule_width() { style_get("table_header_rule_width", table_rule_width() * 3.0) }
 fn table_rules() { style_get("table_rules", "grid") }
 fn table_pad() { style_get("table_pad", base_size() * 0.011) }
+
+// Cell padding left and right / top and bottom (cm); both follow `table_pad()`.
+fn table_pad_x() { style_get("table_pad_x", table_pad()) }
+fn table_pad_y() { style_get("table_pad_y", table_pad()) }
 fn table_fill() { style_get("table_fill", "") }
 fn table_header_fill() { style_get("table_header_fill", "") }
 
@@ -2027,11 +2413,22 @@ fn poster_weights(who, n, ws) {
 // `poster_gutter()`): centred in it, from `separator_inset()` below the top
 // to the bottom.
 fn vsep() { vsep(poster_gutter()) }
-fn vsep(w) {
+fn vsep(w) { poster_vsep(w, separator_inset(), ()) }
+
+// `vsep` from `y0` cm below the top down to `y1` cm below it (() for
+// the bottom).
+fn poster_vsep(w, y0, y1) {
     let l = line(0.5, 0, 0.5, 1).viewbox(0, 0, 1, 1).stroke(separator_color())
-        .stroke_width(separator_width()).dash(separator_dash()).flex(1);
-    let inset = separator_inset();
-    col(if inset > 0 { [rect().height(inset), l] } else { [l] }).stretch().width(w)
+        .stroke_width(separator_width()).dash(separator_dash());
+    if type_of(y1) == "()" {
+        l = l.flex(1);
+    } else {
+        if !(y1 > y0) {
+            throw `columns(): a separator must end below its start (from ${y0} until ${y1} cm)`;
+        }
+        l = l.height(y1 - y0);
+    }
+    col(if y0 > 0 { [rect().height(y0), l] } else { [l] }).stretch().width(w)
 }
 
 // A dashed horizontal separator across its parent, centred in a band
@@ -2047,52 +2444,145 @@ fn hsep(h) {
 // Sections (or any nodes) side by side, sharing the width equally or by
 // `widths` (flex weights, "12cm" lengths, "auto"), `poster_gutter()` apart
 // with a dashed `vsep` in each gutter while `separators()` is on.
-fn columns(items) { columns(items, ()) }
+// `opts` (also as the second argument, `columns(items, #{ .. })`):
+//   gutter      the gutter (cm), or one per gutter (default `poster_gutter()`)
+//   separators  true / false for all gutters (default `separators()`), or one
+//               per gutter: true, false, a number — a partial separator
+//               ending that many cm below the top of the row — or
+//               #{ start, end } (cm below the top of the row; `start`
+//               defaults to `separator_inset()`, the middle of the section
+//               bars, `end` to the bottom). ("from" / "until", quoted, are
+//               aliases: `until` is a Rhai keyword.)
+fn columns(items) { columns(items, (), #{}) }
 fn columns(items, widths) {
+    if type_of(widths) == "map" { return columns(items, (), widths); }
+    columns(items, widths, #{})
+}
+fn columns(items, widths, opts) {
     if type_of(items) != "array" {
         throw `columns(): expected an array of nodes (got ${type_of(items)})`;
     }
-    let ws = poster_weights("columns", items.len(), widths);
-    let g = poster_gutter();
-    let sep = separators();
+    poster_check_opts("columns", opts, ["gutter", "separators"]);
+    let n = items.len();
+    let ws = poster_weights("columns", n, widths);
+    let gs = poster_per_gap("columns", "gutter", plot_opt(opts, "gutter", poster_gutter()), n);
+    let ss = poster_per_gap("columns", "separators", plot_opt(opts, "separators", separators()), n);
+    let uniform = poster_uniform(gs, ss);
     let out = [];
-    for i in 0..items.len() {
-        if i > 0 && sep { out.push(vsep(g)); }
+    for i in 0..n {
+        if i > 0 && !uniform {
+            let s = ss[i - 1];
+            let g = gs[i - 1];
+            let t = type_of(s);
+            out.push(if t == "bool" {
+                if s { vsep(g) } else { rect().width(g) }
+            } else if t == "i64" || t == "f64" {
+                poster_vsep(g, separator_inset(), s)
+            } else if t == "map" {
+                for k in s.keys() {
+                    if !["start", "end", "from", "until"].contains(k) {
+                        throw `columns(): unknown separator key "${k}" (start, end)`;
+                    }
+                }
+                let y0 = plot_opt(s, "start", plot_opt(s, "from", separator_inset()));
+                poster_vsep(g, y0, plot_opt(s, "end", plot_opt(s, "until", ())))
+            } else {
+                throw `columns(): a separator is true, false, an end (cm) or #{ start, end } (got ${t})`;
+            });
+        }
         out.push(poster_sized("columns", as_node(items[i]), ws[i], false));
     }
-    row(out).spacing(if sep { 0 } else { g }).stretch()
+    row(out).spacing(if uniform && gs.len() > 0 { gs[0] } else { 0 }).stretch()
 }
 
 // Rows of sections (or `columns`) down the page, sharing the height equally
 // or by `heights` (flex weights, "12cm", "auto"), `poster_row_gap()` apart (a
-// dashed `hsep` in each gap while `row_separators()` is on).
-fn rows(items) { rows(items, ()) }
+// dashed `hsep` in each gap while `row_separators()` is on). `opts` (also as
+// the second argument):
+//   gaps        the gap (cm), or one per gap (default `poster_row_gap()`)
+//   separators  true / false, or one per gap (default `row_separators()`)
+fn rows(items) { rows(items, (), #{}) }
 fn rows(items, heights) {
+    if type_of(heights) == "map" { return rows(items, (), heights); }
+    rows(items, heights, #{})
+}
+fn rows(items, heights, opts) {
     if type_of(items) != "array" {
         throw `rows(): expected an array of nodes (got ${type_of(items)})`;
     }
-    let hs = poster_weights("rows", items.len(), heights);
-    let g = poster_row_gap();
-    let sep = row_separators();
+    poster_check_opts("rows", opts, ["gaps", "separators"]);
+    let n = items.len();
+    let hs = poster_weights("rows", n, heights);
+    let gs = poster_per_gap("rows", "gaps", plot_opt(opts, "gaps", poster_row_gap()), n);
+    let ss = poster_per_gap("rows", "separators", plot_opt(opts, "separators", row_separators()), n);
+    for s in ss {
+        if type_of(s) != "bool" { throw `rows(): separators are true or false (got ${type_of(s)})`; }
+    }
+    let uniform = poster_uniform(gs, ss);
     let out = [];
-    for i in 0..items.len() {
-        if i > 0 && sep { out.push(hsep(g)); }
+    for i in 0..n {
+        if i > 0 && !uniform {
+            out.push(if ss[i - 1] { hsep(gs[i - 1]) } else { rect().height(gs[i - 1]) });
+        }
         out.push(poster_sized("rows", as_node(items[i]), hs[i], true));
     }
-    col(out).spacing(if sep { 0 } else { g }).stretch()
+    col(out).spacing(if uniform && gs.len() > 0 { gs[0] } else { 0 }).stretch()
+}
+
+// `opts` checked against the option names `keys` of `who`.
+fn poster_check_opts(who, opts, keys) {
+    if type_of(opts) != "map" { throw `${who}(): options must be a map (got ${type_of(opts)})`; }
+    for k in opts.keys() {
+        if !keys.contains(k) { throw `${who}(): unknown option "${k}" (${list_names(keys)})`; }
+    }
+}
+
+// Option `key` of `who` for the gaps between `n` items: one value for all,
+// or an array of n - 1.
+fn poster_per_gap(who, key, v, n) {
+    let m = if n > 0 { n - 1 } else { 0 };
+    if type_of(v) == "array" {
+        if v.len() != m { throw `${who}(): ${n} items have ${m} gaps but ${key} has ${v.len()} values`; }
+        return v;
+    }
+    let out = [];
+    for i in 0..m { out.push(v); }
+    out
+}
+
+// Can the gaps be the container's spacing: every gap the same, and either
+// all with a separator (`true`) or none?
+fn poster_uniform(gs, ss) {
+    if gs.len() == 0 { return true; }
+    for g in gs { if g != gs[0] { return false; } }
+    for s in ss { if type_of(s) != "bool" || s { return false; } }
+    true
 }
 
 // --- sections ---
 
-// A section bar: `s` centred (both ways) on a `section_bar_height()` bar
-// filled with `section_bar_fill()` and bordered in `section_bar_border()`.
-// The title is anchored on the bar's centre in a unit viewbox, so it stays
-// centred and keeps its size even when its line box (a CJK font's tall
-// ascent + descent) is taller than the bar.
-fn section_bar(s) {
+// The title text of a section bar: `s` (a string or spans) at
+// `section_title_size()` in `section_title_color()` (`section_title_font()`),
+// centred — without effects (the bar adds those, see `section_bar`). Chain
+// setters on it for a one-off title: `section(section_title("A").color(..), ..)`.
+fn section_title(s) {
     let t = text(s).size(section_title_size()).color(section_title_color()).center();
     let f = section_title_font();
-    if f != "" { t = t.font(f); }
+    if f == "" { t } else { t.font(f) }
+}
+
+// A section bar: `s` centred (both ways) on a `section_bar_height()` bar
+// filled with `section_bar_fill()`, bordered in `section_bar_border()`, with
+// `section_bar_shadow()`. `s` is a string or spans (`section_title(s)`) or a
+// node used as is; the title gets `section_title_glow()` /
+// `section_title_shadow()` (a node title through a row around it, so effects
+// it carries itself stay). The title is anchored on the bar's centre in a
+// unit viewbox, so it stays centred and keeps its size even when its line
+// box (a CJK font's tall ascent + descent) is taller than the bar.
+fn section_bar(s) {
+    let t = if type_of(s) == "Node" { row([s]) } else { section_title(s) };
+    t = poster_effect("section_title_glow", t, "glow", section_title_glow(), section_title_glow_look());
+    t = poster_effect("section_title_shadow", t, "shadow", section_title_shadow(), section_title_shadow_look());
     let bar = stack([t.at(0.5, 0.5).anchor(0.5, 0.5)]).viewbox(0, 0, 1, 1)
         .height(section_bar_height());
     let fill = section_bar_fill();
@@ -2101,7 +2591,37 @@ fn section_bar(s) {
     if b != "" { bar = bar.stroke(b).stroke_width(section_bar_border_width()); }
     let r = section_bar_radius();
     if r > 0 { bar = bar.radius(r); }
-    bar
+    poster_effect("section_bar_shadow", bar, "shadow", section_bar_shadow(), section_bar_shadow_look())
+}
+
+// The `true` looks of the section effects (cm, scaled from 24 pt).
+fn section_title_glow_look() { #{ blur: base_size() * 0.1 / 24.0, color: "#00000099" } }
+fn section_title_shadow_look() {
+    let k = base_size() / 24.0;
+    #{ dx: 0.04 * k, dy: 0.05 * k, blur: 0.08 * k, color: "#000000b3" }
+}
+fn section_bar_shadow_look() {
+    let k = base_size() / 24.0;
+    #{ dx: 0.06 * k, dy: 0.07 * k, blur: 0.2 * k, color: "#00000066" }
+}
+
+// `n` with the effect `kind` ("glow" or "shadow") of hook `who`'s value `v`:
+// false / () / "" for none, true for `look`, or a map (glow: blur, color;
+// shadow: dx, dy, blur, spread, color).
+fn poster_effect(who, n, kind, v, look) {
+    let t = type_of(v);
+    if t == "()" || (t == "bool" && !v) || (t == "string" && v == "") { return n; }
+    if t == "bool" { v = look; t = "map"; }
+    if t != "map" { throw `${who}(): expected false, true or a map (got ${t})`; }
+    let keys = if kind == "glow" { ["blur", "color"] } else { ["dx", "dy", "blur", "spread", "color"] };
+    for k in v.keys() {
+        if !keys.contains(k) { throw `${who}(): unknown key "${k}" (${list_names(keys)})`; }
+    }
+    if kind == "glow" {
+        return n.glow(plot_opt(v, "blur", 0), plot_opt(v, "color", "#000000"));
+    }
+    n.shadow(plot_opt(v, "dx", 0), plot_opt(v, "dy", 0), plot_opt(v, "blur", 0),
+             plot_opt(v, "spread", 0), plot_opt(v, "color", "#00000080"))
 }
 
 // The next section number (1, 2, … in the order sections are built), or `n`
@@ -2117,7 +2637,9 @@ fn section_number(n) {
 // over `content` — an array of items `section_gap()` apart, or one node —
 // padded `section_pad()`; the content takes the section's spare height.
 // `section(number, title, content)` sets the number: an integer (the count
-// continues from it) or a string used as is ("" for none).
+// continues from it) or a string used as is ("" for none). The title is a
+// string, spans (`markup(..)`) or a text node (its own look; the number
+// goes before it in the bar's title style).
 fn section(title, content) { section_make(section_number(()), title, content) }
 fn section(number, title, content) {
     if type_of(number) == "i64" { return section_make(section_number(number), title, content); }
@@ -2128,14 +2650,19 @@ fn section(number, title, content) {
 }
 
 fn section_make(n, title, content) {
-    if type_of(title) != "string" && !poster_is_rich(title) {
-        throw `section(): the title must be a string or spans (got ${type_of(title)})`;
+    let node = type_of(title) == "Node";
+    if type_of(title) != "string" && !node && !poster_is_rich(title) {
+        throw `section(): the title must be a string, spans or a text node (got ${type_of(title)})`;
     }
     let label = if type_of(n) == "string" { n } else {
         let st = section_label_style();
         if st == "" { "" } else { panel_label(st, n - 1) }
     };
-    let s = if label == "" { title } else { poster_prefix(`${label} `, title) };
+    let s = if label == "" { title } else if node {
+        // The number in the title style, a space (0.28 em) before the node.
+        row([section_title(label), title]).cross("center")
+            .spacing(section_title_size() * 0.28 * 2.54 / 72.0)
+    } else { poster_prefix(`${label} `, title) };
     let items = if type_of(content) == "array" { nodes(content) } else { [as_node(content)] };
     let body = col(items).spacing(section_gap()).stretch().pad(section_pad()).flex(1);
     col([section_bar(s), body]).stretch()
@@ -2170,57 +2697,79 @@ fn ref(s) {
     if c == "" { t } else { t.color(c) }
 }
 
-// A small heading inside a section: "■ " + `s` at `subheading_size()`.
+// A small heading inside a section: "■ " + `s` at `subheading_size()`; the
+// mark bold (`subheading_mark_bold()`) and sized (`subheading_mark_size()`)
+// on its own when those differ from the text (one text node of spans).
 fn subheading(s) {
     let m = subheading_mark();
-    fg_text(if m == "" { s } else { poster_prefix(`${m} `, s) }).size(subheading_size())
+    let size = subheading_size();
+    if m == "" { return fg_text(s).size(size); }
+    let bold = subheading_mark_bold();
+    let ms = subheading_mark_size();
+    if !bold && ms == size { return fg_text(poster_prefix(`${m} `, s)).size(size); }
+    let mark = span(`${m} `);
+    if bold { mark = mark.bold(); }
+    if ms != size { mark = mark.size(ms); }
+    fg_text([mark] + (if type_of(s) == "string" { [span(s)] } else { s })).size(size)
 }
 
 // A bulleted list with a hanging indent: each item (a string or a node) in a
 // cell `bullet_indent()` right of its `bullet_mark()`, so wrapped lines align
 // with the first. An array item is a nested list under the previous item.
+// A mark of another size (`bullet_mark_size()`) is moved to sit on the first
+// line's baseline (for fonts of typical ascent/descent at line height 1.2).
 fn bullets(items) {
     if type_of(items) != "array" {
         throw `bullets(): expected an array of items (got ${type_of(items)})`;
     }
     let ind = bullet_indent();
+    let size = bullet_size();
+    let ms = bullet_mark_size();
+    // Baseline below the top of a line: 0.6 em (half the 1.2 line height)
+    // + ~0.33 em (half ascent − descent), in cm.
+    let dy = (size - ms) * 0.93 * 2.54 / 72.0;
     let out = [];
     for x in items {
         if type_of(x) == "array" && !poster_is_rich(x) {
             out.push(row([rect().width(ind), bullets(x).flex(1)]).stretch());
             continue;
         }
-        let item = if type_of(x) == "string" || poster_is_rich(x) { fg_text(x).size(bullet_size()) } else { x };
-        let mark = fg_text(bullet_mark()).size(bullet_size()).width(ind);
+        let item = if type_of(x) == "string" || poster_is_rich(x) { fg_text(x).size(size) } else { x };
+        let mark = fg_text(bullet_mark()).size(ms).width(ind);
+        if dy > 0 {
+            mark = col([rect().height(dy), mark]).width(ind);
+        } else if dy < 0 {
+            item = col([rect().height(-dy), item]).stretch();
+        }
         out.push(row([mark, item.flex(1)]).cross("start"));
     }
     col(out).spacing(bullet_gap()).stretch()
 }
 
-// `table(rows)` / `table(rows, opts)`: `rows` is an array of equally long
-// arrays of cells (strings, numbers or nodes); the first row is the header
-// (bold, above a `table_header_rule_width()` rule). Options:
+// `table(rows)` / `table(rows, opts)`: `rows` is an array of arrays of cells
+// (strings, numbers, spans or nodes; `colspan(n, x)` spans n columns), all
+// as wide in columns; the first row is the header (bold, above a
+// `table_header_rule_width()` rule). Options:
 //   header  false: no header row (default true)
 //   widths  per column: flex weights, "4cm" lengths or "auto" (default equal)
 //   align   "left" (default), "center", "right", or one per column
 //   rules   "grid", "rows", "booktabs" or "none" (default `table_rules()`)
+//   pad     cell padding, cm (default `table_pad()`); pad_x / pad_y for
+//           left-right / top-bottom (default `table_pad_x()` / `table_pad_y()`)
 // The rules are filled rects between the cells (`table_rule()`,
-// `table_rule_width()`), so the grid is exact at any size; cells are padded
-// `table_pad()` and filled `table_fill()` / `table_header_fill()`.
+// `table_rule_width()`), so the grid is exact at any size; cells are filled
+// `table_fill()` / `table_header_fill()`.
 fn table(rows) { table(rows, #{}) }
 fn table(rows, opts) {
-    if type_of(opts) != "map" { throw `table(): options must be a map (got ${type_of(opts)})`; }
-    for k in opts.keys() {
-        if !["header", "widths", "align", "rules"].contains(k) {
-            throw `table(): unknown option "${k}" (header, widths, align, rules)`;
-        }
-    }
+    poster_check_opts("table", opts, ["header", "widths", "align", "rules", "pad", "pad_x", "pad_y"]);
     if type_of(rows) != "array" || rows.len() == 0 { throw "table(): expected a non-empty array of rows"; }
     let nc = 0;
     for r in rows {
         if type_of(r) != "array" { throw `table(): each row must be an array of cells (got ${type_of(r)})`; }
-        if nc == 0 { nc = r.len(); }
-        if r.len() != nc || nc == 0 { throw `table(): rows differ in length (${nc} vs ${r.len()})`; }
+        let k = 0;
+        for c in r { k += table_span(c); }
+        if nc == 0 { nc = k; }
+        if k != nc || nc == 0 { throw `table(): rows differ in length (${nc} vs ${k} columns)`; }
     }
     let header = plot_opt(opts, "header", true);
     let ws = poster_weights("table", nc, plot_opt(opts, "widths", ()));
@@ -2233,6 +2782,9 @@ fn table(rows, opts) {
     if type_of(al) != "array" || al.len() != nc {
         throw "table(): align must be a string or one per column";
     }
+    let pad = plot_opt(opts, "pad", ());
+    let px = plot_opt(opts, "pad_x", if type_of(pad) == "()" { table_pad_x() } else { pad });
+    let py = plot_opt(opts, "pad_y", if type_of(pad) == "()" { table_pad_y() } else { pad });
     let rules = plot_opt(opts, "rules", table_rules());
     if !["grid", "rows", "booktabs", "none"].contains(rules) {
         throw `table(): unknown rules "${rules}" (grid, rows, booktabs, none)`;
@@ -2253,8 +2805,17 @@ fn table(rows, opts) {
         }
         let cells = [];
         if vertical { cells.push(rect().width(rw).fill(rc)); }
-        for j in 0..nc {
-            cells.push(poster_sized("table", table_cell(rows[i][j], head, al[j]), ws[j], false));
+        let j = 0;
+        for x in rows[i] {
+            let k = table_span(x);
+            let content = if type_of(x) == "map" { x.content } else { x };
+            let cell = table_cell(content, head, al[j], px, py);
+            if k == 1 {
+                cells.push(poster_sized("table", cell, ws[j], false));
+            } else {
+                cells += table_spanned(cell, ws, j, k, if vertical { rw } else { 0.0 }, table_cell_fill(head));
+            }
+            j += k;
             if vertical { cells.push(rect().width(rw).fill(rc)); }
         }
         parts.push(row(cells).stretch());
@@ -2272,18 +2833,72 @@ fn table(rows, opts) {
     t.width(total)
 }
 
+// A cell spanning `n` columns: `#{ colspan: n, content: x }` in a table row.
+fn colspan(n, x) {
+    if type_of(n) != "i64" || n < 1 { throw `colspan(): n must be a positive integer (got ${n})`; }
+    #{ colspan: n, content: x }
+}
+
+// How many columns table cell `x` spans.
+fn table_span(x) {
+    if type_of(x) != "map" { return 1; }
+    if !x.contains("colspan") || !x.contains("content") {
+        throw "table(): a map cell is #{ colspan, content } (see colspan(n, x))";
+    }
+    x.colspan
+}
+
+// `cell` sized over columns j .. j + k - 1 of widths `ws`: all lengths (cm)
+// → their sum plus the `rw` rules it covers; all flex weights → their sum,
+// with the covered rules' width as filled blanks either side (fixed, so the
+// flex shares match the rows without a span).
+fn table_spanned(cell, ws, j, k, rw, fill) {
+    let sum = 0.0;
+    let cm = 0;
+    for c in j..(j + k) {
+        let w = ws[c];
+        let v = poster_cm("table", w);
+        if type_of(v) != "()" { sum += v; cm += 1; }
+        else if type_of(w) == "i64" || type_of(w) == "f64" { sum += w.to_float(); }
+        else { throw "table(): a colspan can't cover \"auto\" columns"; }
+    }
+    let extra = rw * (k - 1).to_float();
+    if cm == k { return [cell.width(sum + extra)]; }
+    if cm > 0 { throw "table(): a colspan must cover only lengths or only flex weights"; }
+    if extra == 0.0 { return [cell.flex(sum)]; }
+    let blank = rect().width(extra / 2.0);
+    if poster_has_paint(fill) { blank = blank.fill(fill); }
+    [blank, cell.flex(sum), blank]
+}
+
+// The fill of a header / body cell ("" for none).
+fn table_cell_fill(head) {
+    let f = if head { table_header_fill() } else { "" };
+    if poster_has_paint(f) { f } else { table_fill() }
+}
+
 // One table cell: `x` (a string or number becomes text, bold in the header)
-// padded `table_pad()`, vertically centred, aligned `align`, filled
-// `table_header_fill()` (header) or `table_fill()`.
-fn table_cell(x, head, align) {
+// padded `table_pad_x()` / `table_pad_y()` (or `px` / `py`), vertically
+// centred, aligned `align`, filled `table_header_fill()` (header) or
+// `table_fill()`.
+fn table_cell(x, head, align) { table_cell(x, head, align, table_pad_x(), table_pad_y()) }
+fn table_cell(x, head, align, px, py) {
     let t = type_of(x);
     let n = if t == "string" || t == "i64" || t == "f64" || poster_is_rich(x) {
         let s = fg_text(if poster_is_rich(x) { x } else { `${x}` }).size(table_size()).align(align);
         if head { s.bold() } else { s }
     } else { x };
-    let c = col([n]).pad(table_pad()).main("center").stretch();
-    let f = if head { table_header_fill() } else { "" };
-    if !poster_has_paint(f) { f = table_fill(); }
+    // One padding on all sides; the larger axis gets the rest as spacers.
+    let p = if px < py { px } else { py };
+    let c = col([n]).pad(p).main("center").stretch();
+    if px > py {
+        let s = rect().width(px - py);
+        c = row([s, c.flex(1), s]).stretch();
+    } else if py > px {
+        let s = rect().height(py - px);
+        c = col([s, c.flex(1), s]).stretch();
+    }
+    let f = table_cell_fill(head);
     if poster_has_paint(f) { c.fill(f) } else { c }
 }
 
@@ -2299,7 +2914,7 @@ fn author_runs(authors, affiliations) {
     for a in authors {
         if i > 0 { runs = runs_push(runs, author_sep(), false); }
         i += 1;
-        if type_of(a) == "string" {
+        if type_of(a) == "string" || poster_is_rich(a) {
             runs = runs_push(runs, a, false);
             continue;
         }
@@ -2334,11 +2949,16 @@ fn affiliation_runs(affiliations) {
     runs
 }
 
-// `runs` with run [s, sup] appended (merged into a preceding plain run).
+// `runs` with run [s, sup] appended (merged into a preceding plain run). `s`
+// is a string or rich text (spans, kept as a run of its own).
 fn runs_push(runs, s, sup) {
+    if type_of(s) == "array" {
+        if s.len() > 0 { runs.push([s, sup]); }
+        return runs;
+    }
     if s == "" { return runs; }
     let n = runs.len();
-    if n > 0 && !sup && !runs[n - 1][1] {
+    if n > 0 && !sup && !runs[n - 1][1] && type_of(runs[n - 1][0]) == "string" {
         runs[n - 1][0] += s;
     } else {
         runs.push([s, sup]);
@@ -2348,19 +2968,28 @@ fn runs_push(runs, s, sup) {
 
 // One centred text node of `runs` at `size` pt: plain runs as spans, the
 // affiliation numbers as superscript spans (the core script size and
-// shift), so the line wraps and breaks like any text.
+// shift), so the line wraps and breaks like any text. Rich runs keep their
+// spans (strings among them become plain spans).
 fn runs_line(runs, size) {
     let spans = [];
-    for r in runs { spans.push(if r[1] { span(r[0]).sup() } else { span(r[0]) }); }
+    for r in runs {
+        if type_of(r[0]) == "array" {
+            for x in r[0] { spans.push(if type_of(x) == "string" { span(x) } else { x }); }
+        } else {
+            spans.push(if r[1] { span(r[0]).sup() } else { span(r[0]) });
+        }
+    }
     fg_text(spans).size(size).center()
 }
 
 // The author line(s) of a poster header. `affiliation_position()` "before":
 // "（Affil. A¹・Affil. B²）○Author¹・Author²" on one line; "below": the
-// authors, and the numbered affiliations a size smaller under them.
+// authors, and the numbered affiliations a size smaller under them. Names
+// and affiliations are strings or rich text (`markup("…")`, span arrays):
+// e.g. a name in another font, an affiliation with an italic part.
 fn author_line(authors, affiliations) {
-    if type_of(authors) != "array" { authors = [authors]; }
-    if type_of(affiliations) != "array" { affiliations = [affiliations]; }
+    if type_of(authors) != "array" || poster_is_rich(authors) { authors = [authors]; }
+    if type_of(affiliations) != "array" || poster_is_rich(affiliations) { affiliations = [affiliations]; }
     let size = author_size();
     let who = author_runs(authors, affiliations);
     if affiliations.len() == 0 { return runs_line(who, size); }
