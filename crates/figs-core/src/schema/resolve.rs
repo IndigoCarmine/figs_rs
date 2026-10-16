@@ -102,6 +102,10 @@ pub struct Common {
     pub aspect_ratio: Option<f32>,
     pub margin: Edges,
     pub padding: Edges,
+    /// Offset of the border box (after margin) from the parent's content-box
+    /// origin. Only a `stack` parent reads these; flex containers ignore them.
+    pub x: Option<f32>,
+    pub y: Option<f32>,
 }
 
 /// Typed node payload.
@@ -114,9 +118,24 @@ pub enum NodeType {
         main_axis: MainAxisAlign,
         cross_axis: CrossAxisAlign,
     },
+    /// Children overlap inside the content box, painted in order (later = on
+    /// top), each positioned by its own `x`/`y`.
+    Stack {
+        children: Vec<usize>,
+    },
     Image(ImageProps),
     Text(TextProps),
     Rect(RectProps),
+}
+
+impl NodeType {
+    /// Child indices of a container (`column`/`row`/`stack`); empty for leaves.
+    pub fn children(&self) -> &[usize] {
+        match self {
+            NodeType::Container { children, .. } | NodeType::Stack { children } => children,
+            _ => &[],
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -174,10 +193,8 @@ pub fn resolve(raw: RawDocument) -> Result<Document, ResolveError> {
     // Each non-root node may be referenced by at most one parent.
     let mut parent_count = vec![0u32; nodes.len()];
     for node in &nodes {
-        if let NodeType::Container { children, .. } = &node.kind {
-            for &c in children {
-                parent_count[c] += 1;
-            }
+        for &c in node.kind.children() {
+            parent_count[c] += 1;
         }
     }
     for (i, &count) in parent_count.iter().enumerate() {
@@ -215,6 +232,23 @@ fn convert_node(
         aspect_ratio: raw.aspect_ratio,
         margin: raw.margin.scaled(factor),
         padding: raw.padding.scaled(factor),
+        x: raw.x.map(|x| x * factor),
+        y: raw.y.map(|y| y * factor),
+    };
+
+    let resolve_children = || -> Result<Vec<usize>, ResolveError> {
+        raw.children
+            .iter()
+            .map(|child| {
+                index_of
+                    .get(child.as_str())
+                    .copied()
+                    .ok_or_else(|| ResolveError::DanglingChild {
+                        node: id.to_string(),
+                        child: child.clone(),
+                    })
+            })
+            .collect()
     };
 
     let kind = match raw.kind {
@@ -224,16 +258,7 @@ fn convert_node(
             } else {
                 Axis::Horizontal
             };
-            let mut children = Vec::with_capacity(raw.children.len());
-            for child in &raw.children {
-                let &idx = index_of
-                    .get(child.as_str())
-                    .ok_or_else(|| ResolveError::DanglingChild {
-                        node: id.to_string(),
-                        child: child.clone(),
-                    })?;
-                children.push(idx);
-            }
+            let children = resolve_children()?;
             NodeType::Container {
                 axis,
                 children,
@@ -242,6 +267,9 @@ fn convert_node(
                 cross_axis: raw.cross_axis_alignment.unwrap_or_default(),
             }
         }
+        NodeKind::Stack => NodeType::Stack {
+            children: resolve_children()?,
+        },
         NodeKind::Image => {
             let src = raw.src.clone().ok_or_else(|| ResolveError::MissingField {
                 node: id.to_string(),
@@ -301,10 +329,7 @@ fn detect_cycle(nodes: &[Node], root: usize) -> Result<(), ResolveError> {
     let mut stack: Vec<(usize, usize)> = vec![(root, 0)];
     marks[root] = Mark::InStack;
     while let Some(&mut (node, ref mut child_pos)) = stack.last_mut() {
-        let children: &[usize] = match &nodes[node].kind {
-            NodeType::Container { children, .. } => children,
-            _ => &[],
-        };
+        let children = nodes[node].kind.children();
         if *child_pos < children.len() {
             let next = children[*child_pos];
             *child_pos += 1;

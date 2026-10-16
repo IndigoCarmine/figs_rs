@@ -1,0 +1,19 @@
+// Panel labels overlaid on images with `stack` + `.at(x, y)`.
+//
+// In a stack, children overlap and paint in order (later = on top). A child with
+// no offset and no size fills the stack, so the image is the full-size base
+// layer; a child placed with `.at(x, y)` keeps its natural size at that offset
+// (page units, from the stack's top-left).
+fn labelled(src, label) {
+    stack([
+        image(src).fit("cover"),
+        text(label).size(14).bold().at(0.2, 0.2),
+    ]).flex(1)
+}
+
+page(16, 7,
+    row([
+        labelled("a.png", "(a)"),
+        labelled("b.png", "(b)"),
+    ]).spacing(0.5).pad(0.5).cross("stretch"),
+).unit("cm").background("#ffffff")

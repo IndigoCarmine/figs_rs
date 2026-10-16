@@ -521,6 +521,7 @@ pub fn kind_label(k: figs_core::schema::NodeKind) -> &'static str {
     match k {
         Column => "column",
         Row => "row",
+        Stack => "stack",
         Image => "image",
         Text => "text",
         Rect => "rect",

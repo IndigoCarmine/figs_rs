@@ -1,12 +1,14 @@
 //! Pass 2 — arrange. Given the border-box rect a parent assigns to a node,
-//! place it, resolve flex among its children, apply alignment, and recurse.
-//! Produces [`ComputedNode`]s in paint order (parent before children).
+//! place it, resolve flex among its children (or position them, for a stack),
+//! apply alignment, and recurse. Produces [`ComputedNode`]s in paint order
+//! (parent before children, siblings in array order — so later stack children
+//! paint on top).
 
 use crate::geom::{Axis, CrossAxisAlign, Edges, MainAxisAlign, Rect, Size};
 use crate::schema::{NodeType, RectProps, TextProps};
 
 use super::computed::{ComputedNode, PaintContent, TextBox};
-use super::measure::measure;
+use super::measure::{measure, stack_child_avail, stack_child_size};
 use super::{cross_of, main_of, Constraints, Ctx, LeafMeasure};
 
 /// Place node `idx` into `rect` (its border box) and recurse into children.
@@ -23,18 +25,42 @@ pub(crate) fn arrange<M: LeafMeasure>(
         content: paint_content(&node.kind),
     });
 
-    if let NodeType::Container {
-        axis,
-        children,
-        spacing,
-        main_axis,
-        cross_axis,
-    } = &node.kind
-    {
-        let content = rect.inset(node.common.padding);
-        layout_children(
-            ctx, *axis, children, *spacing, *main_axis, *cross_axis, content, out,
-        );
+    match &node.kind {
+        NodeType::Container {
+            axis,
+            children,
+            spacing,
+            main_axis,
+            cross_axis,
+        } => {
+            let content = rect.inset(node.common.padding);
+            layout_children(
+                ctx, *axis, children, *spacing, *main_axis, *cross_axis, content, out,
+            );
+        }
+        NodeType::Stack { children } => {
+            layout_stack(ctx, children, rect.inset(node.common.padding), out);
+        }
+        _ => {}
+    }
+}
+
+/// Place each stack child at `content origin + (x, y) + leading margin`, sized by
+/// [`stack_child_size`]. Children overlap; array order is paint order.
+fn layout_stack<M: LeafMeasure>(
+    ctx: &Ctx<M>,
+    children: &[usize],
+    content: Rect,
+    out: &mut Vec<ComputedNode>,
+) {
+    for &child in children {
+        let common = &ctx.doc.nodes[child].common;
+        let avail = stack_child_avail(common, content.size());
+        let measured = measure(ctx, child, Constraints::loose(avail.w, avail.h));
+        let size = stack_child_size(common, measured, avail);
+        let x = content.x + common.x.unwrap_or(0.0) + common.margin.left;
+        let y = content.y + common.y.unwrap_or(0.0) + common.margin.top;
+        arrange(ctx, child, Rect::new(x, y, size.w, size.h), out);
     }
 }
 
@@ -216,7 +242,7 @@ fn cross_axis_offset(align: CrossAxisAlign, content_cross: f32, child_cross: f32
 
 fn paint_content(kind: &NodeType) -> PaintContent {
     match kind {
-        NodeType::Container { .. } => PaintContent::Container,
+        NodeType::Container { .. } | NodeType::Stack { .. } => PaintContent::Container,
         NodeType::Rect(RectProps {
             fill,
             stroke,

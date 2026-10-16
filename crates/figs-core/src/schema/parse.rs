@@ -58,6 +58,9 @@ pub struct RawPage {
 pub enum NodeKind {
     Column,
     Row,
+    /// Overlapping children painted in array order (later = on top), each
+    /// placed at its own `x`/`y` offset inside the stack's content box.
+    Stack,
     Image,
     Text,
     Rect,
@@ -90,8 +93,16 @@ pub struct RawNode {
     pub margin: Edges,
     #[serde(default, skip_serializing_if = "Edges::is_zero")]
     pub padding: Edges,
+    /// Horizontal offset of the border box (after margin) from the parent's
+    /// content-box left edge, in the page unit. Only honored when the parent is
+    /// a `stack`; ignored under `column`/`row` and on the root.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<f32>,
+    /// Vertical offset, like [`RawNode::x`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub y: Option<f32>,
 
-    // ---- container (column / row) ----
+    // ---- container (column / row / stack; spacing & alignment are flex-only) ----
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<String>,
     /// Gap between children, in the page unit.

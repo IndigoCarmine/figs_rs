@@ -172,6 +172,54 @@ fn value_semantics_clone_subtrees() {
     assert_eq!(d.nodes.len(), 3);
 }
 
+#[test]
+fn stack_and_offsets_lower_and_lay_out() {
+    // `.at(x, y)` sets both offsets; `.x` / `.y` set one; ints and floats both work.
+    let raw = eval_script(
+        r#"
+        page(100, 80, stack([
+            rect(),
+            text("(a)").at(4, 2.5),
+            rect().x(10.5).width(5).height(5),
+            rect().y(7).height(3),
+        ]).pad(1)).unit("pt")
+        "#,
+    )
+    .unwrap();
+    let root = &raw.nodes["root"];
+    assert_eq!(root.kind, NodeKind::Stack);
+    let kids: Vec<_> = root.children.iter().map(|c| &raw.nodes[c]).collect();
+    assert_eq!((kids[0].x, kids[0].y), (None, None));
+    assert_eq!((kids[1].x, kids[1].y), (Some(4.0), Some(2.5)));
+    assert_eq!((kids[2].x, kids[2].y), (Some(10.5), None));
+    assert_eq!((kids[3].x, kids[3].y), (None, Some(7.0)));
+
+    let d = doc(
+        r#"
+        page(100, 80, stack([
+            rect(),
+            text("(a)").at(4, 2.5),
+        ]).pad(1)).unit("pt")
+        "#,
+    );
+    assert!(matches!(d.nodes[d.root].kind, NodeType::Stack { .. }));
+    let l = layout(&d, &NullMeasurer);
+    // Paint order: stack, base rect (fills the padded content box), then label.
+    assert_eq!(l.nodes.len(), 3);
+    let (base, label) = (l.nodes[1].rect, l.nodes[2].rect);
+    approx(base.x, 1.0);
+    approx(base.w, 98.0);
+    approx(base.h, 78.0);
+    approx(label.x, 1.0 + 4.0);
+    approx(label.y, 1.0 + 2.5);
+}
+
+#[test]
+fn error_at_expects_numbers() {
+    let e = eval_script(r#"page(1, 1, stack([ text("x").at("a", 1) ]))"#).unwrap_err();
+    assert!(e.to_string().contains("`at` expects numbers"), "{e}");
+}
+
 // ---- errors ----------------------------------------------------------------
 
 #[test]
@@ -258,6 +306,14 @@ fn scale_figs_example() {
     check_script(
         "examples/scale.figs",
         include_str!("../../../examples/scale.figs"),
+    );
+}
+
+#[test]
+fn overlay_labels_figs_example() {
+    check_script(
+        "examples/overlay_labels.figs",
+        include_str!("../../../examples/overlay_labels.figs"),
     );
 }
 

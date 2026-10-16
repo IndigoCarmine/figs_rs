@@ -381,3 +381,252 @@ fn overflow_does_not_panic_and_clamps() {
     assert_rect(rect_of(&l, "p"), 0.0, 0.0, 50.0, 40.0);
     assert_rect(rect_of(&l, "q"), 0.0, 40.0, 50.0, 40.0);
 }
+
+// ---- stack ----------------------------------------------------------------
+
+/// Index of a node in paint order.
+fn paint_index(l: &ComputedLayout, id: &str) -> usize {
+    l.nodes
+        .iter()
+        .position(|n| n.id == id)
+        .unwrap_or_else(|| panic!("node `{id}` not found in computed layout"))
+}
+
+#[test]
+fn stack_overlaps_children_in_paint_order() {
+    // Both children fill the padded content box (10,10,80,80) and overlap;
+    // array order is paint order, so `top` paints after `base`.
+    let src = r#"
+        [page]
+        width = 100
+        height = 100
+        unit = "pt"
+        root = "root"
+
+        [nodes.root]
+        type = "stack"
+        padding = 10
+        children = ["base", "top"]
+
+        [nodes.base]
+        type = "rect"
+        [nodes.top]
+        type = "rect"
+    "#;
+    let l = lay(src);
+    assert_rect(rect_of(&l, "base"), 10.0, 10.0, 80.0, 80.0);
+    assert_rect(rect_of(&l, "top"), 10.0, 10.0, 80.0, 80.0);
+    assert!(paint_index(&l, "root") < paint_index(&l, "base"));
+    assert!(paint_index(&l, "base") < paint_index(&l, "top"));
+}
+
+#[test]
+fn stack_offsets_place_border_box_after_margin() {
+    // content box (10,10,80,80); label at x=5,y=7 with margin 2 and explicit
+    // 20x10 size -> border box at (10+5+2, 10+7+2).
+    let src = r#"
+        [page]
+        width = 100
+        height = 100
+        unit = "pt"
+        root = "root"
+
+        [nodes.root]
+        type = "stack"
+        padding = 10
+        children = ["label"]
+
+        [nodes.label]
+        type = "rect"
+        x = 5
+        y = 7
+        margin = 2
+        width = 20
+        height = 10
+    "#;
+    let l = lay(src);
+    assert_rect(rect_of(&l, "label"), 17.0, 19.0, 20.0, 10.0);
+}
+
+#[test]
+fn stack_offsets_convert_page_units() {
+    // x/y are page lengths: 1 cm offset -> 28.3465 pt.
+    let src = r#"
+        [page]
+        width = 10
+        height = 10
+        unit = "cm"
+        root = "root"
+
+        [nodes.root]
+        type = "stack"
+        children = ["dot"]
+
+        [nodes.dot]
+        type = "rect"
+        x = 1
+        y = 2
+        width = 1
+        height = 1
+    "#;
+    let l = lay(src);
+    let cm = 72.0 / 2.54;
+    assert_rect(rect_of(&l, "dot"), cm, 2.0 * cm, cm, cm);
+}
+
+#[test]
+fn stack_fill_rule_is_per_axis() {
+    // 100x80 stack:
+    // - `base`: no offset, no size -> fills both axes (full-size base layer),
+    // - `label`: positioned, no size -> intrinsic (0x0 under NullMeasurer),
+    // - `band`: only `y` + height -> width still fills, height explicit,
+    // - `side`: only `width`, no offsets -> height fills.
+    let src = r#"
+        [page]
+        width = 100
+        height = 80
+        unit = "pt"
+        root = "root"
+
+        [nodes.root]
+        type = "stack"
+        children = ["base", "label", "band", "side"]
+
+        [nodes.base]
+        type = "rect"
+        [nodes.label]
+        type = "rect"
+        x = 4
+        y = 4
+        [nodes.band]
+        type = "rect"
+        y = 30
+        height = 10
+        [nodes.side]
+        type = "rect"
+        width = 15
+    "#;
+    let l = lay(src);
+    assert_rect(rect_of(&l, "base"), 0.0, 0.0, 100.0, 80.0);
+    assert_rect(rect_of(&l, "label"), 4.0, 4.0, 0.0, 0.0);
+    assert_rect(rect_of(&l, "band"), 0.0, 30.0, 100.0, 10.0);
+    assert_rect(rect_of(&l, "side"), 0.0, 0.0, 15.0, 80.0);
+}
+
+#[test]
+fn stack_explicit_size_and_aspect() {
+    // - `sized`: explicit width + aspect pins height (= 40 / 2), no fill,
+    // - `contain`: aspect only, no offsets -> largest 2:1 box in 100x80 = 100x50,
+    // - `tall`: positioned at x = 60, aspect 0.5, no size -> height fills (80)
+    //   and derives width = 40, exactly the space right of the offset.
+    let src = r#"
+        [page]
+        width = 100
+        height = 80
+        unit = "pt"
+        root = "root"
+
+        [nodes.root]
+        type = "stack"
+        children = ["sized", "contain", "tall"]
+
+        [nodes.sized]
+        type = "rect"
+        width = 40
+        aspect_ratio = 2.0
+        [nodes.contain]
+        type = "rect"
+        aspect_ratio = 2.0
+        [nodes.tall]
+        type = "rect"
+        x = 60
+        aspect_ratio = 0.5
+    "#;
+    let l = lay(src);
+    assert_rect(rect_of(&l, "sized"), 0.0, 0.0, 40.0, 20.0);
+    assert_rect(rect_of(&l, "contain"), 0.0, 0.0, 100.0, 50.0);
+    assert_rect(rect_of(&l, "tall"), 60.0, 0.0, 40.0, 80.0);
+}
+
+#[test]
+fn stack_wraps_content_when_measured() {
+    // A stack inside a start-aligned column measures to its furthest child
+    // extent + padding: max(30 + 2*1 + 20, 10) wide, max(5 + 2*1 + 10, 40) tall,
+    // plus padding 3 on each side -> 58 x 46.
+    let src = r#"
+        [page]
+        width = 200
+        height = 200
+        unit = "pt"
+        root = "root"
+
+        [nodes.root]
+        type = "column"
+        children = ["s"]
+
+        [nodes.s]
+        type = "stack"
+        padding = 3
+        children = ["a", "b"]
+
+        [nodes.a]
+        type = "rect"
+        x = 30
+        y = 5
+        margin = 1
+        width = 20
+        height = 10
+        [nodes.b]
+        type = "rect"
+        width = 10
+        height = 40
+    "#;
+    let l = lay(src);
+    assert_rect(rect_of(&l, "s"), 0.0, 0.0, 58.0, 46.0);
+    assert_rect(rect_of(&l, "a"), 34.0, 9.0, 20.0, 10.0);
+    assert_rect(rect_of(&l, "b"), 3.0, 3.0, 10.0, 40.0);
+}
+
+#[test]
+fn stack_nested_in_row_and_offsets_ignored_by_row() {
+    // row of [fixed 20 | flex stack]; the stack gets 80x50 at x=20. Its base
+    // fills it, its label sits at (+10, +5). The fixed rect's x/y are ignored
+    // because its parent is a row, not a stack.
+    let src = r#"
+        [page]
+        width = 100
+        height = 50
+        unit = "pt"
+        root = "root"
+
+        [nodes.root]
+        type = "row"
+        cross_axis_alignment = "stretch"
+        children = ["fixed", "s"]
+
+        [nodes.fixed]
+        type = "rect"
+        width = 20
+        x = 99
+        y = 99
+
+        [nodes.s]
+        type = "stack"
+        flex = 1
+        children = ["base", "label"]
+
+        [nodes.base]
+        type = "rect"
+        [nodes.label]
+        type = "rect"
+        x = 10
+        y = 5
+        width = 8
+        height = 4
+    "#;
+    let l = lay(src);
+    assert_rect(rect_of(&l, "fixed"), 0.0, 0.0, 20.0, 50.0);
+    assert_rect(rect_of(&l, "s"), 20.0, 0.0, 80.0, 50.0);
+    assert_rect(rect_of(&l, "base"), 20.0, 0.0, 80.0, 50.0);
+    assert_rect(rect_of(&l, "label"), 30.0, 5.0, 8.0, 4.0);
+}

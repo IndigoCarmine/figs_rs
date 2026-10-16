@@ -26,6 +26,7 @@ fn to_toml(doc: &RawDocument) -> String {
 fn kind_tag(t: &NodeType) -> &'static str {
     match t {
         NodeType::Container { .. } => "container",
+        NodeType::Stack { .. } => "stack",
         NodeType::Image(_) => "image",
         NodeType::Text(_) => "text",
         NodeType::Rect(_) => "rect",
@@ -82,6 +83,61 @@ fn page_font_family_round_trips() {
     let raw2 = parse_str(&to_toml(&raw1)).expect("parse 2");
     let d2 = resolve(raw2).expect("resolve 2");
     assert_eq!(d2.page.font_family.as_deref(), Some("Liberation Sans"));
+}
+
+#[test]
+fn stack_and_offsets_round_trip() {
+    let src = r#"
+        [page]
+        width = 10
+        height = 10
+        unit = "cm"
+        root = "s"
+        [nodes.s]
+        type = "stack"
+        children = ["base", "label"]
+        [nodes.base]
+        type = "rect"
+        [nodes.label]
+        type = "text"
+        content = "(a)"
+        x = 0.25
+        y = 1.5
+    "#;
+    let raw1 = parse_str(src).expect("parse 1");
+    let out = to_toml(&raw1);
+    // Unset offsets stay out of the saved file.
+    let x_lines = out.lines().filter(|l| l.trim_start().starts_with("x =")).count();
+    assert_eq!(x_lines, 1, "{out}");
+    let raw2 = parse_str(&out).expect("parse 2");
+    assert_eq!(raw2.nodes["s"].kind, figs_core::schema::NodeKind::Stack);
+    assert_eq!(raw2.nodes["label"].x, Some(0.25));
+    assert_eq!(raw2.nodes["label"].y, Some(1.5));
+    assert_eq!(raw2.nodes["base"].x, None);
+
+    let d1 = resolve(raw1).expect("resolve 1");
+    let d2 = resolve(raw2).expect("resolve 2");
+    assert_eq!(kinds(&d1), kinds(&d2));
+}
+
+/// The editor lowers scripts to TOML: a `stack` + `.at()` script must survive it.
+#[cfg(feature = "script")]
+#[test]
+fn script_stack_lowers_to_toml_and_back() {
+    let raw1 = figs_core::eval_script(
+        r#"page(10, 10, stack([ rect(), text("(a)").at(1, 2) ])).unit("cm")"#,
+    )
+    .expect("eval");
+    let raw2 = parse_str(&to_toml(&raw1)).expect("parse lowered TOML");
+    let label = raw2
+        .nodes
+        .values()
+        .find(|n| n.content.as_deref() == Some("(a)"))
+        .expect("label node");
+    assert_eq!((label.x, label.y), (Some(1.0), Some(2.0)));
+    let d1 = resolve(raw1).expect("resolve 1");
+    let d2 = resolve(raw2).expect("resolve 2");
+    assert_eq!(kinds(&d1), kinds(&d2));
 }
 
 #[test]

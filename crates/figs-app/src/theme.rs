@@ -130,6 +130,7 @@ impl Theme {
 pub fn kind_badge(kind: NodeKind) -> (Color32, &'static str) {
     match kind {
         NodeKind::Column | NodeKind::Row => (hex("#8a929e"), "C"),
+        NodeKind::Stack => (hex("#8a929e"), "S"),
         NodeKind::Text => (hex("#6ea8fe"), "T"),
         NodeKind::Rect => (hex("#3ddc97"), "R"),
         NodeKind::Image => (hex("#ffb454"), "I"),
