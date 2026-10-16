@@ -8,7 +8,9 @@ use crate::geom::{Axis, CrossAxisAlign, Edges, MainAxisAlign, Rect, Size};
 use crate::schema::{NodeType, RectProps, TextProps};
 
 use super::computed::{ComputedNode, PaintContent, TextBox};
-use super::measure::{measure, stack_child_avail, stack_child_size};
+use super::measure::{
+    measure, stack_child_avail, stack_child_constraints, stack_child_size, tighten,
+};
 use super::{cross_of, main_of, Constraints, Ctx, LeafMeasure};
 
 /// Place node `idx` into `rect` (its border box) and recurse into children.
@@ -34,8 +36,11 @@ pub(crate) fn arrange<M: LeafMeasure>(
             cross_axis,
         } => {
             let content = rect.inset(node.common.padding);
+            // A column whose height is content-derived (auto-height page) gives
+            // every child its measured height; flex is ignored on that axis.
+            let content_h = *axis == Axis::Vertical && ctx.is_content_h(idx);
             layout_children(
-                ctx, *axis, children, *spacing, *main_axis, *cross_axis, content, out,
+                ctx, *axis, children, *spacing, *main_axis, *cross_axis, content, content_h, out,
             );
         }
         NodeType::Stack { children } => {
@@ -56,7 +61,8 @@ fn layout_stack<M: LeafMeasure>(
     for &child in children {
         let common = &ctx.doc.nodes[child].common;
         let avail = stack_child_avail(common, content.size());
-        let measured = measure(ctx, child, Constraints::loose(avail.w, avail.h));
+        // The content box is known here, so filling axes measure tight.
+        let measured = measure(ctx, child, stack_child_constraints(common, avail, true, true));
         let size = stack_child_size(common, measured, avail);
         let x = content.x + common.x.unwrap_or(0.0) + common.margin.left;
         let y = content.y + common.y.unwrap_or(0.0) + common.margin.top;
@@ -64,6 +70,9 @@ fn layout_stack<M: LeafMeasure>(
     }
 }
 
+/// `content_h`: the container is a column in an unbounded (content-sized)
+/// vertical axis — children are measured with unbounded height and keep their
+/// measured height, flex or not (auto-height pages).
 #[allow(clippy::too_many_arguments)]
 fn layout_children<M: LeafMeasure>(
     ctx: &Ctx<M>,
@@ -73,6 +82,7 @@ fn layout_children<M: LeafMeasure>(
     main_align: MainAxisAlign,
     cross_align: CrossAxisAlign,
     content: Rect,
+    content_h: bool,
     out: &mut Vec<ComputedNode>,
 ) {
     let n = children.len();
@@ -82,17 +92,42 @@ fn layout_children<M: LeafMeasure>(
 
     let content_main = main_of(axis, content.size());
     let content_cross = cross_of(axis, content.size());
-    let child_c = Constraints::loose(content.w, content.h);
+    let base_c = Constraints::loose(
+        content.w,
+        if content_h { f32::INFINITY } else { content.h },
+    );
+    let cross_axis = match axis {
+        Axis::Vertical => Axis::Horizontal,
+        Axis::Horizontal => Axis::Vertical,
+    };
+    // Stretched children get a tight cross size, so whatever depends on it (an
+    // aspect-ratio leaf's main size, a nested row's flex shares) is measured as
+    // it will be arranged — matching the measure pass.
+    let child_c = |m: Edges, main: Option<f32>| {
+        let mut cc = base_c;
+        if cross_align == CrossAxisAlign::Stretch {
+            let cm = match axis {
+                Axis::Vertical => m.horizontal(),
+                Axis::Horizontal => m.vertical(),
+            };
+            cc = tighten(cc, cross_axis, content_cross - cm);
+        }
+        if let Some(v) = main {
+            cc = tighten(cc, axis, v);
+        }
+        cc
+    };
 
     // Measure each child's border box and record its flex weight + margins.
     let mut measured: Vec<Size> = Vec::with_capacity(n);
     let mut margins: Vec<Edges> = Vec::with_capacity(n);
     let mut flex: Vec<Option<f32>> = Vec::with_capacity(n);
     for &child in children {
-        measured.push(measure(ctx, child, child_c));
         let common = &ctx.doc.nodes[child].common;
+        measured.push(measure(ctx, child, child_c(common.margin, None)));
         margins.push(common.margin);
-        flex.push(common.flex.filter(|w| *w > 0.0));
+        // No free space to share along an unbounded axis: flex is ignored.
+        flex.push(common.flex.filter(|w| *w > 0.0 && !content_h));
     }
 
     let gaps = spacing * (n as f32 - 1.0);
@@ -129,6 +164,14 @@ fn layout_children<M: LeafMeasure>(
             _ => main_of(axis, measured[i]),
         };
         main_size.push(m);
+    }
+
+    // Re-measure flex children at their final main size so a cross size that
+    // depends on it (aspect ratio, wrapped content) is right when not stretched.
+    for i in 0..n {
+        if flex[i].is_some() && total_flex > 0.0 {
+            measured[i] = measure(ctx, children[i], child_c(margins[i], Some(main_size[i])));
+        }
     }
 
     // Leftover space (after fixed + flex + gaps) drives main-axis alignment.

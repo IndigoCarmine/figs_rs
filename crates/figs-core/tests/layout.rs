@@ -630,3 +630,333 @@ fn stack_nested_in_row_and_offsets_ignored_by_row() {
     assert_rect(rect_of(&l, "base"), 20.0, 0.0, 80.0, 50.0);
     assert_rect(rect_of(&l, "label"), 30.0, 5.0, 8.0, 4.0);
 }
+
+// ---- auto page height ------------------------------------------------------
+
+#[test]
+fn auto_height_fits_fixed_content() {
+    // Column (padding 5, spacing 4) of two fixed-height rects plus root margin
+    // 3: height = 3 + 5 + 10 + 4 + 20 + 5 + 3 = 50.
+    let src = r#"
+        [page]
+        width = 100
+        height = "auto"
+        unit = "pt"
+        root = "root"
+
+        [nodes.root]
+        type = "column"
+        margin = 3
+        padding = 5
+        spacing = 4
+        cross_axis_alignment = "stretch"
+        children = ["a", "b"]
+
+        [nodes.a]
+        type = "rect"
+        height = 10
+        [nodes.b]
+        type = "rect"
+        height = 20
+    "#;
+    let l = lay(src);
+    assert!(l.page.auto_height);
+    assert!((l.page.height_pt - 50.0).abs() < 0.01, "{}", l.page.height_pt);
+    assert_rect(rect_of(&l, "root"), 3.0, 3.0, 94.0, 44.0);
+    assert_rect(rect_of(&l, "a"), 8.0, 8.0, 84.0, 10.0);
+    assert_rect(rect_of(&l, "b"), 8.0, 22.0, 84.0, 20.0);
+}
+
+#[test]
+fn fixed_height_page_is_not_auto() {
+    let src = r#"
+        [page]
+        width = 100
+        height = 40
+        unit = "pt"
+        root = "r"
+        [nodes.r]
+        type = "rect"
+    "#;
+    let l = lay(src);
+    assert!(!l.page.auto_height);
+    assert_eq!(l.page.height_pt, 40.0);
+}
+
+#[test]
+fn flex_under_unbounded_height_takes_intrinsic_size() {
+    // In an auto-height column there is no free space to share: flex children
+    // keep their measured height (explicit 30 here; 0 for a sizeless rect)
+    // instead of splitting the page.
+    let src = r#"
+        [page]
+        width = 100
+        height = "auto"
+        unit = "pt"
+        root = "root"
+
+        [nodes.root]
+        type = "column"
+        cross_axis_alignment = "stretch"
+        children = ["sized", "empty", "fixed"]
+
+        [nodes.sized]
+        type = "rect"
+        flex = 1
+        height = 30
+        [nodes.empty]
+        type = "rect"
+        flex = 2
+        [nodes.fixed]
+        type = "rect"
+        height = 10
+    "#;
+    let l = lay(src);
+    assert!((l.page.height_pt - 40.0).abs() < 0.01, "{}", l.page.height_pt);
+    assert_rect(rect_of(&l, "sized"), 0.0, 0.0, 100.0, 30.0);
+    assert_rect(rect_of(&l, "empty"), 0.0, 30.0, 100.0, 0.0);
+    assert_rect(rect_of(&l, "fixed"), 0.0, 30.0, 100.0, 10.0);
+}
+
+/// A 2x2 grid of square images (TOML version of the prelude's `grid`): equal
+/// flex rows and cells, stretched, gap `gap_cm`.
+fn square_grid_toml(width_cm: f32, gap_cm: f32) -> String {
+    let mut s = format!(
+        r#"
+        [page]
+        width = {width_cm}
+        height = "auto"
+        unit = "cm"
+        root = "root"
+
+        [nodes.root]
+        type = "column"
+        flex = 1
+        spacing = {gap_cm}
+        cross_axis_alignment = "stretch"
+        children = ["r1", "r2"]
+        "#
+    );
+    for (row, cells) in [("r1", ["a", "b"]), ("r2", ["c", "d"])] {
+        s += &format!(
+            r#"
+            [nodes.{row}]
+            type = "row"
+            flex = 1
+            spacing = {gap_cm}
+            cross_axis_alignment = "stretch"
+            children = ["{}", "{}"]
+            "#,
+            cells[0], cells[1]
+        );
+        for c in cells {
+            s += &format!(
+                r#"
+                [nodes.{c}]
+                type = "image"
+                src = "{c}.png"
+                flex = 1
+                aspect_ratio = 1.0
+                "#
+            );
+        }
+    }
+    s
+}
+
+#[test]
+fn auto_height_grid_of_square_images() {
+    // 17.5 cm page, 0.2 cm gap: cell w = (17.5 - 0.2) / 2 = 8.65 cm; rows are
+    // sized by content (not equal shares of a fixed page): h = 2w + gap.
+    let l = lay(&square_grid_toml(17.5, 0.2));
+    let cm = figs_core::units::Unit::Cm.to_pt();
+    let w = 8.65 * cm;
+    let g = 0.2 * cm;
+    assert!(
+        (l.page.height_pt - (2.0 * w + g)).abs() < 0.01,
+        "page height {} != {}",
+        l.page.height_pt,
+        2.0 * w + g
+    );
+    assert_rect(rect_of(&l, "a"), 0.0, 0.0, w, w);
+    assert_rect(rect_of(&l, "b"), w + g, 0.0, w, w);
+    assert_rect(rect_of(&l, "c"), 0.0, w + g, w, w);
+    assert_rect(rect_of(&l, "d"), w + g, w + g, w, w);
+}
+
+#[test]
+fn auto_height_rows_follow_their_own_content() {
+    // Two flex rows with different aspect ratios: each row keeps its content
+    // height (100 and 50) rather than sharing the total equally — images are
+    // never squashed.
+    let src = r#"
+        [page]
+        width = 100
+        height = "auto"
+        unit = "pt"
+        root = "root"
+
+        [nodes.root]
+        type = "column"
+        cross_axis_alignment = "stretch"
+        children = ["r1", "r2"]
+
+        [nodes.r1]
+        type = "row"
+        flex = 1
+        cross_axis_alignment = "stretch"
+        children = ["sq"]
+        [nodes.sq]
+        type = "image"
+        src = "sq.png"
+        flex = 1
+        aspect_ratio = 1.0
+
+        [nodes.r2]
+        type = "row"
+        flex = 1
+        cross_axis_alignment = "stretch"
+        children = ["wide"]
+        [nodes.wide]
+        type = "image"
+        src = "wide.png"
+        flex = 1
+        aspect_ratio = 2.0
+    "#;
+    let l = lay(src);
+    assert!((l.page.height_pt - 150.0).abs() < 0.01, "{}", l.page.height_pt);
+    assert_rect(rect_of(&l, "sq"), 0.0, 0.0, 100.0, 100.0);
+    assert_rect(rect_of(&l, "wide"), 0.0, 100.0, 100.0, 50.0);
+}
+
+#[test]
+fn auto_height_image_without_aspect_uses_4_3_fallback() {
+    // NullMeasurer knows no image sizes (like a missing file): an image with no
+    // aspect_ratio is treated as 4:3 once its width is known.
+    let src = r#"
+        [page]
+        width = 80
+        height = "auto"
+        unit = "pt"
+        root = "root"
+
+        [nodes.root]
+        type = "column"
+        cross_axis_alignment = "stretch"
+        children = ["img", "cap"]
+
+        [nodes.img]
+        type = "image"
+        src = "missing.png"
+        [nodes.cap]
+        type = "rect"
+        height = 5
+    "#;
+    let l = lay(src);
+    assert!((l.page.height_pt - 65.0).abs() < 0.01, "{}", l.page.height_pt);
+    assert_rect(rect_of(&l, "img"), 0.0, 0.0, 80.0, 60.0);
+}
+
+#[test]
+fn auto_height_uses_natural_image_aspect_when_known() {
+    use figs_core::geom::Size;
+    use figs_core::schema::{ImageProps, TextProps};
+    use figs_core::LeafMeasure;
+
+    /// Reports a 2:1 natural aspect for every image.
+    struct Wide;
+    impl LeafMeasure for Wide {
+        fn measure_text(&self, _: &TextProps, _: f32) -> Size {
+            Size::default()
+        }
+        fn measure_image(&self, _: &ImageProps) -> Size {
+            Size::default()
+        }
+        fn image_aspect(&self, _: &ImageProps) -> Option<f32> {
+            Some(2.0)
+        }
+    }
+
+    let src = r#"
+        [page]
+        width = 100
+        height = "auto"
+        unit = "pt"
+        root = "img"
+        [nodes.img]
+        type = "image"
+        src = "wide.png"
+    "#;
+    let doc = Document::from_toml(src).unwrap();
+    let l = layout(&doc, &Wide);
+    assert!((l.page.height_pt - 50.0).abs() < 0.01, "{}", l.page.height_pt);
+    assert_rect(rect_of(&l, "img"), 0.0, 0.0, 100.0, 50.0);
+}
+
+#[test]
+fn auto_height_labeled_stack_cells() {
+    // Grid cells that are stacks (image base + offset label), as `panels` makes:
+    // the filling image gets the cell width and derives the cell height.
+    let src = r#"
+        [page]
+        width = 100
+        height = "auto"
+        unit = "pt"
+        root = "root"
+
+        [nodes.root]
+        type = "row"
+        spacing = 10
+        cross_axis_alignment = "stretch"
+        children = ["s1", "s2"]
+
+        [nodes.s1]
+        type = "stack"
+        flex = 1
+        children = ["i1", "l1"]
+        [nodes.i1]
+        type = "image"
+        src = "a.png"
+        aspect_ratio = 1.0
+        [nodes.l1]
+        type = "rect"
+        x = 0
+        y = 0
+        width = 5
+        height = 5
+
+        [nodes.s2]
+        type = "stack"
+        flex = 1
+        children = ["i2"]
+        [nodes.i2]
+        type = "image"
+        src = "b.png"
+        aspect_ratio = 1.0
+    "#;
+    let l = lay(src);
+    assert!((l.page.height_pt - 45.0).abs() < 0.01, "{}", l.page.height_pt);
+    assert_rect(rect_of(&l, "i1"), 0.0, 0.0, 45.0, 45.0);
+    assert_rect(rect_of(&l, "i2"), 55.0, 0.0, 45.0, 45.0);
+    assert_rect(rect_of(&l, "l1"), 0.0, 0.0, 5.0, 5.0);
+}
+
+#[test]
+fn auto_height_without_content_falls_back_to_4_3() {
+    // Nothing has a height: warn and use width * 3/4 rather than a 0-px page.
+    let src = r#"
+        [page]
+        width = 100
+        height = "auto"
+        unit = "pt"
+        root = "root"
+        [nodes.root]
+        type = "column"
+        children = ["r"]
+        [nodes.r]
+        type = "rect"
+        flex = 1
+    "#;
+    let l = lay(src);
+    assert!((l.page.height_pt - 75.0).abs() < 0.01, "{}", l.page.height_pt);
+}

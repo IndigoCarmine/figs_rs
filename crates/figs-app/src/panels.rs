@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use eframe::egui::{self, Color32, Rect, RichText, Sense, Stroke};
 use figs_core::geom::{Color, CrossAxisAlign, Edges, ImageFit, MainAxisAlign, TextAlign};
-use figs_core::schema::{NodeKind, RawDocument};
+use figs_core::schema::{NodeKind, PageHeight, RawDocument};
 use figs_core::units::Unit;
 use figs_core::ComputedLayout;
 
@@ -215,7 +215,13 @@ fn inspector(app: &mut FigsApp, ui: &mut egui::Ui, _p: &Palette) {
             let mut changed = false;
             section(ui, "Geometry");
             changed |= num(ui, "Width", &mut app.model.page.width, 1.0);
-            changed |= num(ui, "Height", &mut app.model.page.height, 1.0);
+            // Last laid-out height in page units: shown while auto, and the
+            // starting value when switching auto off.
+            let laid_out = app
+                .preview
+                .as_ref()
+                .map(|p| p.computed.page.height_pt / app.model.page.unit.to_pt());
+            changed |= page_height(ui, &mut app.model.page.height, laid_out);
             changed |= unit_combo(ui, "Unit", &mut app.model.page.unit);
             changed |= opt_num(ui, "DPI", &mut app.model.page.dpi, 1.0);
             section(ui, "Appearance");
@@ -331,6 +337,41 @@ fn num(ui: &mut egui::Ui, label: &str, v: &mut f32, speed: f32) -> bool {
     ui.horizontal(|ui| {
         ui.label(label);
         changed = ui.add(egui::DragValue::new(v).speed(speed)).changed();
+    });
+    changed
+}
+
+/// Page height: an "auto" checkbox (fit the content) plus a value when fixed.
+/// While auto, the laid-out height is shown read-only.
+fn page_height(ui: &mut egui::Ui, v: &mut PageHeight, laid_out: Option<f32>) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label("Height");
+        let mut auto = v.is_auto();
+        if ui
+            .checkbox(&mut auto, "auto")
+            .on_hover_text("Fit the page height to the content")
+            .changed()
+        {
+            *v = if auto {
+                PageHeight::Auto
+            } else {
+                PageHeight::Fixed(laid_out.filter(|h| *h > 0.0).unwrap_or(100.0))
+            };
+            changed = true;
+        }
+        match v {
+            PageHeight::Fixed(h) => {
+                if ui.add(egui::DragValue::new(h).speed(1.0)).changed() {
+                    changed = true;
+                }
+            }
+            PageHeight::Auto => {
+                if let Some(h) = laid_out {
+                    ui.weak(format!("= {h:.2}"));
+                }
+            }
+        }
     });
     changed
 }

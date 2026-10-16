@@ -9,7 +9,7 @@
 pub mod parse;
 pub mod resolve;
 
-pub use parse::{NodeKind, RawDocument, RawNode, RawPage};
+pub use parse::{NodeKind, PageHeight, RawDocument, RawNode, RawPage};
 pub use resolve::{
     Common, Document, ImageProps, Node, NodeType, PageInfo, RectProps, ResolveError, TextProps,
 };

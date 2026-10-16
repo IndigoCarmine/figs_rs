@@ -16,9 +16,13 @@ pub struct ComputedLayout {
 #[derive(Debug, Clone)]
 pub struct PageGeom {
     pub width_pt: f32,
+    /// Final page height. For an auto-height page this is the content-derived
+    /// height computed by layout, so renderers and the editor just use it.
     pub height_pt: f32,
     pub dpi: f32,
     pub background: Option<Color>,
+    /// True when `height_pt` was derived from the content (`height = "auto"`).
+    pub auto_height: bool,
 }
 
 /// A single placed node: stable id, absolute rect (points, top-left origin),

@@ -32,12 +32,88 @@ pub struct RawDocument {
     pub nodes: HashMap<String, RawNode>,
 }
 
+/// The page height: a fixed length, or `"auto"` — derived from the content.
+///
+/// In TOML it is either a number (`height = 20`) or the string `"auto"`
+/// (`height = "auto"`). The field stays required: omitting `height` is still an
+/// error, so auto sizing is always an explicit opt-in.
+///
+/// With `Auto`, layout measures the root with the page width fixed and an
+/// unbounded height, and the measured height becomes the page height (see
+/// [`crate::layout::layout`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PageHeight {
+    /// A fixed height in the page unit.
+    Fixed(f32),
+    /// Fit the content.
+    Auto,
+}
+
+impl PageHeight {
+    /// The fixed height (page units), or `None` for `Auto`.
+    pub fn fixed(self) -> Option<f32> {
+        match self {
+            PageHeight::Fixed(h) => Some(h),
+            PageHeight::Auto => None,
+        }
+    }
+
+    pub fn is_auto(self) -> bool {
+        matches!(self, PageHeight::Auto)
+    }
+}
+
+impl From<f32> for PageHeight {
+    fn from(h: f32) -> Self {
+        PageHeight::Fixed(h)
+    }
+}
+
+impl Serialize for PageHeight {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            PageHeight::Fixed(h) => s.serialize_f32(*h),
+            PageHeight::Auto => s.serialize_str("auto"),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for PageHeight {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl serde::de::Visitor<'_> for V {
+            type Value = PageHeight;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str(r#"a number or "auto""#)
+            }
+            fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<PageHeight, E> {
+                Ok(PageHeight::Fixed(v as f32))
+            }
+            fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<PageHeight, E> {
+                Ok(PageHeight::Fixed(v as f32))
+            }
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<PageHeight, E> {
+                Ok(PageHeight::Fixed(v as f32))
+            }
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<PageHeight, E> {
+                if v == "auto" {
+                    Ok(PageHeight::Auto)
+                } else {
+                    Err(E::invalid_value(serde::de::Unexpected::Str(v), &self))
+                }
+            }
+        }
+        d.deserialize_any(V)
+    }
+}
+
 /// The `[page]` table.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RawPage {
     pub width: f32,
-    pub height: f32,
+    /// A number (page units) or `"auto"` to fit the content.
+    pub height: PageHeight,
     #[serde(default)]
     pub unit: Unit,
     /// Id of the root node within `nodes`.
