@@ -31,11 +31,18 @@ pub(crate) fn measure<M: LeafMeasure>(ctx: &Ctx<M>, idx: usize, c: Constraints) 
             cross_axis,
             ..
         } => measure_container(ctx, *axis, children, *spacing, *cross_axis, &node.common, c),
-        NodeType::Stack { children } => measure_stack(ctx, children, &node.common, c),
+        NodeType::Stack { children, viewbox } => {
+            measure_stack(ctx, children, viewbox.is_some(), &node.common, c)
+        }
         NodeType::Rect(_) | NodeType::Ellipse(_) => Size::default(),
         // Coordinates live in the content box, so the intrinsic size is the
         // outline's extent from its origin (exact curve bounds, not control
-        // points; not the tight bounding box) plus padding.
+        // points; not the tight bounding box) plus padding. Viewbox coordinates
+        // are relative to the final box, so such a path has no intrinsic size.
+        NodeType::Path(props) if props.viewbox.is_some() => Size::new(
+            node.common.padding.horizontal(),
+            node.common.padding.vertical(),
+        ),
         NodeType::Path(props) => {
             let (w, h) = crate::path::bounds(&props.segments)
                 .map_or((0.0, 0.0), |(_, hi)| (hi.x.max(0.0), hi.y.max(0.0)));
@@ -194,12 +201,15 @@ fn measure_container<M: LeafMeasure>(
 }
 
 /// Wrap-content size of a stack: the furthest extent of any child
-/// (`offset + margins + border box`) on each axis, plus padding. Children that
-/// fill the stack in arrange contribute their intrinsic size here, as flex
-/// children do in a row/column.
+/// (`offset - anchor shift + margins + border box`) on each axis, plus
+/// padding. Children that fill the stack in arrange contribute their intrinsic
+/// size here, as flex children do in a row/column. In a stack with a viewbox
+/// (`user` offsets) the offsets only make sense against the final box, so they
+/// are ignored: such a stack wraps its largest child.
 fn measure_stack<M: LeafMeasure>(
     ctx: &Ctx<M>,
     children: &[usize],
+    user: bool,
     common: &Common,
     c: Constraints,
 ) -> Size {
@@ -212,15 +222,24 @@ fn measure_stack<M: LeafMeasure>(
     let mut h = 0.0f32;
     for &child in children {
         let cc = &ctx.doc.nodes[child].common;
-        let avail = stack_child_avail(cc, inner);
+        let avail = stack_child_avail(cc, inner, user);
         // A filling axis is tight when the stack's own size on it is.
         let sz = measure(
             ctx,
             child,
             stack_child_constraints(cc, avail, c.is_tight_w(), c.is_tight_h()),
         );
-        w = w.max(cc.x.unwrap_or(0.0) + cc.margin.horizontal() + sz.w);
-        h = h.max(cc.y.unwrap_or(0.0) + cc.margin.vertical() + sz.h);
+        let (x, y) = if user {
+            (0.0, 0.0)
+        } else {
+            let [ax, ay] = cc.anchor.unwrap_or([0.0, 0.0]);
+            (
+                cc.x.unwrap_or(0.0) - ax * sz.w,
+                cc.y.unwrap_or(0.0) - ay * sz.h,
+            )
+        };
+        w = w.max(x + cc.margin.horizontal() + sz.w);
+        h = h.max(y + cc.margin.vertical() + sz.h);
     }
     Size::new(
         w + common.padding.horizontal(),
@@ -233,10 +252,20 @@ fn measure_stack<M: LeafMeasure>(
 /// edge (minus trailing margin). As in rows/columns, sizes are clamped to it, so
 /// a child never spills past the right/bottom edge; a negative offset may hang
 /// off the top/left.
-pub(super) fn stack_child_avail(common: &Common, content: Size) -> Size {
+///
+/// An anchored child, or any child of a viewbox stack (`user` offsets), sits
+/// *around* its point rather than hanging from it, so the offset doesn't
+/// shorten its space: it is only clamped to the content size (minus margins)
+/// and may extend past any edge.
+pub(super) fn stack_child_avail(common: &Common, content: Size, user: bool) -> Size {
+    let (x, y) = if user || common.anchor.is_some() {
+        (0.0, 0.0)
+    } else {
+        (common.x.unwrap_or(0.0), common.y.unwrap_or(0.0))
+    };
     Size::new(
-        (content.w - common.x.unwrap_or(0.0) - common.margin.horizontal()).max(0.0),
-        (content.h - common.y.unwrap_or(0.0) - common.margin.vertical()).max(0.0),
+        (content.w - x - common.margin.horizontal()).max(0.0),
+        (content.h - y - common.margin.vertical()).max(0.0),
     )
 }
 

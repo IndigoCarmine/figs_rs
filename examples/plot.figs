@@ -1,0 +1,16 @@
+// Data plots from core nodes: `plot(opts, series)` draws axes with nice
+// ticks; `line_plot` / `scatter` / `bars` are series. `csv()` loads columns
+// (paths are relative to this script). Colours come from `palette()`
+// (Okabe–Ito), strokes from `plot_line_width()`, sizes from `base_size()`.
+let d = csv("data/growth.csv");
+
+page("double", grid(2, panels([
+    plot(#{ xlabel: "Time (h)", ylabel: "OD₆₀₀" }, [
+        line_plot(d.time_h, d.wt, #{ label: "Wild type", yerr: d.wt_sd }),
+        scatter(d.time_h, d.mutant, "ΔrpoS"),
+    ]),
+    plot(#{ ylabel: "Doubling time (min)" }, [
+        bars(["WT", "ΔrpoS", "ΔrelA", "ΔspoT"], [24, 38, 31, 45],
+             #{ yerr: [1.5, 3.2, 2.1, 4.0] }),
+    ]),
+])))

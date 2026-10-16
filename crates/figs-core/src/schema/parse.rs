@@ -187,6 +187,23 @@ pub struct RawNode {
     /// Vertical offset, like [`RawNode::x`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub y: Option<f32>,
+    /// Which point of the node's border box sits at its `x`/`y` offset, as
+    /// fractions `[ax, ay]` of its width/height: `[0, 0]` (the default) is the
+    /// top-left, `[0.5, 0.5]` the centre, `[1, 0.5]` the right-middle. Only a
+    /// `stack` parent reads it; an anchored child may extend past any edge of
+    /// the stack (it is clamped to the stack's size, not to the space after
+    /// its offset).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<[f32; 2]>,
+
+    /// User coordinates `[x0, y0, x1, y1]` laid over the content box (`x0` ->
+    /// left, `x1` -> right, `y0` -> top, `y1` -> bottom; reversing a pair flips
+    /// that axis). On a `stack` its children's `x`/`y` offsets are in these
+    /// units; on a `line`/`arrow`/`path` its `points`/`segments` are. Only
+    /// positions are mapped: sizes, strokes, dashes and heads stay in the page
+    /// unit. See [`crate::geom::ViewBox`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub viewbox: Option<[f32; 4]>,
 
     // ---- container (column / row / stack; spacing & alignment are flex-only) ----
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

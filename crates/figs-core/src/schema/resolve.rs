@@ -14,7 +14,7 @@ use std::collections::HashMap;
 
 use crate::geom::{
     ArcSweep, ArrowHead, Axis, Color, CrossAxisAlign, Edges, ImageFit, MainAxisAlign, PathSegment,
-    Point, StrokeStyle, TextAlign,
+    Point, StrokeStyle, TextAlign, ViewBox,
 };
 use crate::path::arc_to_cubics;
 
@@ -94,6 +94,17 @@ impl Document {
         Ok(resolve(raw)?)
     }
 
+    /// [`Document::from_script`] for a script in `base_dir` (relative data
+    /// paths such as `csv("data.csv")` resolve against it).
+    #[cfg(feature = "script")]
+    pub fn from_script_in(
+        src: &str,
+        base_dir: Option<&std::path::Path>,
+    ) -> Result<Document, crate::Error> {
+        let raw = crate::script::eval_script_in(src, base_dir)?;
+        Ok(resolve(raw)?)
+    }
+
     pub fn node(&self, idx: usize) -> &Node {
         &self.nodes[idx]
     }
@@ -119,8 +130,13 @@ pub struct Common {
     pub padding: Edges,
     /// Offset of the border box (after margin) from the parent's content-box
     /// origin. Only a `stack` parent reads these; flex containers ignore them.
+    /// Points — or, under a stack with a `viewbox`, that viewbox's user units
+    /// (mapped at layout time).
     pub x: Option<f32>,
     pub y: Option<f32>,
+    /// Fractions `[ax, ay]` of the border box placed at the `x`/`y` offset
+    /// (`None` = top-left, unclamped otherwise; see [`RawNode::anchor`]).
+    pub anchor: Option<[f32; 2]>,
 }
 
 /// Typed node payload.
@@ -134,9 +150,11 @@ pub enum NodeType {
         cross_axis: CrossAxisAlign,
     },
     /// Children overlap inside the content box, painted in order (later = on
-    /// top), each positioned by its own `x`/`y`.
+    /// top), each positioned by its own `x`/`y` — in points, or in `viewbox`
+    /// units when set.
     Stack {
         children: Vec<usize>,
+        viewbox: Option<ViewBox>,
     },
     Image(ImageProps),
     Text(TextProps),
@@ -150,7 +168,7 @@ impl NodeType {
     /// Child indices of a container (`column`/`row`/`stack`); empty for leaves.
     pub fn children(&self) -> &[usize] {
         match self {
-            NodeType::Container { children, .. } | NodeType::Stack { children } => children,
+            NodeType::Container { children, .. } | NodeType::Stack { children, .. } => children,
             _ => &[],
         }
     }
@@ -184,7 +202,8 @@ pub struct RectProps {
 
 /// A stroked/filled outline (`line`, `arrow`, `path`). Coordinates are in
 /// points, relative to the node's content-box origin; they are not scaled with
-/// the box.
+/// the box — unless `viewbox` is set: then they are user units mapped onto the
+/// content box at layout time.
 #[derive(Debug, Clone)]
 pub struct PathProps {
     /// `MoveTo` (first point), then one segment per further point/`segments`
@@ -197,6 +216,9 @@ pub struct PathProps {
     pub head: ArrowHead,
     /// Arrowhead length in points (its width is 0.8x this).
     pub head_size: f32,
+    /// User coordinates of `segments`, mapped onto the content box (`None`:
+    /// segments are points from the content-box origin).
+    pub viewbox: Option<ViewBox>,
 }
 
 /// An ellipse inscribed in the node's border box.
@@ -247,6 +269,25 @@ pub fn resolve(raw: RawDocument) -> Result<Document, ResolveError> {
         }
     }
 
+    // Offsets of a viewbox stack's children are user units, mapped at layout
+    // time: undo the page-unit scaling applied in `convert_node`.
+    let user_offset: Vec<usize> = nodes
+        .iter()
+        .filter_map(|n| match &n.kind {
+            NodeType::Stack {
+                children,
+                viewbox: Some(_),
+            } => Some(children.iter().copied()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    for c in user_offset {
+        let r = &raw.nodes[ids[c].as_str()];
+        nodes[c].common.x = r.x;
+        nodes[c].common.y = r.y;
+    }
+
     let root = index_of[raw.page.root.as_str()];
     detect_cycle(&nodes, root)?;
 
@@ -276,7 +317,24 @@ fn convert_node(
         padding: raw.padding.scaled(factor),
         x: raw.x.map(|x| x * factor),
         y: raw.y.map(|y| y * factor),
+        anchor: raw.anchor,
     };
+    if raw.anchor.is_some_and(|a| a.iter().any(|v| !v.is_finite())) {
+        return Err(ResolveError::InvalidField {
+            node: id.to_string(),
+            field: "anchor",
+            reason: "values must be finite numbers".into(),
+        });
+    }
+    let viewbox = raw
+        .viewbox
+        .map(ViewBox::from_array)
+        .transpose()
+        .map_err(|reason| ResolveError::InvalidField {
+            node: id.to_string(),
+            field: "viewbox",
+            reason,
+        })?;
 
     let resolve_children = || -> Result<Vec<usize>, ResolveError> {
         raw.children
@@ -311,6 +369,7 @@ fn convert_node(
         }
         NodeKind::Stack => NodeType::Stack {
             children: resolve_children()?,
+            viewbox,
         },
         NodeKind::Image => {
             let src = raw.src.clone().ok_or_else(|| ResolveError::MissingField {
@@ -391,7 +450,9 @@ fn convert_node(
                     "coordinates must be finite numbers".into(),
                 ));
             }
-            let segments = path_segments(&raw.points, &raw.segments, raw.closed, factor)
+            // Viewbox coordinates are user units: no page-unit scaling.
+            let coord_factor = if viewbox.is_some() { 1.0 } else { factor };
+            let segments = path_segments(&raw.points, &raw.segments, raw.closed, coord_factor)
                 .map_err(|reason| invalid("segments", reason))?;
             // Line/arrow are pure strokes, so they default to a black one; a path
             // is stroked black only when it has neither fill nor stroke.
@@ -412,6 +473,7 @@ fn convert_node(
                 stroke,
                 head: raw.head.unwrap_or(default_head),
                 head_size,
+                viewbox,
             })
         }
         NodeKind::Ellipse => NodeType::Ellipse(EllipseProps {

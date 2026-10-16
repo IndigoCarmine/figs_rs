@@ -125,7 +125,7 @@ impl FigsApp {
     /// Evaluate the Rhai script buffer into the model, refreshing the preview,
     /// the TOML pane and the inspector. On error the current model is kept.
     pub fn evaluate_script(&mut self) {
-        match figs_core::eval_script(&self.script_buffer) {
+        match figs_core::eval_script_in(&self.script_buffer, Some(&self.base_dir)) {
             Ok(raw) => {
                 self.model = raw;
                 self.script_error = None;
