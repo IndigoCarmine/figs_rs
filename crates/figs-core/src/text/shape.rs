@@ -13,7 +13,9 @@ use crate::schema::TextProps;
 /// (points).
 #[derive(Debug, Clone, Default)]
 pub struct ShapedText {
-    /// Overall block size: max line width × (line count × line height).
+    /// Overall block size: max line width × (line count × line height), grown
+    /// at the top/bottom when the font's ascent/descent overhangs the first/last
+    /// line box (see [`shape`]).
     pub size: Size,
     pub lines: Vec<ShapedLine>,
 }
@@ -67,11 +69,32 @@ pub fn shape(
     buffer.set_text(&text.content, attrs, Shaping::Advanced);
     buffer.shape_until_scroll(false);
 
+    // Walk the layout lines directly (rather than `layout_runs`, which skips a
+    // line whose baseline lands above the block top) and place baselines the
+    // way cosmic-text does: the font's ascent + descent box is centred in each
+    // line box (CSS half-leading).
     let mut lines = Vec::new();
     let mut max_w = 0.0f32;
-    for run in buffer.layout_runs() {
-        max_w = max_w.max(run.line_w);
-        let glyphs = run
+    let mut line_top = 0.0f32;
+    let mut ink_top = 0.0f32;
+    let mut ink_bottom = 0.0f32;
+    for layout_line in buffer
+        .lines
+        .iter()
+        .filter_map(|l| l.layout_opt().as_ref())
+        .flatten()
+    {
+        let lh = layout_line.line_height_opt.unwrap_or(line_height);
+        let (ascent, descent) = (layout_line.max_ascent, layout_line.max_descent);
+        let baseline = line_top + (lh - (ascent + descent)) / 2.0 + ascent;
+        if ascent + descent > 0.0 {
+            ink_top = ink_top.min(baseline - ascent);
+            ink_bottom = ink_bottom.max(baseline + descent);
+        }
+        line_top += lh;
+
+        max_w = max_w.max(layout_line.w);
+        let glyphs = layout_line
             .glyphs
             .iter()
             .map(|g| ShapedGlyph {
@@ -82,13 +105,22 @@ pub fn shape(
             })
             .collect();
         lines.push(ShapedLine {
-            baseline: run.line_y,
-            width: run.line_w,
+            baseline,
+            width: layout_line.w,
             glyphs,
         });
     }
 
-    let height = lines.len() as f32 * line_height;
+    // The block is its stacked line boxes, grown where needed so the first
+    // line's ascent and the last line's descent stay inside it: a font whose
+    // ascent + descent exceeds the line height (e.g. Segoe UI at the default
+    // 1.2) would otherwise poke its accents/descenders out of the box and get
+    // clipped at a page edge. Inner line spacing is unchanged.
+    let shift = -ink_top; // >= 0
+    for line in &mut lines {
+        line.baseline += shift;
+    }
+    let height = line_top.max(ink_bottom) + shift;
     ShapedText {
         size: Size::new(max_w, height),
         lines,

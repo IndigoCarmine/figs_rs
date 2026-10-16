@@ -9,7 +9,10 @@
 //! child its flex share. A leaf with `aspect_ratio` then derives its other side
 //! from the tight one — which is how rows of aspect-ratio images report a real
 //! height (needed by auto-height pages). Loose constraints keep the plain
-//! wrap-content behaviour.
+//! wrap-content behaviour — except for an image with neither side known, which
+//! has no content to wrap: it takes the largest box of its aspect that fits the
+//! loose constraints (full available width, or full height if that is the
+//! tighter limit), so it is never silently drawn at 0×0.
 
 use crate::geom::{Axis, CrossAxisAlign, Edges, Size};
 use crate::schema::{Common, NodeType};
@@ -44,23 +47,33 @@ pub(crate) fn measure<M: LeafMeasure>(ctx: &Ctx<M>, idx: usize, c: Constraints) 
         }
         NodeType::Image(props) => {
             let intrinsic = ctx.measurer.measure_image(props);
-            // An image without an aspect ratio or intrinsic size still has a
-            // shape: its natural aspect (if the measurer can read it), else the
-            // documented 4:3 fallback. It only matters once one side is known
-            // (explicit or tight), so wrap-content measurement stays zero.
-            if node.common.aspect_ratio.is_none() && intrinsic.w <= 0.0 && intrinsic.h <= 0.0 {
-                let ar = ctx
-                    .measurer
-                    .image_aspect(props)
+            if intrinsic.w > 0.0 || intrinsic.h > 0.0 {
+                intrinsic
+            } else {
+                // No intrinsic size: the image's shape is its `aspect_ratio`,
+                // else its natural aspect (if the measurer can read it), else
+                // the documented 4:3 fallback.
+                let ar = node
+                    .common
+                    .aspect_ratio
+                    .or_else(|| ctx.measurer.image_aspect(props))
                     .filter(|a| a.is_finite() && *a > 0.0)
                     .unwrap_or(FALLBACK_IMAGE_ASPECT);
                 let common = Common {
                     aspect_ratio: Some(ar),
                     ..node.common.clone()
                 };
-                return resolve_box_size(&common, intrinsic, c);
+                let known_side = common.width.is_some()
+                    || common.height.is_some()
+                    || c.is_tight_w()
+                    || c.is_tight_h();
+                if known_side {
+                    return resolve_box_size(&common, intrinsic, c);
+                }
+                // Neither side known (loose constraints, e.g. a centred
+                // column): fill the space like `img { max-width: 100% }`.
+                return c.clamp(contain(ar, c.max_w, c.max_h));
             }
-            intrinsic
         }
         NodeType::Text(props) => {
             let avail = (c.max_w - node.common.padding.horizontal()).max(0.0);
@@ -315,6 +328,26 @@ pub(super) fn resolve_box_size(common: &Common, intrinsic: Size, c: Constraints)
     }
 
     c.clamp(Size::new(w, h))
+}
+
+/// The largest box of aspect `ar` (w / h, > 0) within `max_w` × `max_h`: the
+/// full width when it fits, else the full height. An unbounded axis doesn't
+/// limit (the other one decides); with both unbounded there is nothing to fill
+/// and the result is zero — never infinite.
+fn contain(ar: f32, max_w: f32, max_h: f32) -> Size {
+    let by_width = max_w.is_finite().then(|| Size::new(max_w, max_w / ar));
+    let by_height = max_h.is_finite().then(|| Size::new(max_h * ar, max_h));
+    match (by_width, by_height) {
+        (Some(w), Some(h)) => {
+            if w.h <= max_h {
+                w
+            } else {
+                h
+            }
+        }
+        (Some(s), None) | (None, Some(s)) => s,
+        (None, None) => Size::default(),
+    }
 }
 
 /// The cross axis of a container laid out along `axis`.

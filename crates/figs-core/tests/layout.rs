@@ -960,3 +960,187 @@ fn auto_height_without_content_falls_back_to_4_3() {
     let l = lay(src);
     assert!((l.page.height_pt - 75.0).abs() < 0.01, "{}", l.page.height_pt);
 }
+
+// --- images under loose constraints -----------------------------------------
+// An image with neither side known (no explicit size, no tight constraint — e.g.
+// in a centred column) has no content to wrap, so it takes the largest box of
+// its aspect that fits the loose constraints instead of collapsing to 0x0.
+
+#[test]
+fn loose_width_aspect_image_fills_available_width() {
+    let src = r#"
+        [page]
+        width = 200
+        height = 300
+        unit = "pt"
+        root = "root"
+
+        [nodes.root]
+        type = "column"
+        cross_axis_alignment = "center"
+        children = ["img"]
+        [nodes.img]
+        type = "image"
+        src = "a.png"
+        aspect_ratio = 2.0
+    "#;
+    let l = lay(src);
+    assert_rect(rect_of(&l, "img"), 0.0, 0.0, 200.0, 100.0);
+}
+
+#[test]
+fn loose_aspect_image_is_limited_by_available_height() {
+    // Full width would need 200pt of height; only 50pt is available, so the
+    // image is height-limited (contain) and centred.
+    let src = r#"
+        [page]
+        width = 200
+        height = 50
+        unit = "pt"
+        root = "root"
+
+        [nodes.root]
+        type = "column"
+        cross_axis_alignment = "center"
+        children = ["img"]
+        [nodes.img]
+        type = "image"
+        src = "a.png"
+        aspect_ratio = 1.0
+    "#;
+    let l = lay(src);
+    assert_rect(rect_of(&l, "img"), 75.0, 0.0, 50.0, 50.0);
+}
+
+#[test]
+fn captioned_images_in_centered_column_are_visible() {
+    // poster.figs shape: a centred column holding a flex row of flex
+    // `captioned` columns (image + caption). The row now spans the width and
+    // each image fills its column's share.
+    let src = r#"
+        [page]
+        width = 210
+        height = 300
+        unit = "pt"
+        root = "root"
+
+        [nodes.root]
+        type = "column"
+        cross_axis_alignment = "center"
+        children = ["row"]
+
+        [nodes.row]
+        type = "row"
+        flex = 1
+        spacing = 10
+        cross_axis_alignment = "stretch"
+        children = ["c1", "c2"]
+
+        [nodes.c1]
+        type = "column"
+        flex = 1
+        children = ["i1", "t1"]
+        [nodes.i1]
+        type = "image"
+        src = "a.png"
+        aspect_ratio = 1.0
+        [nodes.t1]
+        type = "rect"
+        width = 20
+        height = 5
+
+        [nodes.c2]
+        type = "column"
+        flex = 1
+        children = ["i2", "t2"]
+        [nodes.i2]
+        type = "image"
+        src = "b.png"
+        aspect_ratio = 2.0
+        [nodes.t2]
+        type = "rect"
+        width = 20
+        height = 5
+    "#;
+    let l = lay(src);
+    assert_rect(rect_of(&l, "row"), 0.0, 0.0, 210.0, 300.0);
+    assert_rect(rect_of(&l, "i1"), 0.0, 0.0, 100.0, 100.0);
+    assert_rect(rect_of(&l, "t1"), 0.0, 100.0, 20.0, 5.0);
+    assert_rect(rect_of(&l, "i2"), 110.0, 0.0, 100.0, 50.0);
+}
+
+#[test]
+fn loose_image_without_aspect_uses_natural_aspect() {
+    use figs_core::geom::Size;
+    use figs_core::schema::{ImageProps, TextProps};
+    use figs_core::LeafMeasure;
+
+    struct Wide;
+    impl LeafMeasure for Wide {
+        fn measure_text(&self, _: &TextProps, _: f32) -> Size {
+            Size::default()
+        }
+        fn measure_image(&self, _: &ImageProps) -> Size {
+            Size::default()
+        }
+        fn image_aspect(&self, _: &ImageProps) -> Option<f32> {
+            Some(2.0)
+        }
+    }
+
+    let src = r#"
+        [page]
+        width = 100
+        height = 100
+        unit = "pt"
+        root = "root"
+        [nodes.root]
+        type = "column"
+        cross_axis_alignment = "center"
+        children = ["img"]
+        [nodes.img]
+        type = "image"
+        src = "wide.png"
+    "#;
+    let doc = Document::from_toml(src).unwrap();
+    let l = layout(&doc, &Wide);
+    assert_rect(rect_of(&l, "img"), 0.0, 0.0, 100.0, 50.0);
+    // NullMeasurer (natural size unknown): the documented 4:3 fallback.
+    let l = lay(src);
+    assert_rect(rect_of(&l, "img"), 0.0, 0.0, 100.0, 75.0);
+}
+
+#[test]
+fn auto_height_centered_column_image_fills_width() {
+    // Unbounded height: the width limits the image; nothing becomes infinite.
+    // A stack child with an offset (loose, unbounded height) behaves the same.
+    let src = r#"
+        [page]
+        width = 100
+        height = "auto"
+        unit = "pt"
+        root = "root"
+
+        [nodes.root]
+        type = "column"
+        cross_axis_alignment = "center"
+        children = ["img", "st"]
+        [nodes.img]
+        type = "image"
+        src = "a.png"
+        aspect_ratio = 2.0
+
+        [nodes.st]
+        type = "stack"
+        children = ["inner"]
+        [nodes.inner]
+        type = "image"
+        src = "b.png"
+        aspect_ratio = 1.0
+        x = 20
+    "#;
+    let l = lay(src);
+    assert_rect(rect_of(&l, "img"), 0.0, 0.0, 100.0, 50.0);
+    assert_rect(rect_of(&l, "inner"), 20.0, 50.0, 80.0, 80.0);
+    assert!((l.page.height_pt - 130.0).abs() < 0.01, "{}", l.page.height_pt);
+}

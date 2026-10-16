@@ -412,6 +412,22 @@ Modeled on Flutter's `BoxConstraints`/`RenderFlex`:
   stretched cross axis or a flex share is handed to the child during measure
   too, so `aspect_ratio` children report their real height (this is what sizes
   an auto-height page).
+- **images under loose constraints**: an image with neither side known (no
+  `width`/`height`, no stretch or flex share — e.g. inside a `cross("center")`
+  column) takes the largest box of its aspect that fits the space it is offered:
+  the full available width, or the full available height when that is the
+  tighter limit (like CSS `img { max-width: 100% }` / Flutter's `AspectRatio`).
+  The aspect is `aspect_ratio`, else the file's natural aspect, else 4:3. An
+  unbounded axis (auto page height) doesn't limit; it never yields an infinite
+  size. Several such images side by side in a `row` each claim the full width
+  and overflow — give them `flex` or a size.
+- **text boxes**: a text block is its stacked line boxes (`font_size ×
+  line_height` each, glyphs centred per CSS half-leading), grown at the top and
+  bottom when the font's ascent/descent is taller than the line box (e.g. Segoe
+  UI at the default 1.2), so accents and descenders never poke out and get
+  clipped at a page edge. Spacing between lines is unchanged. Glyphs may still
+  sit flush with the box edge — the box is the font's metrics, with no extra
+  padding; add `spacing`/`pad` for breathing room.
 
 ## Build & test
 
