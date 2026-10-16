@@ -3,8 +3,7 @@
 //! hook, bare-string sugar, `vbox`/`hbox`, `grid`, panel labels, page presets,
 //! and that core setters still chain on everything the framework returns.
 //!
-//! Labeled panels overlay via the core `stack` / `.at`, which land on a separate
-//! branch; those tests are `#[ignore]`d until it merges.
+//! Labeled panels overlay via the core `stack` / `.at`.
 
 #![cfg(feature = "script")]
 
@@ -243,7 +242,6 @@ fn panel_label_requires_counter() {
 }
 
 #[test]
-#[ignore = "requires stack (merge feat/stack)"]
 fn panels_overlay_labels_top_left() {
     let src = r#"page(100, 100, grid(2, 0, panels([rect(), rect()]))).unit("pt")"#;
     let d = raw(src);
@@ -251,7 +249,7 @@ fn panels_overlay_labels_top_left() {
     let row = children(&d, children(&d, "root")[0].0);
     assert_eq!(row.len(), 2);
     for ((sid, s), want) in row.iter().zip(["(a)", "(b)"]) {
-        assert_eq!(format!("{:?}", s.kind), "Stack");
+        assert_eq!(s.kind, NodeKind::Stack);
         assert_eq!(s.flex, Some(1.0));
         let kids = children(&d, sid);
         assert_eq!(kids.len(), 2, "panel + label");
@@ -270,7 +268,6 @@ fn panels_overlay_labels_top_left() {
 }
 
 #[test]
-#[ignore = "requires stack (merge feat/stack)"]
 fn panels_style_and_hook() {
     let d = raw(r#"page("single", hbox(panels("A", [rect(), "text panel"])))"#);
     let _ = text_node(&d, "A");
@@ -286,7 +283,6 @@ fn panels_style_and_hook() {
 }
 
 #[test]
-#[ignore = "requires stack (merge feat/stack)"]
 fn framework_demo_example() {
     let src = include_str!("../../../examples/framework_demo.figs");
     let l = lay(src);
