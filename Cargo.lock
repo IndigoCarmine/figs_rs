@@ -1354,6 +1354,7 @@ dependencies = [
  "cosmic-text",
  "image",
  "krilla",
+ "miniz_oxide",
  "notify-debouncer-mini",
  "rhai",
  "roxmltree 0.21.1",

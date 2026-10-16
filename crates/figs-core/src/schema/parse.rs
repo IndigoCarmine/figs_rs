@@ -195,6 +195,14 @@ pub struct RawNode {
     /// its offset).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub anchor: Option<[f32; 2]>,
+    /// Rotation in degrees, **clockwise** on the page, about the centre of the
+    /// node's box; it turns the node and its whole subtree. A multiple of 90°
+    /// is a *quarter turn*: an odd one (`90`, `-90`, `270`) swaps the node's
+    /// footprint for layout, so the parent sees the rotated box (a vertical
+    /// axis label in a row is as wide as the text is tall). Any other angle is
+    /// paint-only: layout uses the unrotated box and the drawing may overhang.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rotate: Option<f32>,
 
     /// User coordinates `[x0, y0, x1, y1]` laid over the content box (`x0` ->
     /// left, `x1` -> right, `y0` -> top, `y1` -> bottom; reversing a pair flips

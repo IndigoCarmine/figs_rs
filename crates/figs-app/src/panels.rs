@@ -378,6 +378,8 @@ fn inspector(app: &mut FigsApp, ui: &mut egui::Ui, _p: &Palette) {
                 changed |= opt_num(ui, "X", &mut node.x, 0.5);
                 changed |= opt_num(ui, "Y", &mut node.y, 0.5);
                 changed |= opt_nums(ui, "Anchor", &mut node.anchor, [0.5, 0.5], 0.05);
+                // Degrees clockwise; ±90 swaps the footprint, others are paint-only.
+                changed |= opt_num(ui, "Rotate", &mut node.rotate, 1.0);
                 changed |= edges(ui, "Margin", &mut node.margin);
                 if matches!(kind, NodeKind::Column | NodeKind::Row | NodeKind::Stack) {
                     changed |= edges(ui, "Padding", &mut node.padding);
@@ -1157,6 +1159,7 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
                 "x",
                 "y",
                 "anchor",
+                "rotate",
             ]);
             v
         }
@@ -1571,17 +1574,12 @@ pub fn script_pane(app: &mut FigsApp, ctx: &egui::Context) {
 // Canvas / viewer
 // ---------------------------------------------------------------------------
 
-/// The deepest (last-painted) node whose rect contains the page-point (px,py).
-fn node_at_point(computed: &ComputedLayout, px: f32, py: f32) -> Option<String> {
-    computed
-        .nodes
-        .iter()
-        .rev()
-        .find(|n| {
-            let r = n.rect;
-            px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h
-        })
-        .map(|n| n.id.clone())
+/// The id of the deepest (last-painted) node whose box contains the page point
+/// (`px`, `py`) in points. Rotation-aware: delegates to
+/// [`ComputedLayout::hit_test`], which maps the point into each node's local
+/// (unrotated) frame — use it for any canvas interaction.
+pub fn node_at_point(computed: &ComputedLayout, px: f32, py: f32) -> Option<String> {
+    computed.hit_test(px, py).map(|n| n.id.clone())
 }
 
 fn is_image_path(path: &std::path::Path) -> bool {
@@ -1647,15 +1645,24 @@ pub fn canvas(app: &mut FigsApp, ctx: &egui::Context) {
                 );
                 painter.rect_stroke(img_rect, 0.0, Stroke::new(1.0_f32, p.line));
 
-                // Selection outline.
+                // Selection outline (a turned quad for a rotated node).
                 if let Some(id) = app.selected.node_id() {
                     if let Some(node) = prev.computed.nodes.iter().find(|n| n.id == id) {
-                        let r = node.rect;
-                        let sr = Rect::from_min_size(
-                            egui::pos2(origin.x + r.x * scale, origin.y + r.y * scale),
-                            egui::vec2(r.w * scale, r.h * scale),
-                        );
-                        painter.rect_stroke(sr, 2.0, Stroke::new(2.0_f32, p.acc));
+                        let stroke = Stroke::new(2.0_f32, p.acc);
+                        if node.transform.is_some() {
+                            let quad = node
+                                .corners()
+                                .map(|c| egui::pos2(origin.x + c.x * scale, origin.y + c.y * scale))
+                                .to_vec();
+                            painter.add(egui::Shape::closed_line(quad, stroke));
+                        } else {
+                            let r = node.rect;
+                            let sr = Rect::from_min_size(
+                                egui::pos2(origin.x + r.x * scale, origin.y + r.y * scale),
+                                egui::vec2(r.w * scale, r.h * scale),
+                            );
+                            painter.rect_stroke(sr, 2.0, stroke);
+                        }
                     }
                 }
 

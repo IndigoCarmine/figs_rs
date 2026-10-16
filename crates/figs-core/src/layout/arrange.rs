@@ -4,7 +4,9 @@
 //! (parent before children, siblings in array order — so later stack children
 //! paint on top).
 
-use crate::geom::{Axis, CrossAxisAlign, Edges, MainAxisAlign, Rect, Size, ViewBox};
+use crate::geom::{
+    quarter_turns, Affine, Axis, CrossAxisAlign, Edges, MainAxisAlign, Rect, Size, ViewBox,
+};
 use crate::schema::{Common, NodeType, RectProps, TextProps};
 
 use super::computed::{ComputedNode, PaintContent, PathPaint, TextBox};
@@ -13,17 +15,32 @@ use super::measure::{
 };
 use super::{cross_of, main_of, Constraints, Ctx, LeafMeasure};
 
-/// Place node `idx` into `rect` (its border box) and recurse into children.
+/// Place node `idx` into `slot` (its border box in the parent's frame, as the
+/// parent laid it out) and recurse into children. `parent_xf` is the parent's
+/// accumulated local → page transform (`None` = identity).
+///
+/// A rotated node is laid out unrotated in its own box — the slot itself, or
+/// for an odd quarter turn the slot with width and height swapped about its
+/// centre — and gets the transform `rotate about the box centre`, then the
+/// parent's. Its children are arranged in that local frame and inherit it.
 pub(crate) fn arrange<M: LeafMeasure>(
     ctx: &Ctx<M>,
     idx: usize,
-    rect: Rect,
+    slot: Rect,
+    parent_xf: Option<Affine>,
     out: &mut Vec<ComputedNode>,
 ) {
     let node = &ctx.doc.nodes[idx];
+    let (rect, xf) = rotated_frame(
+        node.common.rotate,
+        node.common.swaps_axes(),
+        slot,
+        parent_xf,
+    );
     out.push(ComputedNode {
         id: node.id.clone(),
         rect,
+        transform: xf,
         content: paint_content(&node.kind, &node.common, rect),
     });
 
@@ -48,6 +65,7 @@ pub(crate) fn arrange<M: LeafMeasure>(
                 *cross_axis,
                 content,
                 content_h,
+                xf,
                 out,
             );
         }
@@ -57,11 +75,40 @@ pub(crate) fn arrange<M: LeafMeasure>(
                 children,
                 *viewbox,
                 rect.inset(node.common.padding),
+                xf,
                 out,
             );
         }
         _ => {}
     }
+}
+
+/// The local box and accumulated transform of a node rotated by `degrees`
+/// placed into `slot`: an odd quarter turn (`swaps`) lays the node out in the
+/// slot with its sides exchanged about the same centre; every rotation turns
+/// about that centre. A rotation that is a whole number of turns is no
+/// rotation at all.
+fn rotated_frame(
+    degrees: f32,
+    swaps: bool,
+    slot: Rect,
+    parent_xf: Option<Affine>,
+) -> (Rect, Option<Affine>) {
+    if degrees == 0.0 || quarter_turns(degrees) == Some(0) {
+        return (slot, parent_xf);
+    }
+    let (cx, cy) = (slot.x + slot.w / 2.0, slot.y + slot.h / 2.0);
+    let rect = if swaps {
+        Rect::new(cx - slot.h / 2.0, cy - slot.w / 2.0, slot.h, slot.w)
+    } else {
+        slot
+    };
+    let local = Affine::rotation_about(degrees, cx, cy);
+    let xf = match parent_xf {
+        Some(p) => local.then(p),
+        None => local,
+    };
+    (rect, Some(xf))
 }
 
 /// Place each stack child at `content origin + (x, y) - anchor * size +
@@ -73,10 +120,13 @@ fn layout_stack<M: LeafMeasure>(
     children: &[usize],
     viewbox: Option<ViewBox>,
     content: Rect,
+    xf: Option<Affine>,
     out: &mut Vec<ComputedNode>,
 ) {
     for &child in children {
-        let common = &ctx.doc.nodes[child].common;
+        // Size/aspect in the stack's frame (swapped for a quarter-turned child).
+        let common = ctx.doc.nodes[child].common.outer();
+        let common = &*common;
         let avail = stack_child_avail(common, content.size(), viewbox.is_some());
         // The content box is known here, so filling axes measure tight.
         let measured = measure(
@@ -96,7 +146,7 @@ fn layout_stack<M: LeafMeasure>(
         let [ax, ay] = common.anchor.unwrap_or([0.0, 0.0]);
         let x = content.x + ox - ax * size.w + common.margin.left;
         let y = content.y + oy - ay * size.h + common.margin.top;
-        arrange(ctx, child, Rect::new(x, y, size.w, size.h), out);
+        arrange(ctx, child, Rect::new(x, y, size.w, size.h), xf, out);
     }
 }
 
@@ -113,6 +163,7 @@ fn layout_children<M: LeafMeasure>(
     cross_align: CrossAxisAlign,
     content: Rect,
     content_h: bool,
+    xf: Option<Affine>,
     out: &mut Vec<ComputedNode>,
 ) {
     let n = children.len();
@@ -227,7 +278,7 @@ fn layout_children<M: LeafMeasure>(
             CrossAxisAlign::Stretch => (content_cross - margin_cross(i)).max(0.0),
             _ => cross_of(axis, measured[i]),
         };
-        if let Some(ar) = ctx.doc.nodes[child].common.aspect_ratio {
+        if let Some(ar) = ctx.doc.nodes[child].common.outer().aspect_ratio {
             if ar > 0.0 {
                 bcross = match axis {
                     // column: main = height, cross = width = height * ar
@@ -249,7 +300,7 @@ fn layout_children<M: LeafMeasure>(
             Axis::Horizontal => Rect::new(main_pos, cross_pos, bmain, bcross),
         };
 
-        arrange(ctx, child, child_rect, out);
+        arrange(ctx, child, child_rect, xf, out);
 
         cursor += margin_main(i) + bmain + spacing + extra_gap;
     }

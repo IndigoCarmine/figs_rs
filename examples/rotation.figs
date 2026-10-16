@@ -1,0 +1,42 @@
+// Rotation: `.rotate(deg)` turns any node — and everything inside it —
+// clockwise on the page, about the centre of its box.
+//
+// - Quarter turns are layout-aware: `-90` / `90` / `270` swap the node's
+//   footprint, so the parent lays out the turned box. A vertical axis label in
+//   a stretched row is exactly one text line wide and as tall as the row, and
+//   its centred text sits at the middle of the axis.
+// - Any other angle is paint-only: layout keeps the unrotated box and the
+//   drawing may overhang it (like a tilted sticker). Centre the node on its
+//   point with `.anchor(0.5, 0.5)` and it turns about that point.
+let accent = "#e0635a";
+
+// A panel with a y-axis label reading bottom-to-top and an x label below.
+fn axes(src, ylabel, xlabel) {
+    row([
+        text(ylabel).size(10).center().rotate(-90),
+        col([
+            image(src).fit("cover").flex(1),
+            text(xlabel).size(10).center(),
+        ]).spacing(0.15).stretch().flex(1),
+    ]).spacing(0.15).stretch().flex(1)
+}
+
+page(16, 8,
+    row([
+        axes("sample.png", "Intensity (a.u.)", "Position (µm)"),
+        stack([
+            image("sample.png").fit("cover"),
+            // A tilted note centred on (3, 1.2), with an arrow to the feature.
+            text("hot spot").size(12).bold().color(accent)
+                .at(3.0, 1.2).anchor(0.5, 0.5).rotate(-20),
+            arrow(3.6, 1.7, 4.9, 3.1).stroke(accent).stroke_width(0.05),
+            // A whole group turned as one: a badge (box + text) at 30°.
+            stack([
+                rect().fill("#ffffff").stroke(accent).stroke_width(0.03).radius(0.1),
+                text("DRAFT").size(10).bold().color(accent).center().margin(0.12),
+            ]).at(1.6, 5.2).anchor(0.5, 0.5).rotate(30),
+        ]).flex(1),
+        // A quarter-turned caption running down the right edge.
+        text("Figure S1 · rotation demo").size(8).color("#666666").center().rotate(90),
+    ]).spacing(0.4).pad(0.4).stretch(),
+).unit("cm").background("#ffffff")

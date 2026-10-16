@@ -22,6 +22,7 @@ fn blank(kind: NodeKind) -> RawNode {
         x: None,
         y: None,
         anchor: None,
+        rotate: None,
         viewbox: None,
         children: Vec::new(),
         spacing: 0.0,
