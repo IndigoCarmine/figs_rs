@@ -932,9 +932,12 @@ fn plot_example_renders() {
 
 // ---- theme: colours from hooks -------------------------------------------------
 
-/// Lowercase hex of an optional colour ("" when unset).
-fn hx(c: Option<figs_core::geom::Color>) -> String {
-    c.map(|c| c.to_hex()).unwrap_or_default()
+/// Lowercase hex of an optional solid colour or paint ("" when unset).
+fn hx<T: Clone + Into<figs_core::geom::Paint>>(c: &Option<T>) -> String {
+    c.clone()
+        .and_then(|c| c.into().as_solid())
+        .map(|c| c.to_hex())
+        .unwrap_or_default()
 }
 
 /// A small labelled plot with every kind of non-data mark: tick and axis
@@ -958,13 +961,13 @@ fn chrome_colors(raw: &RawDocument) -> (Vec<String>, Vec<String>) {
         .nodes
         .values()
         .filter(|n| n.kind == NodeKind::Text)
-        .map(|n| hx(n.color))
+        .map(|n| hx(&n.color))
         .collect();
     let lines = raw
         .nodes
         .values()
         .filter(|n| n.kind == NodeKind::Line)
-        .map(|n| hx(n.stroke))
+        .map(|n| hx(&n.stroke))
         .filter(|c| *c != data)
         .collect();
     (texts, lines)
@@ -975,7 +978,7 @@ fn themed_line(raw: &RawDocument) -> String {
     let id = find_raw(raw, |n| {
         n.kind == NodeKind::Path && n.points.len() == 3 && n.points[0] == [0.0, 0.2]
     });
-    hx(raw.nodes[id].stroke)
+    hx(&raw.nodes[id].stroke)
 }
 
 #[test]
@@ -999,8 +1002,8 @@ fn light_default_plot_colours_are_unchanged() {
         .collect();
     assert!(!ellipses.is_empty());
     for e in ellipses {
-        assert_eq!(hx(e.fill), "#e69f00"); // the scatter's palette colour 1
-        assert_eq!(hx(e.stroke), "#ffffff");
+        assert_eq!(hx(&e.fill), "#e69f00"); // the scatter's palette colour 1
+        assert_eq!(hx(&e.stroke), "#ffffff");
     }
     assert_eq!(themed_line(&raw), "#0072b2");
     assert!(raw
@@ -1022,12 +1025,12 @@ fn plot_colours_follow_the_theme_hooks() {
     let frame = find_raw(&raw, |n| {
         n.kind == NodeKind::Path && n.points.len() == 3 && n.points[0][0] == n.points[1][0]
     });
-    assert_eq!(hx(raw.nodes[frame].stroke), "#ffffff");
+    assert_eq!(hx(&raw.nodes[frame].stroke), "#ffffff");
     assert_eq!(themed_line(&raw), "#ff9f40");
     let marker = find_raw(&raw, |n| n.kind == NodeKind::Ellipse);
-    assert_eq!(hx(raw.nodes[marker].fill), "#5cc8ff");
-    assert_eq!(hx(raw.nodes[marker].stroke), "#0f1a2e");
-    assert_eq!(hx(raw.page.background), "#0f1a2e");
+    assert_eq!(hx(&raw.nodes[marker].fill), "#5cc8ff");
+    assert_eq!(hx(&raw.nodes[marker].stroke), "#0f1a2e");
+    assert_eq!(hx(&raw.page.background), "#0f1a2e");
 
     // `plot_fg` alone (a key or a hook) recolours the plot; `plot_bg` fills
     // the whole panel.
@@ -1040,7 +1043,7 @@ fn plot_colours_follow_the_theme_hooks() {
         assert!(texts.iter().all(|c| c == "#123456"), "{prelude}: {texts:?}");
         assert!(lines.iter().all(|c| c == "#123456"), "{prelude}: {lines:?}");
         let bg = find_raw(&raw, |n| n.kind == NodeKind::Rect && n.fill.is_some());
-        assert_eq!(hx(raw.nodes[bg].fill), "#eeeeee");
+        assert_eq!(hx(&raw.nodes[bg].fill), "#eeeeee");
         // The fill sits under the plot: the root is a stack of [fill, plot]
         // carrying the plot's aspect.
         let root = &raw.nodes["root"];
@@ -1055,7 +1058,7 @@ fn plot_colours_follow_the_theme_hooks() {
         .nodes
         .values()
         .filter(|n| n.kind == NodeKind::Text)
-        .all(|n| hx(n.color) == "#ffffff"));
+        .all(|n| hx(&n.color) == "#ffffff"));
     let raw = eval_script(r#"page("single", vbox(["x", caption("y")]))"#).unwrap();
     assert!(raw.nodes.values().all(|n| n.color.is_none()));
 }
@@ -1111,7 +1114,7 @@ fn hollow_markers_are_outlined_in_the_series_colour() {
     assert_eq!(markers.len(), 3);
     for m in markers {
         assert_eq!(m.fill, None, "hollow marker is filled");
-        assert_eq!(hx(m.stroke), "#ff0000");
+        assert_eq!(hx(&m.stroke), "#ff0000");
         approx(m.stroke_width.unwrap(), w);
     }
     // The resolved shape is unfilled, with that outline.
@@ -1166,8 +1169,8 @@ fn palette_index_colours_are_shared_between_series() {
     let line = find_raw(&raw, |n| {
         n.kind == NodeKind::Path && n.points == vec![[0.0, 0.0], [1.0, 1.0]]
     });
-    assert_eq!(hx(raw.nodes[marker].fill), "#e69f00");
-    assert_eq!(hx(raw.nodes[line].stroke), "#e69f00");
+    assert_eq!(hx(&raw.nodes[marker].fill), "#e69f00");
+    assert_eq!(hx(&raw.nodes[line].stroke), "#e69f00");
     // Indices wrap (both ways) and follow the palette hook / style key.
     assert_eq!(rhai("palette_color(8)"), "#0072B2");
     assert_eq!(rhai("palette_color(-1)"), "#000000");
@@ -1199,7 +1202,8 @@ fn text_legend_stacks_coloured_labels_in_a_corner() {
     // Each label is its series' colour; no keys are drawn (the only
     // ellipses are the data markers).
     let color_of = |s: &str| {
-        hx(p.raw
+        hx(&p
+            .raw
             .nodes
             .values()
             .find(|n| n.content.as_deref() == Some(s))
@@ -1272,7 +1276,7 @@ fn plot_text_and_arrow_sit_at_data_points() {
         approx(t.x + t.w / 2.0, area.x + area.w / 2.0);
         approx(t.y + t.h / 2.0, area.y + area.h / 2.0);
         let arrow = find_raw(&p.raw, |n| n.kind == NodeKind::Arrow);
-        assert_eq!(hx(p.raw.nodes[arrow].stroke), "#000000"); // plot_fg()
+        assert_eq!(hx(&p.raw.nodes[arrow].stroke), "#000000"); // plot_fg()
         let s = segs_of(&p.l, arrow);
         assert_eq!(
             s[0],
@@ -1303,11 +1307,11 @@ fn plot_text_and_arrow_sit_at_data_points() {
         .values()
         .find(|n| n.content.as_deref() == Some("dec"))
         .unwrap();
-    assert_eq!(hx(n.color), "#e69f00");
+    assert_eq!(hx(&n.color), "#e69f00");
     assert_eq!((n.font_weight, n.font_size), (Some(700), Some(12.0)));
     let arrow = find_raw(&p.raw, |n| n.kind == NodeKind::Arrow);
     let a = &p.raw.nodes[arrow];
-    assert_eq!(hx(a.stroke), "#ff0000");
+    assert_eq!(hx(&a.stroke), "#ff0000");
     approx(a.stroke_width.unwrap(), 0.1);
     approx(a.points[0][0], 1.0); // log10(10)
 
