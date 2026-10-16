@@ -33,13 +33,12 @@ pub(crate) fn measure<M: LeafMeasure>(ctx: &Ctx<M>, idx: usize, c: Constraints) 
         } => measure_container(ctx, *axis, children, *spacing, *cross_axis, &node.common, c),
         NodeType::Stack { children } => measure_stack(ctx, children, &node.common, c),
         NodeType::Rect(_) | NodeType::Ellipse(_) => Size::default(),
-        // Points live in the content box, so the intrinsic size is their extent
-        // from its origin (not their tight bounding box) plus padding.
+        // Coordinates live in the content box, so the intrinsic size is the
+        // outline's extent from its origin (exact curve bounds, not control
+        // points; not the tight bounding box) plus padding.
         NodeType::Path(props) => {
-            let (w, h) = props
-                .points
-                .iter()
-                .fold((0.0f32, 0.0f32), |(w, h), p| (w.max(p.x), h.max(p.y)));
+            let (w, h) = crate::path::bounds(&props.segments)
+                .map_or((0.0, 0.0), |(_, hi)| (hi.x.max(0.0), hi.y.max(0.0)));
             Size::new(
                 w + node.common.padding.horizontal(),
                 h + node.common.padding.vertical(),

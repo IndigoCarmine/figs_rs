@@ -64,8 +64,9 @@ You provide: hierarchy, style, content, and constraints (`flex`, `aspect_ratio`,
   `align`, `line_height` (multiple of font size).
 - **image**: `src`, `fit` (`contain`/`cover`/`fill`).
 - **rect**: `fill`, `stroke`, `stroke_width`, `corner_radius`.
-- **line** / **arrow** / **path**: `points`, `stroke`, `stroke_width`, `dash`,
-  `cap`, `head`, `head_size`; **path** adds `fill`, `closed`.
+- **line** / **arrow** / **path**: `points`, `segments` (curves), `stroke`,
+  `stroke_width`, `dash`, `cap`, `head`, `head_size`; **path** adds `fill`,
+  `closed`.
 - **ellipse**: `fill`, `stroke`, `stroke_width`, `dash`, `cap`.
 
 Lengths are in the page `unit`; `font_size` is always points. Internally
@@ -155,7 +156,7 @@ Four leaf nodes draw arrows, highlights and callouts:
 |---|---|
 | `line` | A stroke between exactly two `points`. |
 | `arrow` | A `line` with a filled arrowhead at the end (`head = "end"` by default). |
-| `path` | A polyline through two or more `points`; `closed = true` makes it a polygon. Segments are straight (no Béziers — generate dense points in a script for curves). |
+| `path` | A polyline through two or more `points`, optionally continued by curved [`segments`](#curves); `closed = true` makes it a polygon. |
 | `ellipse` | The ellipse inscribed in its box (a circle when the box is square). |
 
 ```toml
@@ -188,6 +189,70 @@ dash = [0.2, 0.1]             # on/off lengths; omit for a solid stroke
   on dashed strokes; closed paths have no heads.
 
 See [`examples/annotations.figs`](examples/annotations.figs).
+
+### Curves
+
+`points` is the straight-polyline shorthand. To add curves, list further
+`segments` that **continue from the last of `points`** (so a curve needs at least
+one point as its start). Each segment ends at `to`, with at most one curve key
+(SVG-path semantics):
+
+```toml
+[nodes.wave]
+type = "path"
+points = [[0, 0]]                                 # start point
+segments = [
+  { to = [2, 0] },                                # straight
+  { quad = [3, -1], to = [4, 0] },                # quadratic Bézier: one control point
+  { cubic = [[5, 1], [6, -1]], to = [7, 0] },     # cubic Bézier: two control points
+  { arc = 1, to = [9, 0] },                       # circular arc, radius 1
+  { arc = [2, 1], rotation = 30, large = true, sweep = "ccw", to = [9, 3] },
+]
+```
+
+- **Arcs** use SVG's endpoint form: `arc` is the radius (`r`, or `[rx, ry]` with
+  `rotation` in degrees for an ellipse); of the arcs of that size joining the two
+  points, `large = true` takes the one spanning more than 180° and `sweep` the
+  turning direction as seen on the page, `"cw"` (default) or `"ccw"`. A radius
+  too small to reach `to` is scaled up (so `arc = 0.001` is always a semicircle).
+  Arcs are converted to cubic Béziers at resolve time, so every renderer only
+  draws lines and Béziers.
+- **Validation.** `large`/`sweep`/`rotation` need `arc`; radii must be positive;
+  unknown keys are errors. Without `segments`, `line`/`arrow` take exactly two
+  points; with them, a `line`/`arrow` is still **one segment** — one point plus one
+  `segments` entry — so a curved arrow is `type = "arrow"`, `points = [[0, 0]]`,
+  `segments = [{ quad = [2, -1], to = [4, 0] }]`. A `path` takes any mix;
+  `closed` joins the end back to the first point with a straight line.
+- **Size.** The intrinsic size uses the exact extent of the curves (Bézier
+  extrema), not their control points.
+- **Arrowheads** point along the curve's tangent at the tip (from the last
+  distinct control point), and the shaft is shortened along the curve into the
+  head. Dashes follow the curve.
+
+In scripts, curve builders continue a `path`, each appending a segment from the
+current end (`line(…)`/`arrow(…)` already hold two points, so a curved arrow is
+`path([[x, y]]).quad(…).head("end")`, or the prelude's `curved_arrow`):
+
+```rhai
+path([[0, 0]])
+    .to(2, 0)                          // straight
+    .quad(3, -1, 4, 0)                 // control, end
+    .cubic(5, 1, 6, -1, 7, 0)          // control 1, control 2, end
+    .arc(1, 9, 0)                      // radius, end (small, clockwise)
+    .arc([2, 1], 9, 3, #{ large: true, sweep: "ccw", rotation: 30 })
+```
+
+The prelude adds sugar on top (positive `bend`/`depth` goes left of the direction
+of travel — upwards for a left-to-right chord):
+
+| Function | Result |
+|---|---|
+| `curve(x1, y1, x2, y2, bend)` | A quadratic `path` whose midpoint sits `bend` off the straight chord. |
+| `curved_arrow(x1, y1, x2, y2, bend)` | `curve(...)` with a head at the end. |
+| `brace(x1, y1, x2, y2, depth)` | A curly brace with its ends on the two points and its tip `depth` off the chord. |
+| `bracket(x1, y1, x2, y2, depth)` | A square bracket whose back is `depth` off the chord. |
+
+See [`examples/curves.figs`](examples/curves.figs).
 
 ### Equal spacing & edge-to-edge
 
@@ -269,6 +334,10 @@ setters:
   `.fill(hex)` (path/ellipse), `.dash([on, off, …])`, `.cap("butt"|"round"|"square")`,
   `.head("none"|"start"|"end"|"both")`, `.head_size(n)`, `.closed()` (path) — e.g.
   `stack([image("a.png"), arrow(1, 4, 3, 2).stroke("#e0635a")])`.
+- **curves** (continue a path from its last point): `.to(x, y)`,
+  `.quad(cx, cy, x, y)`, `.cubic(c1x, c1y, c2x, c2y, x, y)`, `.arc(r, x, y)` /
+  `.arc(r, x, y, #{ sweep, large, rotation })` (`r` a number or `[rx, ry]`) —
+  see [Curves](#curves).
 - **image**: `.fit("contain"|"cover"|"fill")`.
 - **page**: `.unit("cm"|…)`, `.background(hex)`, `.dpi(n)`, `.font(name)`.
 
@@ -318,6 +387,7 @@ Components (lengths in cm, font sizes in pt):
 | `panels(items, captions)` / `panels(style, items, captions)` | The same labeled panels, each with its caption below (`captioned`). `captions` must match `items` in length. |
 | `labeled(item, s)` / `panel_label(style, i)` | One labeled panel / the `i`-th (0-based) label string. |
 | `circle(r)` / `circle(cx, cy, r)` | A square `ellipse` of radius `r`; the 3-argument form is centered on (`cx`, `cy`) of the enclosing `stack` (via `.at`). |
+| `curve` / `curved_arrow` / `brace` / `bracket` `(x1, y1, x2, y2, bend_or_depth)` | Curved annotations built on the core curve builders — see [Curves](#curves). |
 | `captioned(item, c)` | `item` above caption `c` (a string becomes `caption(c)`, a node is used as is), `caption_gap()` apart; the item takes the spare height. |
 | `nodes(items)` / `as_node(x)` | Bare-string sugar: a string becomes `body(s)`. Use `col(nodes([...]))` to get it in core containers. |
 

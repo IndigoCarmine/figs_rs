@@ -58,8 +58,9 @@ pub trait Renderer {
     /// honouring `fit`. Default: no-op.
     fn draw_image(&mut self, _rect: Rect, _src: &Path, _fit: ImageFit) {}
 
-    /// Fill/stroke a polyline or polygon (absolute points) and its arrowheads.
-    /// Default: no-op.
+    /// Fill/stroke a vector path (absolute line/Bézier segments) and its
+    /// arrowheads: fill `path.segments`, stroke `path.stroke_geometry().shaft`
+    /// and fill its `heads` in the stroke color. Default: no-op.
     fn draw_path(&mut self, _path: &PathPaint) {}
 
     /// Fill/stroke the ellipse inscribed in `rect`. Default: no-op.

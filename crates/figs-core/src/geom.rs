@@ -381,6 +381,65 @@ impl ArrowHead {
     }
 }
 
+/// Direction an `arc` path segment turns, as seen on the page (y down).
+/// `cw` is SVG's `sweep-flag = 1`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ArcSweep {
+    /// Clockwise on the page.
+    #[default]
+    Cw,
+    /// Counter-clockwise on the page.
+    Ccw,
+}
+
+/// One command of a backend-neutral vector path (the IR every renderer
+/// consumes). Coordinates are points, top-left origin, y down; inside
+/// [`crate::layout::PathPaint`] they are absolute page coordinates.
+///
+/// A path is a single subpath: exactly one leading `MoveTo`, then any mix of
+/// `LineTo` / `QuadTo` / `CubicTo`, then optionally one trailing `Close`.
+/// Arcs never reach the IR — they are converted to `CubicTo`s during resolve
+/// (see [`crate::path::arc_to_cubics`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PathSegment {
+    /// Start the path at this point.
+    MoveTo(Point),
+    /// Straight line to this point.
+    LineTo(Point),
+    /// Quadratic Bézier: `(control, end)`.
+    QuadTo(Point, Point),
+    /// Cubic Bézier: `(control1, control2, end)`.
+    CubicTo(Point, Point, Point),
+    /// Straight line back to the `MoveTo` point, closing the outline.
+    Close,
+}
+
+impl PathSegment {
+    /// The point this segment ends on (`None` for `Close`).
+    pub fn end(&self) -> Option<Point> {
+        match *self {
+            PathSegment::MoveTo(p)
+            | PathSegment::LineTo(p)
+            | PathSegment::QuadTo(_, p)
+            | PathSegment::CubicTo(_, _, p) => Some(p),
+            PathSegment::Close => None,
+        }
+    }
+
+    /// This segment shifted by `(dx, dy)`.
+    pub fn translated(&self, dx: f32, dy: f32) -> PathSegment {
+        let t = |p: Point| Point::new(p.x + dx, p.y + dy);
+        match *self {
+            PathSegment::MoveTo(p) => PathSegment::MoveTo(t(p)),
+            PathSegment::LineTo(p) => PathSegment::LineTo(t(p)),
+            PathSegment::QuadTo(c, p) => PathSegment::QuadTo(t(c), t(p)),
+            PathSegment::CubicTo(c1, c2, p) => PathSegment::CubicTo(t(c1), t(c2), t(p)),
+            PathSegment::Close => PathSegment::Close,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
