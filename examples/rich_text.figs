@@ -31,7 +31,7 @@ let band = stack([
 
 // Authors: the presenter is marked ○ and underlined; affiliations are
 // superscripts (framework markup -> spans).
-let authors = rich("○__佐藤 太郎__^1・佐藤 花子^2・A. Tanaka^{1,*}")
+let authors = rich("○__佐藤 太郎__^1・鈴木 花子^2・A. Tanaka^{1,*}")
     .size(13).center();
 let affil = rich("^1東都大院工, ^2京大院理  *tanaka@example.ac.jp")
     .size(9).color("#555555").center();

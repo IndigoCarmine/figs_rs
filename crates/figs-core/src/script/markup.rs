@@ -463,11 +463,13 @@ mod tests {
 
     #[test]
     fn style_groups() {
-        let s = parse("in {#f0a030|10 μM} and {#ffd700 bold size=14 font='Times New Roman'|B} = {u|Y. Kimura}")
-            .unwrap();
+        let s = parse(
+            "in {#f0a030|10 μM} and {#ffd700 bold size=14 font='Times New Roman'|B} = {u|Y. Sato}",
+        )
+        .unwrap();
         assert_eq!(
             texts(&s),
-            vec!["in ", "10 μM", " and ", "B", " = ", "Y. Kimura"]
+            vec!["in ", "10 μM", " and ", "B", " = ", "Y. Sato"]
         );
         assert_eq!(s[1].color, Color::parse_hex("#f0a030").ok());
         assert_eq!(s[3].font_weight, Some(700));
@@ -508,7 +510,10 @@ mod tests {
     fn errors_have_columns() {
         // A delimiter without a closer is literal...
         assert_eq!(texts(&parse("ab **cd").unwrap()), vec!["ab **cd"]);
-        assert_eq!(texts(&parse("Tanaka^{1,*}").unwrap()), vec!["Tanaka", "1,*"]);
+        assert_eq!(
+            texts(&parse("Tanaka^{1,*}").unwrap()),
+            vec!["Tanaka", "1,*"]
+        );
         // ...but one whose closer was taken by an inner group is unclosed.
         let e = parse("*a **b**").unwrap_err();
         assert_eq!(e.column, 1);

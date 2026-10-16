@@ -276,7 +276,7 @@ fn underline_and_strike_follow_their_spans() {
         &[
             ("Y. ", plain()),
             (
-                "Kimura",
+                "Sato",
                 SpanStyle {
                     underline: Some(true),
                     ..plain()
@@ -299,14 +299,14 @@ fn underline_and_strike_follow_their_spans() {
     let u = decorations(&s, DecorationKind::Underline);
     let st = decorations(&s, DecorationKind::Strike);
     assert_eq!((u.len(), st.len()), (1, 1));
-    // Underline spans exactly "Kimura", just below the baseline.
-    let kimura: Vec<_> = line
+    // Underline spans exactly "Sato", just below the baseline.
+    let sato: Vec<_> = line
         .glyphs
         .iter()
-        .filter(|g| (3..9).contains(&g.text_range.start))
+        .filter(|g| (3..7).contains(&g.text_range.start))
         .collect();
-    let x0 = kimura[0].x;
-    let x1 = kimura.last().map(|g| g.x + g.advance).unwrap();
+    let x0 = sato[0].x;
+    let x1 = sato.last().map(|g| g.x + g.advance).unwrap();
     assert!((u[0].x - x0).abs() < 1e-3 && (u[0].x + u[0].width - x1).abs() < 1e-3);
     assert!(u[0].y > line.baseline && u[0].y < line.baseline + 0.3 * 20.0);
     assert!(u[0].thickness > 0.2 && u[0].thickness < 0.15 * 20.0);
@@ -335,13 +335,13 @@ fn family_list_is_authoritative_per_character() {
         eprintln!("skipping: Arial / Yu Gothic not installed");
         return;
     }
-    let mut t = TextProps::plain("Kimura 山田 (10 μM)。", 12.0);
+    let mut t = TextProps::plain("Sato 佐藤 (10 μM)。", 12.0);
     t.font_family = Some("Arial, Yu Gothic".into());
     let s = fs.shape(&t, f32::INFINITY);
     for g in &s.lines[0].glyphs {
         let ch = glyph_char(&t, g).chars().next().unwrap();
         let fam = face_family(&fs, g);
-        let want = if ch == '山' || ch == '田' || ch == '。' {
+        let want = if ch == '佐' || ch == '藤' || ch == '。' {
             "Yu Gothic"
         } else {
             "Arial"
