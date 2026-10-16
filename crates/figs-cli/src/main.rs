@@ -30,8 +30,7 @@ enum Command {
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .with_writer(std::io::stderr)
         .init();
@@ -52,7 +51,10 @@ enum Format {
 
 impl Format {
     fn from_path(path: &Path) -> Result<Format> {
-        let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase);
         match ext.as_deref() {
             Some("png") => Ok(Format::Png),
             Some("pdf") => Ok(Format::Pdf),
@@ -137,7 +139,10 @@ mod tests {
         assert!(Format::from_path(Path::new("a.png")).unwrap() == Format::Png);
         assert!(Format::from_path(Path::new("a.PDF")).unwrap() == Format::Pdf);
         assert!(Format::from_path(Path::new("dir/a.svg")).unwrap() == Format::Svg);
-        let err = Format::from_path(Path::new("a.jpg")).err().unwrap().to_string();
+        let err = Format::from_path(Path::new("a.jpg"))
+            .err()
+            .unwrap()
+            .to_string();
         assert!(err.contains("\"jpg\"") && err.contains(".pdf"), "{err}");
         assert!(Format::from_path(Path::new("noext")).is_err());
     }

@@ -40,7 +40,15 @@ pub(crate) fn arrange<M: LeafMeasure>(
             // every child its measured height; flex is ignored on that axis.
             let content_h = *axis == Axis::Vertical && ctx.is_content_h(idx);
             layout_children(
-                ctx, *axis, children, *spacing, *main_axis, *cross_axis, content, content_h, out,
+                ctx,
+                *axis,
+                children,
+                *spacing,
+                *main_axis,
+                *cross_axis,
+                content,
+                content_h,
+                out,
             );
         }
         NodeType::Stack { children } => {
@@ -62,7 +70,11 @@ fn layout_stack<M: LeafMeasure>(
         let common = &ctx.doc.nodes[child].common;
         let avail = stack_child_avail(common, content.size());
         // The content box is known here, so filling axes measure tight.
-        let measured = measure(ctx, child, stack_child_constraints(common, avail, true, true));
+        let measured = measure(
+            ctx,
+            child,
+            stack_child_constraints(common, avail, true, true),
+        );
         let size = stack_child_size(common, measured, avail);
         let x = content.x + common.x.unwrap_or(0.0) + common.margin.left;
         let y = content.y + common.y.unwrap_or(0.0) + common.margin.top;
@@ -92,10 +104,7 @@ fn layout_children<M: LeafMeasure>(
 
     let content_main = main_of(axis, content.size());
     let content_cross = cross_of(axis, content.size());
-    let base_c = Constraints::loose(
-        content.w,
-        if content_h { f32::INFINITY } else { content.h },
-    );
+    let base_c = Constraints::loose(content.w, if content_h { f32::INFINITY } else { content.h });
     let cross_axis = match axis {
         Axis::Vertical => Axis::Horizontal,
         Axis::Horizontal => Axis::Vertical,

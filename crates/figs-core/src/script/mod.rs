@@ -30,8 +30,7 @@ use std::collections::HashMap;
 use rhai::{Array, Dynamic, Engine, EvalAltResult, Map, Position};
 
 use crate::geom::{
-    ArcSweep, ArrowHead, Color, CrossAxisAlign, Edges, ImageFit, LineCap, MainAxisAlign,
-    TextAlign,
+    ArcSweep, ArrowHead, Color, CrossAxisAlign, Edges, ImageFit, LineCap, MainAxisAlign, TextAlign,
 };
 use crate::schema::{ArcRadius, NodeKind, PageHeight, RawDocument, RawNode, RawPage, RawSegment};
 use crate::units::Unit;
@@ -277,7 +276,8 @@ fn segment(
 ) -> Result<ScriptNode, Box<EvalAltResult>> {
     let mut v = [0.0f32; 4];
     for (o, d) in v.iter_mut().zip(&coords) {
-        *o = dyn_to_f32(d).ok_or_else(|| err(format!("`{name}` expects numbers (x1, y1, x2, y2)")))?;
+        *o = dyn_to_f32(d)
+            .ok_or_else(|| err(format!("`{name}` expects numbers (x1, y1, x2, y2)")))?;
     }
     let mut sn = leaf(kind);
     sn.node.points = vec![[v[0], v[1]], [v[2], v[3]]];
@@ -292,7 +292,10 @@ fn cast_points(points: Array) -> Result<Vec<[f32; 2]>, Box<EvalAltResult>> {
         .map(|p| {
             let xy = p.try_cast::<Array>().ok_or_else(bad)?;
             match xy.as_slice() {
-                [x, y] => Ok([dyn_to_f32(x).ok_or_else(bad)?, dyn_to_f32(y).ok_or_else(bad)?]),
+                [x, y] => Ok([
+                    dyn_to_f32(x).ok_or_else(bad)?,
+                    dyn_to_f32(y).ok_or_else(bad)?,
+                ]),
                 _ => Err(bad()),
             }
         })
@@ -317,7 +320,10 @@ fn nums<const N: usize>(
 
 /// Append a curve-builder segment to a `path`/`line`/`arrow` node.
 fn push_segment(mut n: ScriptNode, name: &str, seg: RawSegment) -> NodeResult {
-    if !matches!(n.node.kind, NodeKind::Path | NodeKind::Line | NodeKind::Arrow) {
+    if !matches!(
+        n.node.kind,
+        NodeKind::Path | NodeKind::Line | NodeKind::Arrow
+    ) {
         return Err(err(format!("`{name}` continues a path/line/arrow outline")));
     }
     n.node.segments.push(seg);
@@ -362,7 +368,9 @@ fn arc_segment(
                 });
             }
             "large" => {
-                seg.large = v.as_bool().map_err(|_| err("`arc`: `large` must be true or false"))?;
+                seg.large = v
+                    .as_bool()
+                    .map_err(|_| err("`arc`: `large` must be true or false"))?;
             }
             "rotation" => {
                 seg.rotation =
@@ -380,7 +388,11 @@ fn arc_segment(
 
 /// `page(width, height, root)`; `height` may be a number or `"auto"` (fit the
 /// content — see [`PageHeight::Auto`]).
-fn page_fn(width: Dynamic, height: Dynamic, root: Dynamic) -> Result<ScriptDoc, Box<EvalAltResult>> {
+fn page_fn(
+    width: Dynamic,
+    height: Dynamic,
+    root: Dynamic,
+) -> Result<ScriptDoc, Box<EvalAltResult>> {
     let width = dyn_to_f32(&width).ok_or_else(|| err("page(): width must be a number"))?;
     let height = match dyn_to_f32(&height) {
         Some(h) => PageHeight::Fixed(h),
@@ -420,8 +432,11 @@ fn reg_color(engine: &mut Engine, name: &'static str, set: fn(&mut RawNode, Colo
     engine.register_fn(
         name,
         move |n: ScriptNode, hex: &str| -> Result<ScriptNode, Box<EvalAltResult>> {
-            let c = Color::parse_hex(hex)
-                .map_err(|_| err(format!("`{name}`: invalid color `{hex}` (expected hex like #rrggbb)")))?;
+            let c = Color::parse_hex(hex).map_err(|_| {
+                err(format!(
+                    "`{name}`: invalid color `{hex}` (expected hex like #rrggbb)"
+                ))
+            })?;
             Ok(set_node(n, |r| set(r, c)))
         },
     );
@@ -504,9 +519,15 @@ fn build_engine() -> Engine {
         sn
     });
     engine.register_fn("rect", || leaf(NodeKind::Rect));
-    engine.register_fn("col", |children: Array| make_container(NodeKind::Column, children));
-    engine.register_fn("row", |children: Array| make_container(NodeKind::Row, children));
-    engine.register_fn("stack", |children: Array| make_container(NodeKind::Stack, children));
+    engine.register_fn("col", |children: Array| {
+        make_container(NodeKind::Column, children)
+    });
+    engine.register_fn("row", |children: Array| {
+        make_container(NodeKind::Row, children)
+    });
+    engine.register_fn("stack", |children: Array| {
+        make_container(NodeKind::Stack, children)
+    });
     // Vector shapes: coordinates in page units, relative to the node's own box.
     engine.register_fn(
         "line",
@@ -564,9 +585,15 @@ fn build_engine() -> Engine {
     reg_color(&mut engine, "stroke", |r, c| r.stroke = Some(c));
 
     // Enum chainable setters.
-    reg_enum(&mut engine, "align", parse_text_align, |r, v| r.align = Some(v));
-    reg_enum(&mut engine, "main", parse_main_axis, |r, v| r.main_axis_alignment = Some(v));
-    reg_enum(&mut engine, "cross", parse_cross_axis, |r, v| r.cross_axis_alignment = Some(v));
+    reg_enum(&mut engine, "align", parse_text_align, |r, v| {
+        r.align = Some(v)
+    });
+    reg_enum(&mut engine, "main", parse_main_axis, |r, v| {
+        r.main_axis_alignment = Some(v)
+    });
+    reg_enum(&mut engine, "cross", parse_cross_axis, |r, v| {
+        r.cross_axis_alignment = Some(v)
+    });
     reg_enum(&mut engine, "fit", parse_fit, |r, v| r.fit = Some(v));
     reg_enum(&mut engine, "cap", parse_cap, |r, v| r.cap = Some(v));
     reg_enum(&mut engine, "head", parse_head, |r, v| r.head = Some(v));
@@ -612,8 +639,11 @@ fn build_engine() -> Engine {
          x: Dynamic,
          y: Dynamic|
          -> NodeResult {
-            let [c1x, c1y, c2x, c2y, x, y] =
-                nums("cubic", "c1x, c1y, c2x, c2y, x, y", [c1x, c1y, c2x, c2y, x, y])?;
+            let [c1x, c1y, c2x, c2y, x, y] = nums(
+                "cubic",
+                "c1x, c1y, c2x, c2y, x, y",
+                [c1x, c1y, c2x, c2y, x, y],
+            )?;
             let mut seg = RawSegment::line([x, y]);
             seg.cubic = Some([[c1x, c1y], [c2x, c2y]]);
             push_segment(n, "cubic", seg)
@@ -648,12 +678,16 @@ fn build_engine() -> Engine {
     engine.register_fn("font", |n: ScriptNode, s: &str| {
         set_node(n, |r| r.font_family = Some(s.to_string()))
     });
-    engine.register_fn("bold", |n: ScriptNode| set_node(n, |r| r.font_weight = Some(700)));
+    engine.register_fn("bold", |n: ScriptNode| {
+        set_node(n, |r| r.font_weight = Some(700))
+    });
     engine.register_fn("center", |n: ScriptNode| {
         set_node(n, |r| r.align = Some(TextAlign::Center))
     });
     engine.register_fn("stretch", |n: ScriptNode| {
-        set_node(n, |r| r.cross_axis_alignment = Some(CrossAxisAlign::Stretch))
+        set_node(n, |r| {
+            r.cross_axis_alignment = Some(CrossAxisAlign::Stretch)
+        })
     });
 
     // Document: page(width, height, root) + chainable page settings.

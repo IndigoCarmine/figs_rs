@@ -219,7 +219,10 @@ fn text_is_glyph_outlines() {
         let href = u
             .attribute(("http://www.w3.org/1999/xlink", "href"))
             .expect("xlink:href");
-        assert!(defs.contains(&href.trim_start_matches('#')), "undefined glyph {href}");
+        assert!(
+            defs.contains(&href.trim_start_matches('#')),
+            "undefined glyph {href}"
+        );
     }
 }
 
@@ -283,7 +286,12 @@ fn images_embed_and_cover_is_clipped() {
     let a = images[0];
     assert!(href(&a).starts_with("data:image/png;base64,iVBOR"));
     assert_eq!(
-        [a.attribute("x"), a.attribute("y"), a.attribute("width"), a.attribute("height")],
+        [
+            a.attribute("x"),
+            a.attribute("y"),
+            a.attribute("width"),
+            a.attribute("height")
+        ],
         [Some("0"), Some("20"), Some("80"), Some("40")]
     );
     assert_eq!(a.attribute("clip-path"), None);
@@ -292,7 +300,12 @@ fn images_embed_and_cover_is_clipped() {
     let b = images[1];
     assert!(href(&b).starts_with("data:image/jpeg;base64,/9j/"));
     assert_eq!(
-        [b.attribute("x"), b.attribute("y"), b.attribute("width"), b.attribute("height")],
+        [
+            b.attribute("x"),
+            b.attribute("y"),
+            b.attribute("width"),
+            b.attribute("height")
+        ],
         [Some("100"), Some("-60"), Some("80"), Some("160")]
     );
     let clip_ref = b.attribute("clip-path").expect("cover is clipped");
@@ -363,5 +376,8 @@ fn curves_are_emitted_as_svg_curves() {
         .into_iter()
         .find(|p| p.attribute("stroke") == Some("#000000"))
         .expect("curve path");
-    assert_eq!(p.attribute("d"), Some("M0 50 Q20 0 40 50 C50 100 70 0 80 50"));
+    assert_eq!(
+        p.attribute("d"),
+        Some("M0 50 Q20 0 40 50 C50 100 70 0 80 50")
+    );
 }

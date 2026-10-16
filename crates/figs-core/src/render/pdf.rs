@@ -79,7 +79,12 @@ impl<'s, 'a> PdfRenderer<'s, 'a> {
     }
 
     /// Fill and/or stroke a shared-geometry outline.
-    fn draw_segs(&mut self, segs: &[PathSegment], fill: Option<Color>, stroke: Option<&StrokeStyle>) {
+    fn draw_segs(
+        &mut self,
+        segs: &[PathSegment],
+        fill: Option<Color>,
+        stroke: Option<&StrokeStyle>,
+    ) {
         if fill.is_none() && stroke.is_none() {
             return; // krilla would default to a black fill
         }
@@ -96,11 +101,14 @@ impl<'s, 'a> PdfRenderer<'s, 'a> {
         self.font_cache
             .entry(id)
             .or_insert_with(|| {
-                let (data, index) = fonts
-                    .with_system(|sys| sys.db().with_face_data(id, |d, i| (d.to_vec(), i)))?;
+                let (data, index) =
+                    fonts.with_system(|sys| sys.db().with_face_data(id, |d, i| (d.to_vec(), i)))?;
                 let font = Font::new(data.into(), index);
                 if font.is_none() {
-                    tracing::warn!(?id, "font could not be embedded in PDF; skipping its glyphs");
+                    tracing::warn!(
+                        ?id,
+                        "font could not be embedded in PDF; skipping its glyphs"
+                    );
                 }
                 font
             })
@@ -327,7 +335,13 @@ impl Renderer for PdfRenderer<'_, '_> {
         let Some((img, iw, ih)) = self.image(&resolved) else {
             tracing::warn!(path = %resolved.display(), "image unavailable; drawing placeholder");
             let (fill, border) = geometry::placeholder_colors();
-            self.fill_rect(rect, Some(fill), Some(border), geometry::PLACEHOLDER_BORDER, 0.0);
+            self.fill_rect(
+                rect,
+                Some(fill),
+                Some(border),
+                geometry::PLACEHOLDER_BORDER,
+                0.0,
+            );
             return;
         };
         if rect.w <= 0.0 || rect.h <= 0.0 {

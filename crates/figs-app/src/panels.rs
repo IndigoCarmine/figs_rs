@@ -119,32 +119,52 @@ fn outline(app: &mut FigsApp, ui: &mut egui::Ui, p: &Palette) {
         .on_hover_text("Add child");
 
         let has_sel = sel_id.is_some();
-        if ui.add_enabled(has_sel, egui::Button::new("\u{2715}")).on_hover_text("Delete").clicked() {
+        if ui
+            .add_enabled(has_sel, egui::Button::new("\u{2715}"))
+            .on_hover_text("Delete")
+            .clicked()
+        {
             if let Some(id) = &sel_id {
                 model::delete_node(&mut app.model, id);
                 app.selected = Selection::Page;
                 app.touch();
             }
         }
-        if ui.add_enabled(has_sel, egui::Button::new("\u{2191}")).on_hover_text("Move up").clicked() {
+        if ui
+            .add_enabled(has_sel, egui::Button::new("\u{2191}"))
+            .on_hover_text("Move up")
+            .clicked()
+        {
             if let Some(id) = &sel_id {
                 model::move_sibling(&mut app.model, id, -1);
                 app.touch();
             }
         }
-        if ui.add_enabled(has_sel, egui::Button::new("\u{2193}")).on_hover_text("Move down").clicked() {
+        if ui
+            .add_enabled(has_sel, egui::Button::new("\u{2193}"))
+            .on_hover_text("Move down")
+            .clicked()
+        {
             if let Some(id) = &sel_id {
                 model::move_sibling(&mut app.model, id, 1);
                 app.touch();
             }
         }
-        if ui.add_enabled(has_sel, egui::Button::new("\u{21e4}")).on_hover_text("Outdent").clicked() {
+        if ui
+            .add_enabled(has_sel, egui::Button::new("\u{21e4}"))
+            .on_hover_text("Outdent")
+            .clicked()
+        {
             if let Some(id) = &sel_id {
                 model::outdent(&mut app.model, id);
                 app.touch();
             }
         }
-        if ui.add_enabled(has_sel, egui::Button::new("\u{21e5}")).on_hover_text("Indent").clicked() {
+        if ui
+            .add_enabled(has_sel, egui::Button::new("\u{21e5}"))
+            .on_hover_text("Indent")
+            .clicked()
+        {
             if let Some(id) = &sel_id {
                 model::indent(&mut app.model, id);
                 app.touch();
@@ -160,7 +180,11 @@ fn outline(app: &mut FigsApp, ui: &mut egui::Ui, p: &Palette) {
     for (id, depth, has) in &rows {
         let selected = app.selected.node_id() == Some(id.as_str());
         let kind = app.model.nodes.get(id).map(|n| n.kind);
-        let fill = if selected { p.acc_soft } else { Color32::TRANSPARENT };
+        let fill = if selected {
+            p.acc_soft
+        } else {
+            Color32::TRANSPARENT
+        };
         let resp = egui::Frame::none()
             .fill(fill)
             .inner_margin(egui::Margin::symmetric(4.0, 3.0))
@@ -174,7 +198,10 @@ fn outline(app: &mut FigsApp, ui: &mut egui::Ui, p: &Palette) {
                             "\u{25be}"
                         };
                         if ui
-                            .add(egui::Label::new(RichText::new(arrow).color(p.dim)).sense(Sense::click()))
+                            .add(
+                                egui::Label::new(RichText::new(arrow).color(p.dim))
+                                    .sense(Sense::click()),
+                            )
                             .clicked()
                         {
                             toggle = Some(id.clone());
@@ -233,7 +260,12 @@ fn inspector(app: &mut FigsApp, ui: &mut egui::Ui, _p: &Palette) {
             section(ui, "Appearance");
             changed |= opt_color(ui, "Background", &mut app.model.page.background);
             section(ui, "Typography");
-            changed |= font_combo(ui, "Default font", &families, &mut app.model.page.font_family);
+            changed |= font_combo(
+                ui,
+                "Default font",
+                &families,
+                &mut app.model.page.font_family,
+            );
             if changed {
                 app.touch();
             }
@@ -293,8 +325,10 @@ fn inspector(app: &mut FigsApp, ui: &mut egui::Ui, _p: &Palette) {
                             changed = true;
                         }
                         changed |= num(ui, "Spacing", &mut node.spacing, 0.5);
-                        changed |= main_align_combo(ui, "Main align", &mut node.main_axis_alignment);
-                        changed |= cross_align_combo(ui, "Cross align", &mut node.cross_axis_alignment);
+                        changed |=
+                            main_align_combo(ui, "Main align", &mut node.main_axis_alignment);
+                        changed |=
+                            cross_align_combo(ui, "Cross align", &mut node.cross_axis_alignment);
                     }
                     // Stack children carry their own x/y (Layout section).
                     NodeKind::Stack => {}
@@ -485,7 +519,11 @@ fn text_multi(ui: &mut egui::Ui, label: &str, v: &mut Option<String>) -> bool {
     let mut changed = false;
     ui.label(label);
     if ui
-        .add(egui::TextEdit::multiline(&mut s).desired_rows(2).desired_width(f32::INFINITY))
+        .add(
+            egui::TextEdit::multiline(&mut s)
+                .desired_rows(2)
+                .desired_width(f32::INFINITY),
+        )
         .changed()
     {
         *v = Some(s);
@@ -522,18 +560,23 @@ fn font_combo(ui: &mut egui::Ui, label: &str, families: &[String], v: &mut Optio
         egui::ComboBox::from_id_salt(label)
             .selected_text(cur)
             .show_ui(ui, |ui| {
-                egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
-                    if ui.selectable_label(v.is_none(), "(default)").clicked() {
-                        *v = None;
-                        changed = true;
-                    }
-                    for f in families {
-                        if ui.selectable_label(v.as_deref() == Some(f.as_str()), f).clicked() {
-                            *v = Some(f.clone());
+                egui::ScrollArea::vertical()
+                    .max_height(260.0)
+                    .show(ui, |ui| {
+                        if ui.selectable_label(v.is_none(), "(default)").clicked() {
+                            *v = None;
                             changed = true;
                         }
-                    }
-                });
+                        for f in families {
+                            if ui
+                                .selectable_label(v.as_deref() == Some(f.as_str()), f)
+                                .clicked()
+                            {
+                                *v = Some(f.clone());
+                                changed = true;
+                            }
+                        }
+                    });
             });
     });
     changed
@@ -547,7 +590,10 @@ fn unit_combo(ui: &mut egui::Ui, label: &str, v: &mut Unit) -> bool {
             .selected_text(crate::app::unit_label(*v))
             .show_ui(ui, |ui| {
                 for u in [Unit::Cm, Unit::Mm, Unit::In, Unit::Pt, Unit::Px] {
-                    if ui.selectable_label(*v == u, crate::app::unit_label(u)).clicked() {
+                    if ui
+                        .selectable_label(*v == u, crate::app::unit_label(u))
+                        .clicked()
+                    {
                         *v = u;
                         changed = true;
                     }
@@ -601,8 +647,12 @@ fn points_editor(ui: &mut egui::Ui, pts: &mut Vec<[f32; 2]>, resizable: bool) ->
     for (i, p) in pts.iter_mut().enumerate() {
         ui.horizontal(|ui| {
             ui.label(format!("{}", i + 1));
-            changed |= ui.add(egui::DragValue::new(&mut p[0]).speed(0.5).prefix("x ")).changed();
-            changed |= ui.add(egui::DragValue::new(&mut p[1]).speed(0.5).prefix("y ")).changed();
+            changed |= ui
+                .add(egui::DragValue::new(&mut p[0]).speed(0.5).prefix("x "))
+                .changed();
+            changed |= ui
+                .add(egui::DragValue::new(&mut p[1]).speed(0.5).prefix("y "))
+                .changed();
         });
     }
     if resizable {
@@ -612,7 +662,11 @@ fn points_editor(ui: &mut egui::Ui, pts: &mut Vec<[f32; 2]>, resizable: bool) ->
                 pts.push([last[0] + 20.0, last[1]]);
                 changed = true;
             }
-            if ui.add_enabled(pts.len() > 2, egui::Button::new("\u{2212}")).on_hover_text("Remove last point").clicked() {
+            if ui
+                .add_enabled(pts.len() > 2, egui::Button::new("\u{2212}"))
+                .on_hover_text("Remove last point")
+                .clicked()
+            {
                 pts.pop();
                 changed = true;
             }
@@ -648,10 +702,19 @@ fn dash_field(ui: &mut egui::Ui, label: &str, dash: &mut Vec<f32>) -> bool {
     ui.horizontal(|ui| {
         ui.label(label);
         let id = ui.id().with(label);
-        let mut s = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| {
-            dash.iter().map(|d| d.to_string()).collect::<Vec<_>>().join(", ")
-        });
-        let resp = ui.add(egui::TextEdit::singleline(&mut s).hint_text("solid").desired_width(120.0));
+        let mut s = ui
+            .data_mut(|d| d.get_temp::<String>(id))
+            .unwrap_or_else(|| {
+                dash.iter()
+                    .map(|d| d.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            });
+        let resp = ui.add(
+            egui::TextEdit::singleline(&mut s)
+                .hint_text("solid")
+                .desired_width(120.0),
+        );
         if resp.changed() {
             let parsed: Option<Vec<f32>> = s
                 .split(|c: char| c == ',' || c.is_whitespace())
@@ -798,9 +861,21 @@ struct SyntaxColors {
 fn syntax_colors(p: &Palette) -> SyntaxColors {
     let d = p.dark_mode;
     SyntaxColors {
-        key: if d { crate::theme::hex("#82b0ea") } else { crate::theme::hex("#2f6fed") },
-        string: if d { crate::theme::hex("#9ece6a") } else { crate::theme::hex("#3f8f4f") },
-        num: if d { crate::theme::hex("#e0a566") } else { crate::theme::hex("#b06a1c") },
+        key: if d {
+            crate::theme::hex("#82b0ea")
+        } else {
+            crate::theme::hex("#2f6fed")
+        },
+        string: if d {
+            crate::theme::hex("#9ece6a")
+        } else {
+            crate::theme::hex("#3f8f4f")
+        },
+        num: if d {
+            crate::theme::hex("#e0a566")
+        } else {
+            crate::theme::hex("#b06a1c")
+        },
         tbl: crate::theme::hex("#b98cff"),
         punct: p.faint,
         tx: p.tx,
@@ -947,7 +1022,13 @@ fn block_ctx(buffer: &str, caret: usize) -> BlockCtx {
 fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
     match ctx {
         BlockCtx::Page => vec![
-            "width", "height", "unit", "dpi", "background", "root", "font_family",
+            "width",
+            "height",
+            "unit",
+            "dpi",
+            "background",
+            "root",
+            "font_family",
         ],
         BlockCtx::Node(kind) => {
             let mut v = vec!["type"];
@@ -973,25 +1054,67 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
                     v.extend(["fill", "stroke", "stroke_width", "corner_radius"])
                 }
                 Some(NodeKind::Line) | Some(NodeKind::Arrow) => v.extend([
-                    "points", "segments", "stroke", "stroke_width", "dash", "cap", "head",
+                    "points",
+                    "segments",
+                    "stroke",
+                    "stroke_width",
+                    "dash",
+                    "cap",
+                    "head",
                     "head_size",
                 ]),
                 Some(NodeKind::Path) => v.extend([
-                    "points", "segments", "closed", "fill", "stroke", "stroke_width", "dash",
-                    "cap", "head", "head_size",
+                    "points",
+                    "segments",
+                    "closed",
+                    "fill",
+                    "stroke",
+                    "stroke_width",
+                    "dash",
+                    "cap",
+                    "head",
+                    "head_size",
                 ]),
                 Some(NodeKind::Ellipse) => {
                     v.extend(["fill", "stroke", "stroke_width", "dash", "cap"])
                 }
                 None => v.extend([
-                    "content", "font_size", "font_family", "font_weight", "color", "align",
-                    "line_height", "src", "fit", "fill", "stroke", "stroke_width",
-                    "corner_radius", "children", "spacing", "main_axis_alignment",
-                    "cross_axis_alignment", "points", "segments", "closed", "dash", "cap", "head",
+                    "content",
+                    "font_size",
+                    "font_family",
+                    "font_weight",
+                    "color",
+                    "align",
+                    "line_height",
+                    "src",
+                    "fit",
+                    "fill",
+                    "stroke",
+                    "stroke_width",
+                    "corner_radius",
+                    "children",
+                    "spacing",
+                    "main_axis_alignment",
+                    "cross_axis_alignment",
+                    "points",
+                    "segments",
+                    "closed",
+                    "dash",
+                    "cap",
+                    "head",
                     "head_size",
                 ]),
             }
-            v.extend(["flex", "width", "height", "aspect_ratio", "margin", "padding", "x", "y"]);
+            v.extend([
+                "flex",
+                "width",
+                "height",
+                "aspect_ratio",
+                "margin",
+                "padding",
+                "x",
+                "y",
+            ]);
             v
         }
     }
@@ -1037,7 +1160,11 @@ fn compute_completion(buffer: &str, caret: usize) -> Option<Completion> {
 
     // Value context: an '=' precedes the caret on this line.
     if let Some(eq) = prefix.iter().position(|&c| c == '=') {
-        let key: String = prefix[lead..eq].iter().collect::<String>().trim().to_string();
+        let key: String = prefix[lead..eq]
+            .iter()
+            .collect::<String>()
+            .trim()
+            .to_string();
         let after = &prefix[eq + 1..];
         // Only complete while inside an open string literal (odd quote count).
         if after.iter().filter(|&&c| c == '"').count() % 2 != 1 {
@@ -1112,7 +1239,9 @@ fn apply_completion(
     }
 
     let mut st = egui::widgets::text_edit::TextEditState::load(ctx, id).unwrap_or_default();
-    st.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(new_caret))));
+    st.cursor.set_char_range(Some(egui::text::CCursorRange::one(
+        egui::text::CCursor::new(new_caret),
+    )));
     st.store(ctx, id);
     ctx.memory_mut(|m| m.request_focus(id));
     app.completion_index = 0;
@@ -1186,7 +1315,8 @@ pub fn toml_pane(app: &mut FigsApp, ctx: &egui::Context) {
                 }
                 if let (Some(c), Some(caret)) = (&comp, pre_caret) {
                     let n = c.items.len();
-                    if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)) {
+                    if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown))
+                    {
                         app.completion_index = (app.completion_index + 1) % n;
                     }
                     if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)) {
@@ -1194,7 +1324,9 @@ pub fn toml_pane(app: &mut FigsApp, ctx: &egui::Context) {
                     }
                     if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
                         app.completion_suppress = Some(c.token.clone());
-                    } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab)) {
+                    } else if ctx
+                        .input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab))
+                    {
                         let c = comp.take().unwrap();
                         apply_completion(app, ctx, editor_id, &c, caret);
                     }
@@ -1276,9 +1408,11 @@ pub fn toml_pane(app: &mut FigsApp, ctx: &egui::Context) {
                                         }
                                     }
                                     ui.label(
-                                        RichText::new("Tab insert \u{00b7} \u{2191}\u{2193} \u{00b7} Esc")
-                                            .small()
-                                            .color(p.faint),
+                                        RichText::new(
+                                            "Tab insert \u{00b7} \u{2191}\u{2193} \u{00b7} Esc",
+                                        )
+                                        .small()
+                                        .color(p.faint),
                                     );
                                 });
                             });
@@ -1330,10 +1464,9 @@ pub fn script_pane(app: &mut FigsApp, ctx: &egui::Context) {
                             .map(|n| n.to_string_lossy().to_string())
                             .unwrap_or_else(|| "untitled.figs".to_string());
                         ui.label(RichText::new(name).monospace().strong());
-                        ui.with_layout(
-                            egui::Layout::right_to_left(egui::Align::Center),
-                            |ui| source_tabs(app, ui),
-                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            source_tabs(app, ui)
+                        });
                     });
                 });
             ui.separator();
@@ -1402,7 +1535,10 @@ fn node_at_point(computed: &ComputedLayout, px: f32, py: f32) -> Option<String> 
 
 fn is_image_path(path: &std::path::Path) -> bool {
     matches!(
-        path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref(),
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .as_deref(),
         Some("png" | "jpg" | "jpeg")
     )
 }
@@ -1443,7 +1579,8 @@ pub fn canvas(app: &mut FigsApp, ctx: &egui::Context) {
                 let dh = ph * scale;
                 let origin = egui::pos2(area.center().x - dw / 2.0, area.center().y - dh / 2.0);
                 let img_rect = Rect::from_min_size(origin, egui::vec2(dw, dh));
-                let to_point = |pos: egui::Pos2| ((pos.x - origin.x) / scale, (pos.y - origin.y) / scale);
+                let to_point =
+                    |pos: egui::Pos2| ((pos.x - origin.x) / scale, (pos.y - origin.y) / scale);
 
                 // Soft drop shadow + the rendered page.
                 painter.rect_filled(
@@ -1457,7 +1594,7 @@ pub fn canvas(app: &mut FigsApp, ctx: &egui::Context) {
                     Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                     Color32::WHITE,
                 );
-                painter.rect_stroke(img_rect, 0.0, Stroke::new(1.0, p.line));
+                painter.rect_stroke(img_rect, 0.0, Stroke::new(1.0_f32, p.line));
 
                 // Selection outline.
                 if let Some(id) = app.selected.node_id() {
@@ -1467,7 +1604,7 @@ pub fn canvas(app: &mut FigsApp, ctx: &egui::Context) {
                             egui::pos2(origin.x + r.x * scale, origin.y + r.y * scale),
                             egui::vec2(r.w * scale, r.h * scale),
                         );
-                        painter.rect_stroke(sr, 2.0, Stroke::new(2.0, p.acc));
+                        painter.rect_stroke(sr, 2.0, Stroke::new(2.0_f32, p.acc));
                     }
                 }
 
@@ -1495,7 +1632,9 @@ pub fn canvas(app: &mut FigsApp, ctx: &egui::Context) {
                     let (px, py) = to_point(pos);
                     match node_at_point(&prev.computed, px, py) {
                         Some(id) if model::is_container(&app.model, &id) => id,
-                        Some(id) => model::parent_of(&app.model, &id).unwrap_or_else(|| root.clone()),
+                        Some(id) => {
+                            model::parent_of(&app.model, &id).unwrap_or_else(|| root.clone())
+                        }
                         None => root.clone(),
                     }
                 };

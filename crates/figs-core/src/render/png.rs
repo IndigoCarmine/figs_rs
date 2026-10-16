@@ -196,7 +196,12 @@ impl<'a> TinySkiaRenderer<'a> {
             return false;
         };
 
-        let (rx, ry, rw, rh) = (self.px(rect.x), self.px(rect.y), self.px(rect.w), self.px(rect.h));
+        let (rx, ry, rw, rh) = (
+            self.px(rect.x),
+            self.px(rect.y),
+            self.px(rect.w),
+            self.px(rect.h),
+        );
         if rw <= 0.0 || rh <= 0.0 {
             return true; // nothing to draw, but not an error
         }
@@ -296,8 +301,12 @@ fn blit_glyph(pixmap: &mut Pixmap, img: &SwashImage, ox: i32, oy: i32, color: Co
             for row in 0..h {
                 for col in 0..w {
                     let i = ((row * w + col) * 4) as usize;
-                    let (r, g, b, a) =
-                        (img.data[i], img.data[i + 1], img.data[i + 2], img.data[i + 3]);
+                    let (r, g, b, a) = (
+                        img.data[i],
+                        img.data[i + 1],
+                        img.data[i + 2],
+                        img.data[i + 3],
+                    );
                     let (px, py) = (gx0 + col, gy0 + row);
                     if px < 0 || py < 0 || px >= pw || py >= ph {
                         continue;
@@ -441,7 +450,13 @@ impl Renderer for TinySkiaRenderer<'_> {
         // Light-gray placeholder box with a thin border so a missing image is
         // obvious in the editor without panicking.
         let (fill, border) = geometry::placeholder_colors();
-        self.fill_rect(rect, Some(fill), Some(border), geometry::PLACEHOLDER_BORDER, 0.0);
+        self.fill_rect(
+            rect,
+            Some(fill),
+            Some(border),
+            geometry::PLACEHOLDER_BORDER,
+            0.0,
+        );
     }
 }
 
@@ -460,7 +475,10 @@ pub fn render_png(layout: &ComputedLayout, opts: &RenderOptions) -> Result<Vec<u
 }
 
 /// Render a computed layout to straight RGBA (for on-screen preview).
-pub fn render_rgba(layout: &ComputedLayout, opts: &RenderOptions) -> Result<RenderedImage, PngError> {
+pub fn render_rgba(
+    layout: &ComputedLayout,
+    opts: &RenderOptions,
+) -> Result<RenderedImage, PngError> {
     let mut r = TinySkiaRenderer::new(&layout.page, opts)?;
     paint(layout, &mut r);
     Ok(r.into_rgba())

@@ -115,7 +115,11 @@ fn measure_container<M: LeafMeasure>(
     let child_c = |margin: Edges, main: Option<f32>| {
         let mut cc = base;
         if stretch {
-            cc = tighten(cc, cross_axis(axis), cross_of(axis, inner) - cross_margin(axis, margin));
+            cc = tighten(
+                cc,
+                cross_axis(axis),
+                cross_of(axis, inner) - cross_margin(axis, margin),
+            );
         }
         if let Some(m) = main {
             cc = tighten(cc, axis, m);
@@ -140,7 +144,11 @@ fn measure_container<M: LeafMeasure>(
         .iter()
         .map(|&child| match flex_of(child) {
             Some(_) => None,
-            None => Some(measure(ctx, child, child_c(ctx.doc.nodes[child].common.margin, None))),
+            None => Some(measure(
+                ctx,
+                child,
+                child_c(ctx.doc.nodes[child].common.margin, None),
+            )),
         })
         .collect();
 
@@ -179,7 +187,10 @@ fn measure_container<M: LeafMeasure>(
         Axis::Vertical => (cross_max, main_sum),
         Axis::Horizontal => (main_sum, cross_max),
     };
-    Size::new(w + common.padding.horizontal(), h + common.padding.vertical())
+    Size::new(
+        w + common.padding.horizontal(),
+        h + common.padding.vertical(),
+    )
 }
 
 /// Wrap-content size of a stack: the furthest extent of any child
@@ -211,7 +222,10 @@ fn measure_stack<M: LeafMeasure>(
         w = w.max(cc.x.unwrap_or(0.0) + cc.margin.horizontal() + sz.w);
         h = h.max(cc.y.unwrap_or(0.0) + cc.margin.vertical() + sz.h);
     }
-    Size::new(w + common.padding.horizontal(), h + common.padding.vertical())
+    Size::new(
+        w + common.padding.horizontal(),
+        h + common.padding.vertical(),
+    )
 }
 
 /// Space available to a stack child's border box inside a content box of size
@@ -233,7 +247,10 @@ pub(super) fn stack_child_fills(common: &Common) -> (bool, bool) {
     let ar = common.aspect_ratio.filter(|a| *a > 0.0);
     let pinned_w = common.width.is_some() || (ar.is_some() && common.height.is_some());
     let pinned_h = common.height.is_some() || (ar.is_some() && common.width.is_some());
-    (!pinned_w && common.x.is_none(), !pinned_h && common.y.is_none())
+    (
+        !pinned_w && common.x.is_none(),
+        !pinned_h && common.y.is_none(),
+    )
 }
 
 /// Constraints for measuring a stack child within `avail`: loose, except that a
@@ -301,12 +318,23 @@ pub(super) fn stack_child_size(common: &Common, measured: Size, avail: Size) -> 
 pub(super) fn resolve_box_size(common: &Common, intrinsic: Size, c: Constraints) -> Size {
     let tight_w = common.width.is_none() && c.is_tight_w();
     let tight_h = common.height.is_none() && c.is_tight_h();
-    let mut w = if tight_w { c.max_w } else { common.width.unwrap_or(intrinsic.w) };
-    let mut h = if tight_h { c.max_h } else { common.height.unwrap_or(intrinsic.h) };
+    let mut w = if tight_w {
+        c.max_w
+    } else {
+        common.width.unwrap_or(intrinsic.w)
+    };
+    let mut h = if tight_h {
+        c.max_h
+    } else {
+        common.height.unwrap_or(intrinsic.h)
+    };
 
     if let Some(ar) = common.aspect_ratio {
         if ar > 0.0 {
-            match (common.width.is_some() || tight_w, common.height.is_some() || tight_h) {
+            match (
+                common.width.is_some() || tight_w,
+                common.height.is_some() || tight_h,
+            ) {
                 // both explicit: leave as-is (explicit wins over ratio)
                 (true, true) => {}
                 // width known -> derive height

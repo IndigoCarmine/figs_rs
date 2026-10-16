@@ -19,7 +19,11 @@ fn families_are_listed_and_sorted() {
     assert_eq!(families, sorted, "families must be sorted");
     let mut deduped = families.clone();
     deduped.dedup();
-    assert_eq!(families.len(), deduped.len(), "families must be deduplicated");
+    assert_eq!(
+        families.len(),
+        deduped.len(),
+        "families must be deduplicated"
+    );
 }
 
 fn text(content: &str, font_size: f32) -> TextProps {
@@ -103,10 +107,17 @@ fn tight_line_height_box_contains_ascent_and_descent() {
     let fs = store();
     let tight = fs.shape(&with_line_height("Hgp", 20.0, 0.8), f32::INFINITY);
     assert_eq!(tight.lines.len(), 1);
-    assert!(tight.size.h > 16.0, "block {} not grown past its line box", tight.size.h);
+    assert!(
+        tight.size.h > 16.0,
+        "block {} not grown past its line box",
+        tight.size.h
+    );
     let ascent = tight.lines[0].baseline;
     let descent = tight.size.h - ascent;
-    assert!(ascent > 0.0 && descent > 0.0, "ascent {ascent}, descent {descent}");
+    assert!(
+        ascent > 0.0 && descent > 0.0,
+        "ascent {ascent}, descent {descent}"
+    );
 
     // With a generous line height the line box already contains the glyphs:
     // the height is exactly the line box and the ascent+descent box is centred
@@ -132,7 +143,11 @@ fn tight_line_height_keeps_inner_line_spacing() {
         assert!((pair[1].baseline - pair[0].baseline - 16.0).abs() < 0.01);
     }
     assert!((multi.lines[0].baseline - single.lines[0].baseline).abs() < 0.01);
-    assert!((multi.size.h - (single.size.h + 32.0)).abs() < 0.01, "{}", multi.size.h);
+    assert!(
+        (multi.size.h - (single.size.h + 32.0)).abs() < 0.01,
+        "{}",
+        multi.size.h
+    );
 }
 
 #[test]

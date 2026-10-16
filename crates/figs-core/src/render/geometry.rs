@@ -50,9 +50,17 @@ pub fn rounded_rect(r: Rect, radius: f32) -> Vec<PathSegment> {
     vec![
         PathSegment::MoveTo(p(l + radius, t)),
         PathSegment::LineTo(p(rt - radius, t)),
-        PathSegment::CubicTo(p(rt - radius + k, t), p(rt, t + radius - k), p(rt, t + radius)),
+        PathSegment::CubicTo(
+            p(rt - radius + k, t),
+            p(rt, t + radius - k),
+            p(rt, t + radius),
+        ),
         PathSegment::LineTo(p(rt, b - radius)),
-        PathSegment::CubicTo(p(rt, b - radius + k), p(rt - radius + k, b), p(rt - radius, b)),
+        PathSegment::CubicTo(
+            p(rt, b - radius + k),
+            p(rt - radius + k, b),
+            p(rt - radius, b),
+        ),
         PathSegment::LineTo(p(l + radius, b)),
         PathSegment::CubicTo(p(l + radius - k, b), p(l, b - radius + k), p(l, b - radius)),
         PathSegment::LineTo(p(l, t + radius)),
@@ -115,7 +123,12 @@ pub fn image_placement(rect: Rect, iw: f32, ih: f32, fit: ImageFit) -> Rect {
                 sx.min(sy)
             };
             let (w, h) = (iw * s, ih * s);
-            Rect::new(rect.x + (rect.w - w) / 2.0, rect.y + (rect.h - h) / 2.0, w, h)
+            Rect::new(
+                rect.x + (rect.w - w) / 2.0,
+                rect.y + (rect.h - h) / 2.0,
+                w,
+                h,
+            )
         }
     }
 }
@@ -160,7 +173,11 @@ mod tests {
 
     #[test]
     fn polygon_is_closed() {
-        let segs = polygon(&[Point::new(0.0, 0.0), Point::new(1.0, 0.0), Point::new(0.0, 1.0)]);
+        let segs = polygon(&[
+            Point::new(0.0, 0.0),
+            Point::new(1.0, 0.0),
+            Point::new(0.0, 1.0),
+        ]);
         assert_eq!(segs.len(), 4);
         assert_eq!(segs[3], PathSegment::Close);
     }

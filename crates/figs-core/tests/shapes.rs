@@ -194,7 +194,10 @@ fn shapes_flow_in_a_column() {
         height = 5
         "#);
     assert_rect(node(&l, "p").rect, 0.0, 0.0, 42.0, 32.0);
-    assert_eq!(path_of(&l, "p").segments[1], PathSegment::LineTo(Point::new(41.0, 11.0)));
+    assert_eq!(
+        path_of(&l, "p").segments[1],
+        PathSegment::LineTo(Point::new(41.0, 11.0))
+    );
     assert!(path_of(&l, "p").is_closed());
     assert_rect(node(&l, "e").rect, 0.0, 32.0, 50.0, 25.0);
     assert!(matches!(
@@ -202,7 +205,10 @@ fn shapes_flow_in_a_column() {
         PaintContent::Ellipse { .. }
     ));
     assert_rect(node(&l, "l").rect, 0.0, 57.0, 60.0, 5.0);
-    assert_eq!(path_of(&l, "l").segments[1], PathSegment::LineTo(Point::new(10.0, 67.0)));
+    assert_eq!(
+        path_of(&l, "l").segments[1],
+        PathSegment::LineTo(Point::new(10.0, 67.0))
+    );
 }
 
 #[test]
@@ -221,7 +227,10 @@ fn unpositioned_shape_fills_stack_and_uses_stack_coordinates() {
         points = [[10, 20], [90, 70]]
         "#);
     assert_rect(node(&l, "ln").rect, 0.0, 0.0, 100.0, 80.0);
-    assert_eq!(path_of(&l, "ln").segments[0], PathSegment::MoveTo(Point::new(10.0, 20.0)));
+    assert_eq!(
+        path_of(&l, "ln").segments[0],
+        PathSegment::MoveTo(Point::new(10.0, 20.0))
+    );
 }
 
 // ---- script ----------------------------------------------------------------

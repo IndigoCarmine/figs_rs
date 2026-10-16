@@ -661,7 +661,11 @@ fn auto_height_fits_fixed_content() {
     "#;
     let l = lay(src);
     assert!(l.page.auto_height);
-    assert!((l.page.height_pt - 50.0).abs() < 0.01, "{}", l.page.height_pt);
+    assert!(
+        (l.page.height_pt - 50.0).abs() < 0.01,
+        "{}",
+        l.page.height_pt
+    );
     assert_rect(rect_of(&l, "root"), 3.0, 3.0, 94.0, 44.0);
     assert_rect(rect_of(&l, "a"), 8.0, 8.0, 84.0, 10.0);
     assert_rect(rect_of(&l, "b"), 8.0, 22.0, 84.0, 20.0);
@@ -712,7 +716,11 @@ fn flex_under_unbounded_height_takes_intrinsic_size() {
         height = 10
     "#;
     let l = lay(src);
-    assert!((l.page.height_pt - 40.0).abs() < 0.01, "{}", l.page.height_pt);
+    assert!(
+        (l.page.height_pt - 40.0).abs() < 0.01,
+        "{}",
+        l.page.height_pt
+    );
     assert_rect(rect_of(&l, "sized"), 0.0, 0.0, 100.0, 30.0);
     assert_rect(rect_of(&l, "empty"), 0.0, 30.0, 100.0, 0.0);
     assert_rect(rect_of(&l, "fixed"), 0.0, 30.0, 100.0, 10.0);
@@ -824,7 +832,11 @@ fn auto_height_rows_follow_their_own_content() {
         aspect_ratio = 2.0
     "#;
     let l = lay(src);
-    assert!((l.page.height_pt - 150.0).abs() < 0.01, "{}", l.page.height_pt);
+    assert!(
+        (l.page.height_pt - 150.0).abs() < 0.01,
+        "{}",
+        l.page.height_pt
+    );
     assert_rect(rect_of(&l, "sq"), 0.0, 0.0, 100.0, 100.0);
     assert_rect(rect_of(&l, "wide"), 0.0, 100.0, 100.0, 50.0);
 }
@@ -853,7 +865,11 @@ fn auto_height_image_without_aspect_uses_4_3_fallback() {
         height = 5
     "#;
     let l = lay(src);
-    assert!((l.page.height_pt - 65.0).abs() < 0.01, "{}", l.page.height_pt);
+    assert!(
+        (l.page.height_pt - 65.0).abs() < 0.01,
+        "{}",
+        l.page.height_pt
+    );
     assert_rect(rect_of(&l, "img"), 0.0, 0.0, 80.0, 60.0);
 }
 
@@ -889,7 +905,11 @@ fn auto_height_uses_natural_image_aspect_when_known() {
     "#;
     let doc = Document::from_toml(src).unwrap();
     let l = layout(&doc, &Wide);
-    assert!((l.page.height_pt - 50.0).abs() < 0.01, "{}", l.page.height_pt);
+    assert!(
+        (l.page.height_pt - 50.0).abs() < 0.01,
+        "{}",
+        l.page.height_pt
+    );
     assert_rect(rect_of(&l, "img"), 0.0, 0.0, 100.0, 50.0);
 }
 
@@ -935,7 +955,11 @@ fn auto_height_labeled_stack_cells() {
         aspect_ratio = 1.0
     "#;
     let l = lay(src);
-    assert!((l.page.height_pt - 45.0).abs() < 0.01, "{}", l.page.height_pt);
+    assert!(
+        (l.page.height_pt - 45.0).abs() < 0.01,
+        "{}",
+        l.page.height_pt
+    );
     assert_rect(rect_of(&l, "i1"), 0.0, 0.0, 45.0, 45.0);
     assert_rect(rect_of(&l, "i2"), 55.0, 0.0, 45.0, 45.0);
     assert_rect(rect_of(&l, "l1"), 0.0, 0.0, 5.0, 5.0);
@@ -958,7 +982,11 @@ fn auto_height_without_content_falls_back_to_4_3() {
         flex = 1
     "#;
     let l = lay(src);
-    assert!((l.page.height_pt - 75.0).abs() < 0.01, "{}", l.page.height_pt);
+    assert!(
+        (l.page.height_pt - 75.0).abs() < 0.01,
+        "{}",
+        l.page.height_pt
+    );
 }
 
 // --- images under loose constraints -----------------------------------------
@@ -1142,5 +1170,9 @@ fn auto_height_centered_column_image_fills_width() {
     let l = lay(src);
     assert_rect(rect_of(&l, "img"), 0.0, 0.0, 100.0, 50.0);
     assert_rect(rect_of(&l, "inner"), 20.0, 50.0, 80.0, 80.0);
-    assert!((l.page.height_pt - 130.0).abs() < 0.01, "{}", l.page.height_pt);
+    assert!(
+        (l.page.height_pt - 130.0).abs() < 0.01,
+        "{}",
+        l.page.height_pt
+    );
 }

@@ -10,8 +10,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::geom::{
-    ArcSweep, ArrowHead, Color, CrossAxisAlign, Edges, ImageFit, LineCap, MainAxisAlign,
-    TextAlign,
+    ArcSweep, ArrowHead, Color, CrossAxisAlign, Edges, ImageFit, LineCap, MainAxisAlign, TextAlign,
 };
 use crate::units::Unit;
 

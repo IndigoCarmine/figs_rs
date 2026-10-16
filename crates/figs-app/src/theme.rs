@@ -113,14 +113,14 @@ impl Theme {
         v.extreme_bg_color = p.input;
         v.faint_bg_color = p.panel2;
         v.selection.bg_fill = p.acc_soft;
-        v.selection.stroke = egui::Stroke::new(1.0, p.acc);
-        v.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, p.line);
+        v.selection.stroke = egui::Stroke::new(1.0_f32, p.acc);
+        v.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0_f32, p.line);
         v.widgets.inactive.bg_fill = p.input;
         v.widgets.inactive.weak_bg_fill = p.input;
-        v.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, p.input_line);
+        v.widgets.inactive.bg_stroke = egui::Stroke::new(1.0_f32, p.input_line);
         v.widgets.hovered.weak_bg_fill = p.hover;
-        v.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, p.acc);
-        v.widgets.active.bg_stroke = egui::Stroke::new(1.0, p.acc);
+        v.widgets.hovered.bg_stroke = egui::Stroke::new(1.0_f32, p.acc);
+        v.widgets.active.bg_stroke = egui::Stroke::new(1.0_f32, p.acc);
         v.hyperlink_color = p.acc;
         ctx.set_visuals(v);
     }

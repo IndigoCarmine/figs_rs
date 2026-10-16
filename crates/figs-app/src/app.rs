@@ -85,8 +85,8 @@ impl FigsApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         install_fonts(&cc.egui_ctx);
         let script_buffer = model::default_script();
-        let model = figs_core::eval_script(&script_buffer)
-            .unwrap_or_else(|_| model::default_document());
+        let model =
+            figs_core::eval_script(&script_buffer).unwrap_or_else(|_| model::default_document());
         let toml_buffer = model::to_toml(&model).unwrap_or_default();
         let fonts = FontStore::new();
         let font_families = fonts.families();
@@ -367,7 +367,11 @@ impl FigsApp {
     fn menu_bar(&mut self, ctx: &egui::Context) {
         let p = self.theme.palette();
         egui::TopBottomPanel::top("menu")
-            .frame(egui::Frame::none().fill(p.bar).inner_margin(egui::Margin::symmetric(8.0, 6.0)))
+            .frame(
+                egui::Frame::none()
+                    .fill(p.bar)
+                    .inner_margin(egui::Margin::symmetric(8.0, 6.0)),
+            )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     if ui.button("New").clicked() {
@@ -419,7 +423,11 @@ impl FigsApp {
     fn status_bar(&mut self, ctx: &egui::Context) {
         let p = self.theme.palette();
         egui::TopBottomPanel::bottom("status")
-            .frame(egui::Frame::none().fill(p.bar).inner_margin(egui::Margin::symmetric(12.0, 4.0)))
+            .frame(
+                egui::Frame::none()
+                    .fill(p.bar)
+                    .inner_margin(egui::Margin::symmetric(12.0, 4.0)),
+            )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     let n = self.model.nodes.len();
@@ -445,7 +453,10 @@ impl FigsApp {
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if let Some(err) = &self.error {
-                            ui.colored_label(egui::Color32::from_rgb(0xff, 0x6b, 0x6b), format!("\u{26a0} {err}"));
+                            ui.colored_label(
+                                egui::Color32::from_rgb(0xff, 0x6b, 0x6b),
+                                format!("\u{26a0} {err}"),
+                            );
                         } else {
                             let sel = match &self.selected {
                                 Selection::Page => "page".to_string(),
@@ -526,7 +537,9 @@ fn install_fonts(ctx: &egui::Context) {
     for (gi, paths) in groups.iter().enumerate() {
         if let Some(bytes) = paths.iter().find_map(|p| std::fs::read(p).ok()) {
             let name = format!("fallback{gi}");
-            fonts.font_data.insert(name.clone(), FontData::from_owned(bytes));
+            fonts
+                .font_data
+                .insert(name.clone(), FontData::from_owned(bytes));
             added.push(name);
         }
     }

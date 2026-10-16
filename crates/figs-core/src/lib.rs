@@ -19,11 +19,11 @@ pub mod text;
 pub mod units;
 
 pub use layout::{layout, ComputedLayout, LeafMeasure, NullMeasurer};
+pub use render::{
+    image_size, render_png, render_rgba, render_svg, PngError, RenderOptions, RenderedImage,
+};
 #[cfg(feature = "pdf")]
 pub use render::{render_pdf, PdfError};
-pub use render::{
-    image_size, render_png, render_rgba, render_svg, PngError, RenderedImage, RenderOptions,
-};
 pub use schema::Document;
 #[cfg(feature = "script")]
 pub use script::{eval_script, ScriptError};

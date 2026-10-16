@@ -121,7 +121,11 @@ fn four_panel_example_renders() {
     let doc = Document::from_toml(src).unwrap();
     let computed = layout(&doc, &NullMeasurer);
     let bytes = render_png(&computed, &RenderOptions::default()).unwrap();
-    assert!(bytes.len() > 1000, "expected a real PNG, got {} bytes", bytes.len());
+    assert!(
+        bytes.len() > 1000,
+        "expected a real PNG, got {} bytes",
+        bytes.len()
+    );
 }
 
 #[test]
@@ -166,7 +170,10 @@ fn centered_text_rasterizes() {
             }
         }
     }
-    assert!(dark > 30, "expected rasterized glyphs, got {dark} dark pixels");
+    assert!(
+        dark > 30,
+        "expected rasterized glyphs, got {dark} dark pixels"
+    );
     let centroid = (sum_x / dark as u64) as u32;
     // Glyph ink should sit around the horizontal centre (width 200), not flush
     // against an edge.

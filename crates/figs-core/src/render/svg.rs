@@ -184,7 +184,13 @@ impl<'a> SvgRenderer<'a> {
         true
     }
 
-    fn rect_element(&mut self, rect: Rect, fill: Option<Color>, stroke: Option<&StrokeStyle>, radius: f32) {
+    fn rect_element(
+        &mut self,
+        rect: Rect,
+        fill: Option<Color>,
+        stroke: Option<&StrokeStyle>,
+        radius: f32,
+    ) {
         let radius = radius.min(rect.w / 2.0).min(rect.h / 2.0);
         let mut el = format!(
             "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"",
@@ -202,7 +208,12 @@ impl<'a> SvgRenderer<'a> {
         self.body.push_str(&el);
     }
 
-    fn path_element(&mut self, segs: &[PathSegment], fill: Option<Color>, stroke: Option<&StrokeStyle>) {
+    fn path_element(
+        &mut self,
+        segs: &[PathSegment],
+        fill: Option<Color>,
+        stroke: Option<&StrokeStyle>,
+    ) {
         if segs.is_empty() {
             return;
         }
@@ -226,7 +237,12 @@ fn push_paint(el: &mut String, fill: Option<Color>, stroke: Option<&StrokeStyle>
         None => el.push_str(" fill=\"none\""),
     }
     if let Some(s) = stroke {
-        let _ = write!(el, " stroke=\"{}\" stroke-width=\"{}\"", hex(s.color), num(s.width));
+        let _ = write!(
+            el,
+            " stroke=\"{}\" stroke-width=\"{}\"",
+            hex(s.color),
+            num(s.width)
+        );
         if s.color.a < 1.0 {
             let _ = write!(el, " stroke-opacity=\"{}\"", num(s.color.a.max(0.0)));
         }
@@ -360,12 +376,24 @@ fn base64(data: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
-        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
         let n = (b[0] as u32) << 16 | (b[1] as u32) << 8 | b[2] as u32;
         out.push(T[(n >> 18) as usize & 63] as char);
         out.push(T[(n >> 12) as usize & 63] as char);
-        out.push(if chunk.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
-        out.push(if chunk.len() > 2 { T[n as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            T[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            T[n as usize & 63] as char
+        } else {
+            '='
+        });
     }
     out
 }
@@ -391,12 +419,14 @@ impl Renderer for SvgRenderer<'_> {
         if rect.w <= 0.0 || rect.h <= 0.0 || (fill.is_none() && stroke.is_none()) {
             return;
         }
-        let stroke = stroke.filter(|_| stroke_width > 0.0).map(|color| StrokeStyle {
-            color,
-            width: stroke_width,
-            dash: Vec::new(),
-            cap: LineCap::Butt,
-        });
+        let stroke = stroke
+            .filter(|_| stroke_width > 0.0)
+            .map(|color| StrokeStyle {
+                color,
+                width: stroke_width,
+                dash: Vec::new(),
+                cap: LineCap::Butt,
+            });
         if fill.is_none() && stroke.is_none() {
             return;
         }
@@ -450,7 +480,13 @@ impl Renderer for SvgRenderer<'_> {
         }
         tracing::warn!(path = %resolved.display(), "image unavailable; drawing placeholder");
         let (fill, border) = geometry::placeholder_colors();
-        self.fill_rect(rect, Some(fill), Some(border), geometry::PLACEHOLDER_BORDER, 0.0);
+        self.fill_rect(
+            rect,
+            Some(fill),
+            Some(border),
+            geometry::PLACEHOLDER_BORDER,
+            0.0,
+        );
     }
 
     fn draw_path(&mut self, path: &PathPaint) {

@@ -19,7 +19,11 @@ fn pdf_with(doc: &Document, fonts: Option<&FontStore>, base_dir: &Path) -> Vec<u
 }
 
 fn pdf_of(src: &str) -> Vec<u8> {
-    pdf_with(&Document::from_toml(src).expect("resolve"), None, Path::new("."))
+    pdf_with(
+        &Document::from_toml(src).expect("resolve"),
+        None,
+        Path::new("."),
+    )
 }
 
 fn count(hay: &[u8], needle: &str) -> usize {
@@ -29,7 +33,8 @@ fn count(hay: &[u8], needle: &str) -> usize {
 }
 
 fn find(hay: &[u8], needle: &str) -> Option<usize> {
-    hay.windows(needle.len()).position(|w| w == needle.as_bytes())
+    hay.windows(needle.len())
+        .position(|w| w == needle.as_bytes())
 }
 
 /// Header, `%%EOF`, and a classic xref table whose every in-use entry points at
@@ -46,7 +51,10 @@ fn check_structure(pdf: &[u8]) {
         .next()
         .and_then(|n| n.parse().ok())
         .expect("startxref offset");
-    assert!(pdf[xref_at..].starts_with(b"xref"), "startxref doesn't point at xref");
+    assert!(
+        pdf[xref_at..].starts_with(b"xref"),
+        "startxref doesn't point at xref"
+    );
     let xref = String::from_utf8_lossy(&pdf[xref_at..]).into_owned();
     let mut lines = xref.lines().skip(1);
     let header = lines.next().unwrap();
@@ -121,8 +129,16 @@ fn fractional_page_sizes_are_exact() {
     let doc = Document::from_toml(src).unwrap();
     let page = layout(&doc, &NullMeasurer).page;
     let mb = media_box(&pdf_of(src));
-    assert!((mb[2] - page.width_pt).abs() < 1e-3, "{mb:?} vs {}", page.width_pt);
-    assert!((mb[3] - page.height_pt).abs() < 1e-3, "{mb:?} vs {}", page.height_pt);
+    assert!(
+        (mb[2] - page.width_pt).abs() < 1e-3,
+        "{mb:?} vs {}",
+        page.width_pt
+    );
+    assert!(
+        (mb[3] - page.height_pt).abs() < 1e-3,
+        "{mb:?} vs {}",
+        page.height_pt
+    );
 }
 
 #[test]
@@ -167,7 +183,10 @@ fn vector_shapes_render() {
     );
     assert_eq!(media_box(&pdf), [0.0, 0.0, 200.0, 100.0]);
     // The translucent fill needs an ExtGState with a fill alpha.
-    assert!(count(&pdf, "/ExtGState") >= 1, "expected an alpha graphics state");
+    assert!(
+        count(&pdf, "/ExtGState") >= 1,
+        "expected an alpha graphics state"
+    );
 }
 
 #[test]
@@ -252,8 +271,16 @@ fn images_are_embedded_once_and_missing_ones_become_placeholders() {
     let pdf = pdf_with(&doc, Some(&fonts), &dir);
     // The PNG drawn twice is one XObject; the JPEG keeps its DCT stream.
     assert_eq!(count(&pdf, "/Width 7/Height 5"), 1, "PNG embedded once");
-    assert_eq!(count(&pdf, "/DCTDecode/Width 9/Height 6"), 1, "JPEG passed through");
-    assert_eq!(count(&pdf, "/Subtype/Image"), 2, "two images, no extra for the missing one");
+    assert_eq!(
+        count(&pdf, "/DCTDecode/Width 9/Height 6"),
+        1,
+        "JPEG passed through"
+    );
+    assert_eq!(
+        count(&pdf, "/Subtype/Image"),
+        2,
+        "two images, no extra for the missing one"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

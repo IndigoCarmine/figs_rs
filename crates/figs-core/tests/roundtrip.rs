@@ -109,7 +109,10 @@ fn stack_and_offsets_round_trip() {
     let raw1 = parse_str(src).expect("parse 1");
     let out = to_toml(&raw1);
     // Unset offsets stay out of the saved file.
-    let x_lines = out.lines().filter(|l| l.trim_start().starts_with("x =")).count();
+    let x_lines = out
+        .lines()
+        .filter(|l| l.trim_start().starts_with("x ="))
+        .count();
     assert_eq!(x_lines, 1, "{out}");
     let raw2 = parse_str(&out).expect("parse 2");
     assert_eq!(raw2.nodes["s"].kind, figs_core::schema::NodeKind::Stack);
@@ -180,7 +183,11 @@ fn vector_shapes_round_trip() {
     let raw1 = parse_str(src).expect("parse 1");
     let out = to_toml(&raw1);
     // Defaults stay out of the saved file: only `p` is closed, only `l` dashed.
-    let count = |key: &str| out.lines().filter(|l| l.trim_start().starts_with(key)).count();
+    let count = |key: &str| {
+        out.lines()
+            .filter(|l| l.trim_start().starts_with(key))
+            .count()
+    };
     assert_eq!(count("closed ="), 1, "{out}");
     assert_eq!(count("dash ="), 1, "{out}");
     let raw2 = parse_str(&out).expect("parse 2");
@@ -190,7 +197,11 @@ fn vector_shapes_round_trip() {
         assert_eq!(n1.points, n2.points, "{id}");
         assert_eq!(n1.dash, n2.dash, "{id}");
         assert_eq!(n1.closed, n2.closed, "{id}");
-        assert_eq!((n1.cap, n1.head, n1.head_size), (n2.cap, n2.head, n2.head_size), "{id}");
+        assert_eq!(
+            (n1.cap, n1.head, n1.head_size),
+            (n2.cap, n2.head, n2.head_size),
+            "{id}"
+        );
         assert_eq!((n1.fill, n1.stroke), (n2.fill, n2.stroke), "{id}");
     }
     assert_eq!(raw2.nodes["l"].points, vec![[0.0, 0.0], [3.0, 2.5]]);
@@ -255,8 +266,9 @@ fn auto_page_height_round_trips() {
     assert_eq!(resolve(raw2).expect("resolve").page.height_pt, None);
 
     // A fixed height still serializes as a plain number (integers parse too).
-    let raw = parse_str("[page]\nwidth = 10\nheight = 20\nroot = \"r\"\n[nodes.r]\ntype = \"rect\"\n")
-        .expect("parse fixed");
+    let raw =
+        parse_str("[page]\nwidth = 10\nheight = 20\nroot = \"r\"\n[nodes.r]\ntype = \"rect\"\n")
+            .expect("parse fixed");
     assert_eq!(raw.page.height, figs_core::schema::PageHeight::Fixed(20.0));
     let out = to_toml(&raw);
     assert!(out.contains("height = 20"), "{out}");

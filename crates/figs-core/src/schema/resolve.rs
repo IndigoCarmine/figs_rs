@@ -13,8 +13,8 @@
 use std::collections::HashMap;
 
 use crate::geom::{
-    ArcSweep, ArrowHead, Axis, Color, CrossAxisAlign, Edges, ImageFit, MainAxisAlign,
-    PathSegment, Point, StrokeStyle, TextAlign,
+    ArcSweep, ArrowHead, Axis, Color, CrossAxisAlign, Edges, ImageFit, MainAxisAlign, PathSegment,
+    Point, StrokeStyle, TextAlign,
 };
 use crate::path::arc_to_cubics;
 
@@ -386,7 +386,10 @@ fn convert_node(
                 ));
             }
             if raw.points.iter().flatten().any(|v| !v.is_finite()) {
-                return Err(invalid("points", "coordinates must be finite numbers".into()));
+                return Err(invalid(
+                    "points",
+                    "coordinates must be finite numbers".into(),
+                ));
             }
             let segments = path_segments(&raw.points, &raw.segments, raw.closed, factor)
                 .map_err(|reason| invalid("segments", reason))?;
@@ -401,9 +404,7 @@ fn convert_node(
             };
             let head_size = match raw.head_size {
                 Some(h) => h * factor,
-                None => {
-                    stroke.as_ref().map_or(0.0, |s| s.width) * DEFAULT_HEAD_SIZE_PER_STROKE
-                }
+                None => stroke.as_ref().map_or(0.0, |s| s.width) * DEFAULT_HEAD_SIZE_PER_STROKE,
             };
             NodeType::Path(PathProps {
                 segments,
@@ -452,7 +453,9 @@ fn path_segments(
             return Err(bad("give at most one of `quad`, `cubic`, `arc`"));
         }
         if seg.arc.is_none() && (seg.large || seg.sweep.is_some() || seg.rotation.is_some()) {
-            return Err(bad("`large`, `sweep` and `rotation` only apply to an `arc`"));
+            return Err(bad(
+                "`large`, `sweep` and `rotation` only apply to an `arc`",
+            ));
         }
         if !finite(&seg.to) {
             return Err(bad("coordinates must be finite numbers"));
@@ -478,7 +481,15 @@ fn path_segments(
                 return Err(bad("arc rotation must be a finite number"));
             }
             let cw = seg.sweep.unwrap_or_default() == ArcSweep::Cw;
-            out.extend(arc_to_cubics(cur, to, rx * factor, ry * factor, rotation, seg.large, cw));
+            out.extend(arc_to_cubics(
+                cur,
+                to,
+                rx * factor,
+                ry * factor,
+                rotation,
+                seg.large,
+                cw,
+            ));
         } else {
             out.push(PathSegment::LineTo(to));
         }

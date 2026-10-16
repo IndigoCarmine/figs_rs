@@ -184,7 +184,11 @@ pub fn add_child(doc: &mut RawDocument, target: &str, kind: NodeKind) -> String 
     } else if let Some(parent) = parent_of(doc, target) {
         // Insert right after the target among its siblings.
         if let Some(p) = doc.nodes.get_mut(&parent) {
-            let at = p.children.iter().position(|c| c == target).map_or(p.children.len(), |i| i + 1);
+            let at = p
+                .children
+                .iter()
+                .position(|c| c == target)
+                .map_or(p.children.len(), |i| i + 1);
             p.children.insert(at, id.clone());
         }
     } else if let Some(r) = doc.nodes.get_mut(&doc.page.root.clone()) {
@@ -245,7 +249,11 @@ pub fn outdent(doc: &mut RawDocument, id: &str) {
         p.children.retain(|c| c != id);
     }
     if let Some(g) = doc.nodes.get_mut(&grand) {
-        let at = g.children.iter().position(|c| c == &parent).map_or(g.children.len(), |i| i + 1);
+        let at = g
+            .children
+            .iter()
+            .position(|c| c == &parent)
+            .map_or(g.children.len(), |i| i + 1);
         g.children.insert(at, id.to_string());
     }
 }
