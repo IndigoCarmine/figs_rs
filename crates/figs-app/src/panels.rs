@@ -1572,7 +1572,9 @@ pub fn script_pane(app: &mut FigsApp, ctx: &egui::Context) {
 // ---------------------------------------------------------------------------
 
 /// The deepest (last-painted) node whose rect contains the page-point (px,py).
-fn node_at_point(computed: &ComputedLayout, px: f32, py: f32) -> Option<String> {
+/// Every canvas hit test (selection, drop target, drag grab) goes through
+/// this one function.
+pub(crate) fn node_at_point(computed: &ComputedLayout, px: f32, py: f32) -> Option<String> {
     computed
         .nodes
         .iter()
@@ -1611,10 +1613,11 @@ pub fn canvas(app: &mut FigsApp, ctx: &egui::Context) {
     egui::CentralPanel::default()
         .frame(egui::Frame::none().fill(p.canvas))
         .show(ctx, |ui| {
-            let (resp, painter) = ui.allocate_painter(ui.available_size(), Sense::click());
+            let (resp, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
             let area = resp.rect;
 
             let mut new_sel: Option<Selection> = None;
+            let mut view: Option<crate::canvas_edit::CanvasView> = None;
             // (file path, target container id) pairs to insert after drawing.
             let mut drops: Vec<(PathBuf, String)> = Vec::new();
             let root = app.model.page.root.clone();
@@ -1632,6 +1635,7 @@ pub fn canvas(app: &mut FigsApp, ctx: &egui::Context) {
                 let img_rect = Rect::from_min_size(origin, egui::vec2(dw, dh));
                 let to_point =
                     |pos: egui::Pos2| ((pos.x - origin.x) / scale, (pos.y - origin.y) / scale);
+                view = Some(crate::canvas_edit::CanvasView { origin, scale });
 
                 // Soft drop shadow + the rendered page.
                 painter.rect_filled(
@@ -1723,6 +1727,11 @@ pub fn canvas(app: &mut FigsApp, ctx: &egui::Context) {
 
             if let Some(s) = new_sel {
                 app.selected = s;
+            }
+            // Drag / nudge stack children (after the page, so its overlays
+            // draw on top).
+            if let Some(view) = view {
+                crate::canvas_edit::interact(app, ctx, &resp, &painter, view, &p);
             }
             for (path, target) in drops {
                 app.insert_image(&path, &target);

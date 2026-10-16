@@ -84,6 +84,19 @@ pub struct FigsApp {
     watched: Vec<PathBuf>,
     /// Changed files reported by `watcher`.
     disk_events: mpsc::Receiver<Vec<PathBuf>>,
+    /// The script text the current model was last evaluated from, and where
+    /// that evaluation set each node's stack offsets (canvas write-back).
+    pub evaluated_script: Option<String>,
+    pub script_sites: figs_core::script::SourceMap,
+    /// Undo/redo of canvas edits.
+    pub history: crate::history::History,
+    /// A canvas drag in progress.
+    pub drag: Option<crate::canvas_edit::Drag>,
+    /// A transient message shown on the canvas (write-back result, or why a
+    /// node can't move).
+    pub canvas_notice: Option<(String, std::time::Instant)>,
+    /// The node and time of the last arrow-key nudge (runs undo as one).
+    pub nudge_group: Option<(String, std::time::Instant)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -150,7 +163,18 @@ impl FigsApp {
             watcher,
             watched: Vec::new(),
             disk_events,
+            evaluated_script: None,
+            script_sites: Default::default(),
+            history: Default::default(),
+            drag: None,
+            canvas_notice: None,
+            nudge_group: None,
         };
+        if file.is_none() {
+            // The starter script: make its call sites known to the canvas.
+            app.evaluate_script();
+            app.dirty = false;
+        }
         if let Some(path) = file {
             app.open_path(&path);
         }
@@ -164,17 +188,34 @@ impl FigsApp {
         self.regen_toml = true;
     }
 
+    /// Whether the script is the source of truth (a `.figs`/`.rhai` file, or
+    /// an unsaved document on the Script tab); otherwise the TOML is.
+    pub fn script_is_truth(&self) -> bool {
+        match &self.path {
+            Some(p) => is_script_path(p),
+            None => self.source_tab == SourceTab::Script,
+        }
+    }
+
+    /// The TOML pane's text is the current model's (no pending re-sync, no
+    /// parse error), so it can be edited/saved in place, keeping comments.
+    pub fn toml_in_sync(&self) -> bool {
+        !self.regen_toml && self.toml_error.is_none()
+    }
+
     /// Evaluate the Rhai script buffer into the model, refreshing the preview,
     /// the TOML pane and the inspector. On error the current model is kept.
     pub fn evaluate_script(&mut self) {
         // Files the script reads (data built-ins such as `csv()`, resolved
         // against the document's directory) become watched dependencies.
         let (result, data_files) = figs_core::deps::capture(|| {
-            figs_core::eval_script_in(&self.script_buffer, Some(&self.base_dir))
+            figs_core::eval_script_mapped(&self.script_buffer, Some(&self.base_dir))
         });
         match result {
-            Ok(raw) => {
+            Ok((raw, sites)) => {
                 self.model = raw;
+                self.script_sites = sites;
+                self.evaluated_script = Some(self.script_buffer.clone());
                 self.data_files = data_files;
                 self.script_error = None;
                 self.error = None;
@@ -232,6 +273,8 @@ impl FigsApp {
     // ---- file actions ----------------------------------------------------
 
     pub fn new_document(&mut self) {
+        self.history.clear();
+        self.drag = None;
         self.script_buffer = model::default_script();
         self.source_tab = SourceTab::Script;
         self.path = None;
@@ -285,6 +328,9 @@ impl FigsApp {
     /// scripts go to the Script tab and are evaluated, TOML to the TOML tab.
     /// The selection is kept when the node still exists.
     fn load_text(&mut self, text: String) {
+        self.history.clear();
+        self.drag = None;
+        self.nudge_group = None;
         self.disk_text = Some(text.clone());
         self.disk_conflict = None;
         self.toml_error = None;
@@ -300,7 +346,10 @@ impl FigsApp {
                     self.model = doc;
                     self.source_tab = SourceTab::Toml;
                     self.needs_rebuild = true;
-                    self.regen_toml = true;
+                    // Show the file as written (comments and all): it is the
+                    // model's text, and canvas moves patch it in place.
+                    self.toml_buffer = text;
+                    self.regen_toml = false;
                 }
                 // Keep the last good model; show the broken text and its error.
                 Err(e) => {
@@ -426,10 +475,13 @@ impl FigsApp {
     }
 
     /// Write the document. `.figs`/`.rhai` saves the script source; anything else
-    /// saves the lowered TOML document.
+    /// saves the lowered TOML document — the TOML pane's text as-is when it is
+    /// the model's (keeping its comments and layout), else re-serialized.
     fn write_to(&mut self, path: &std::path::Path) {
         let text = if is_script_path(path) {
             Ok(self.script_buffer.clone())
+        } else if self.toml_in_sync() && !self.script_is_truth() && !self.toml_buffer.is_empty() {
+            Ok(self.toml_buffer.clone())
         } else {
             model::to_toml(&self.model).map_err(|e| e.to_string())
         };
@@ -566,6 +618,21 @@ impl FigsApp {
                     }
                     if ui.button("Export TOML").clicked() {
                         self.export_toml();
+                    }
+                    ui.separator();
+                    if ui
+                        .add_enabled(self.history.can_undo(), egui::Button::new("Undo"))
+                        .on_hover_text("Undo the last canvas move (Ctrl+Z)")
+                        .clicked()
+                    {
+                        self.undo();
+                    }
+                    if ui
+                        .add_enabled(self.history.can_redo(), egui::Button::new("Redo"))
+                        .on_hover_text("Redo (Ctrl+Shift+Z)")
+                        .clicked()
+                    {
+                        self.redo();
                     }
                     ui.separator();
                     if ui.button("Insert Image").clicked() {

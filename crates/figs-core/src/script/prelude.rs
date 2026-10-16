@@ -42,6 +42,11 @@ struct Prelude {
 
 static PRELUDE: OnceLock<Prelude> = OnceLock::new();
 
+/// The prelude's source text (call sites inside it refer to its lines).
+pub(super) fn source() -> &'static str {
+    PRELUDE_SRC
+}
+
 fn fn_table(ast: &AST) -> FnTable {
     let mut t = FnTable::new();
     for f in ast.iter_functions() {

@@ -711,6 +711,49 @@ inspector and the live preview. Authoring flows Rhai → (TOML ↔ GUI) one way;
 a file directly and reloads it when it changes on disk (see
 [Watch mode & live reload](#watch-mode--live-reload)).
 
+### Canvas editing (drag to position)
+
+Children of a `stack` can be placed directly on the editor's canvas; the text
+source stays the truth, and every move is written back into it.
+
+- **Drag** a stack child to set its `x`/`y`. The preview updates live, a small
+  readout shows the offset (page units, or the parent's `viewbox` units), and
+  the edit is committed on release. Esc cancels a drag. Pressing on something
+  inside the selected node drags the selected node, so a selected container
+  can be moved by its content.
+- **Snapping**: edges and centre snap to the parent's content-box edges/centre
+  and to sibling edges within 5 screen pixels (a magenta guide shows the
+  match); hold **Alt** to place freely. A free drag is rounded to the precision
+  of one screen pixel (e.g. `0.01` cm); a snapped axis keeps up to 4 decimals,
+  so the alignment stays exact.
+- **Arrow keys** nudge the selected stack child by one *screen pixel* at the
+  current zoom, rounded down to a 1-2-5 step in page units (e.g. `0.02` cm),
+  so values stay short decimals; **Shift** nudges 10×. (A pixel of the output
+  DPI was rejected: at 300 dpi it gives steps like `0.00847` cm.) Nudges work
+  when the canvas has focus (click it) or no text field does.
+- **Undo / Redo** (Ctrl+Z, Ctrl+Shift+Z / Ctrl+Y, or the menu buttons) undo
+  canvas moves; a run of arrow presses on one node undoes as one step. Typing
+  in the source panes keeps its own undo; inspector edits are not recorded.
+- **Not draggable**: children of a `column`/`row` (their position is computed
+  by layout), the root, and a stack child on an axis where it *fills* the
+  stack (no size and no offset — giving it an offset would change its size).
+  The canvas shows why, and the cursor says no.
+
+Where the move is written:
+
+- **Script** (`.figs`): the offset is rewritten in the `.at(x, y)` / `.x(n)` /
+  `.y(n)` call that set it, e.g. `.at(6, 4)` → `.at(8.04, 5.21)`. The editor
+  records each call's source position during evaluation and only rewrites
+  plain number literals in your script. An axis whose value is an expression
+  or variable (`.at(k(), 1)`), or a node placed by a framework component
+  (`circle(cx, cy, r)`, `panels`, `scalebar`, …), is locked with a notice
+  such as "position is computed in script (line 9)" — the script is never
+  guessed at. A call inside your own `fn` places every node it makes, so
+  dragging one label of `labelled(...)` moves them all (the notice says so).
+  Evaluate pending script edits before dragging.
+- **TOML**: `x`/`y` are set in the node's table in place (via `toml_edit`), so
+  comments and formatting survive, and saving writes that text.
+
 ## Architecture
 
 ```
