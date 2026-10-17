@@ -1,0 +1,65 @@
+// Figure kit: lab glassware icons, vector notes, colour bars and cycle
+// arrows — recurring figure furniture as functions, no coordinates:
+//   labware(kind, #{ level, liquid })   line-art glassware of one height
+//   vector_note(item, label)            an arrow across a panel (a dipole)
+//   colorbar(colors, labels, opts)      a colour scale with its labels
+//   cycle_arrows(item, opts)            two curved arrows around a panel
+// The "molecule" is a drawn placeholder; all names and values are fictional.
+
+// A hexagon `2 r` wide (a placeholder structure).
+fn ring(r) {
+    let pts = [];
+    for i in 0..6 {
+        let t = (60.0 * i + 30.0) * PI() / 180.0;
+        pts.push([r + r * t.cos(), r + r * t.sin()]);
+    }
+    path(pts).closed().stroke_width(0.04).width(2 * r).height(2 * r)
+}
+
+let magma = ["#000004", "#51127c", "#b73779", "#fc8961", "#fcfdbf"];
+
+page("double", vbox([
+    // Every kind, on one axis.
+    scheme([
+        step(labware("vial", #{ level: 0.6 }), "vial"),
+        step(labware("tube", #{ level: 0.45 }), "tube"),
+        step(labware("flask", #{ level: 0.5 }), "flask"),
+        step(labware("erlenmeyer", #{ level: 0.4 }), "erlenmeyer"),
+        step(labware("beaker", #{ level: 0.55 }), "beaker"),
+        step(labware("funnel"), "funnel"),
+        step(labware("dish", #{ level: 0.5, liquid: "#f2d17a" }), "dish"),
+        step(labware("cuvette", #{ level: 0.7, liquid: "#e58f75" }), "cuvette"),
+        step(labware("syringe", #{ level: 0.6 }), "syringe"),
+    ], #{ gap: 0.35 }),
+    hsep(0.3),
+    // A procedure drawn with them.
+    scheme([
+        step(labware("flask", #{ level: 0.5 }), "Dissolve A"),
+        arrow_step(#{ above: "stir", below: "2 h" }),
+        step(labware("funnel", #{ level: 0.5 }), "Filter"),
+        arrow_step("wash ×3"),
+        step(labware("dish", #{ level: 0.35, liquid: "#d9c7a3" }), "Dry"),
+        arrow_step("dissolve"),
+        step(labware("cuvette", #{ level: 0.75, liquid: "#e58f75" }), "Measure"),
+    ], #{ arrow_length: "fill" }),
+    hsep(0.3),
+    grid(4, panels([
+        // A dipole across a structure, its label beyond the head.
+        vector_note(ring(0.9), markup("*μ*")),
+        // A reversible switch: two arcs around the structure.
+        cycle_arrows(ring(0.7), #{ colors: ["#7b2cbf", "#2a9d8f"], labels: ["UV", "Vis"] }),
+        // A map with its colour scale beside it.
+        side(image("img/sunlit.png"),
+             colorbar(magma, [0, 50, 100], #{ direction: "vertical", length: 2.2 }),
+             #{ width: "auto" }),
+    ]) + [
+        // Scales across a column: a gradient and discrete classes; arcs
+        // around a label.
+        vbox([
+            colorbar(magma, ["low", "", "high"], #{ length: "fill", title: "Intensity" }),
+            colorbar(["#2a9d8f", "#e9c46a", "#e76f51"], ["A", "B", "C"],
+                     #{ discrete: true, length: "fill", title: "Phase" }),
+            cycle_arrows("A ⇄ B", #{ direction: "ccw", labels: ["heat", "cool"] }),
+        ]),
+    ]),
+]).pad(0.2))

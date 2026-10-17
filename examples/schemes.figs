@@ -4,7 +4,7 @@
 // above / below (a fixed length, "fill" to share the spare width, or the ⇌
 // pair). A caption is balanced by an invisible copy on the other side, so
 // every node and arrow stays on the axis. `scheme_v` runs down the page.
-// The "molecules" and "icons" are drawn shapes; an image works the same
+// The "molecules" are drawn shapes, the icons `labware(..)`; an image works the same
 // (`image("compound_a.png").height(1.5)`: its width follows its aspect).
 // All names and conditions are fictional.
 
@@ -18,12 +18,11 @@ fn ring(r) {
     path(pts).closed().stroke_width(0.04).width(2 * r).height(2 * r)
 }
 
-// A round-bottom flask / a funnel / a dish, about 1 cm (placeholder icons).
-fn flask() { col([rect().width(0.25).height(0.4).stroke("#000000").stroke_width(0.03),
-                  circle(0.45).stroke("#000000").stroke_width(0.03)]).cross("center") }
-fn funnel() { path([[0, 0], [1, 0], [0.6, 0.6], [0.6, 1.1], [0.4, 1.1], [0.4, 0.6]]).closed()
-                  .stroke_width(0.03).width(1).height(1.1) }
-fn dish() { rect().width(1.2).height(0.35).radius(0.08).stroke("#000000").stroke_width(0.03) }
+// Lab icons from the framework: line-art glassware of one height
+// (`labware_size()`), optionally with liquid.
+let flask = labware("flask", #{ level: 0.5 });
+let funnel = labware("funnel");
+let dish = labware("dish", #{ level: 0.3, liquid: "#d9c7a3" });
 
 page("double", vbox([
     // A reaction: reagents, a conditions arrow, an equilibrium between isomers.
@@ -39,21 +38,21 @@ page("double", vbox([
     hsep(0.4),
     // The arrows share the spare width ("fill"): the scheme spans the page.
     scheme([
-        step(flask(), "Step 1: mix"),
+        step(flask, "Step 1: mix"),
         arrow_step("Solvent X"),
-        step(funnel(), "Step 2: filter"),
+        step(funnel, "Step 2: filter"),
         arrow_step(#{ below: "40 °C, 12 h" }),
-        step(dish(), "Step 3: dry"),
+        step(dish, "Step 3: dry"),
     ], #{ arrow_length: "fill" }),
     hsep(0.4),
     // Down the page: captions beside the icons, conditions beside the arrows.
     hbox([
         scheme_v([
-            step(flask(), #{ right: "Dissolve A in THF" }),
+            step(flask, #{ right: "Dissolve A in THF" }),
             arrow_step("stir, 2 h"),
-            step(funnel(), #{ right: "Filter" }),
+            step(funnel, #{ right: "Filter" }),
             arrow_step(#{ above: "wash ×3", below: "cold" }),
-            step(dish(), #{ right: "Dry in vacuo" }),
+            step(dish, #{ right: "Dry in vacuo" }),
         ]),
         scheme_v([
             step(ring(0.5), "Compound A"),

@@ -141,6 +141,50 @@ fn scheme_label_gap() { style_get("scheme_label_gap", caption_gap()) }
 fn side_width() { style_get("side_width", 0.4) }
 fn side_gap() { style_get("side_gap", gap()) }
 
+// --- Figure kit: lab icons, vector notes, colour bars, cycle arrows (see
+// "Figure kit" below) ---
+
+// `labware`: icon height (cm; 1.2 cm at 8 pt — a dish is 0.42 of it), line
+// colour ("" = `fg()`, black), line width (cm), liquid colour and the
+// default fill level (0 = empty .. 1 = full).
+fn labware_size() { style_get("labware_size", base_size() * 0.15) }
+fn labware_stroke() {
+    let f = fg();
+    style_get("labware_stroke", if f == "" { "#000000" } else { f })
+}
+fn labware_stroke_width() { style_get("labware_stroke_width", base_size() * 0.0045) }
+fn labware_liquid() { style_get("labware_liquid", "#9cc8ea") }
+fn labware_level() { style_get("labware_level", 0) }
+
+// `vector_note`: arrow colour (the label's too), width (cm), label size (pt)
+// and the clear space around the label (cm).
+fn vector_note_color() { style_get("vector_note_color", accent()) }
+fn vector_note_width() { style_get("vector_note_width", annotation_width() * 1.5) }
+fn vector_note_size() { style_get("vector_note_size", label_size()) }
+fn vector_note_gap() { style_get("vector_note_gap", caption_gap() * 0.5) }
+
+// `colorbar`: length (cm, or "fill": the space it is given), thickness (cm),
+// label size (pt), gap between bar and labels (cm), border colour ("" for
+// none) and width (cm).
+fn colorbar_length() { style_get("colorbar_length", base_size() * 0.4) }
+fn colorbar_thickness() { style_get("colorbar_thickness", base_size() * 0.03) }
+fn colorbar_label_size() { style_get("colorbar_label_size", base_size()) }
+fn colorbar_gap() { style_get("colorbar_gap", caption_gap() * 0.5) }
+fn colorbar_border() {
+    let f = fg();
+    style_get("colorbar_border", if f == "" { "#000000" } else { f })
+}
+fn colorbar_border_width() { style_get("colorbar_border_width", plot_line_width()) }
+
+// `cycle_arrows`: arrow colour (both, unless `colors` is given), width (cm),
+// how far the arcs bulge out from the panel (cm), how much of the panel's
+// side they span (a fraction), and the gap to their labels (cm).
+fn cycle_arrow_color() { style_get("cycle_arrow_color", accent()) }
+fn cycle_arrow_width() { style_get("cycle_arrow_width", annotation_width()) }
+fn cycle_arrow_depth() { style_get("cycle_arrow_depth", base_size() * 0.04) }
+fn cycle_arrow_span() { style_get("cycle_arrow_span", 0.7) }
+fn cycle_arrow_gap() { style_get("cycle_arrow_gap", caption_gap() * 0.5) }
+
 // ---------------------------------------------------------------------------
 // Style presets
 // ---------------------------------------------------------------------------
@@ -219,6 +263,11 @@ fn style_keys() {
         "scalebar_corner", "scalebar_inset", "scalebar_halo", "scalebar_frac_inset",
         "overlay_inset", "overlay_gap", "scheme_gap", "scheme_arrow_length",
         "scheme_arrow_width", "scheme_label_size", "scheme_label_gap", "side_width", "side_gap",
+        "labware_size", "labware_stroke", "labware_stroke_width", "labware_liquid", "labware_level",
+        "vector_note_color", "vector_note_width", "vector_note_size", "vector_note_gap",
+        "colorbar_length", "colorbar_thickness", "colorbar_label_size", "colorbar_gap",
+        "colorbar_border", "colorbar_border_width", "cycle_arrow_color", "cycle_arrow_width",
+        "cycle_arrow_depth", "cycle_arrow_span", "cycle_arrow_gap",
         // plots
         "plot_line_width", "series_width", "palette", "tick_length", "tick_direction",
         "minor_ticks", "max_ticks", "marker_size", "marker_open", "marker_stroke_width",
@@ -227,7 +276,7 @@ fn style_keys() {
         "plot_frame_box", "plot_font", "tick_label_size", "tick_label_font", "tick_label_pad",
         "axis_label_size", "axis_label_font", "axis_label_pad", "legend_size", "legend_font",
         "plot_title_font", "xtick_label_pad", "ytick_label_pad", "tick_label_pad_mode",
-        "xlabel_pad", "ylabel_pad", "xlabel_offset", "ylabel_offset",
+        "xlabel_pad", "ylabel_pad", "xlabel_offset", "ylabel_offset", "ytick_label_align",
         "inset_size", "inset_corner", "inset_pad", "inset_text_size", "inset_bg",
         "inset_max_ticks",
         // colours (theme)
@@ -250,7 +299,7 @@ fn style_keys() {
         "section_title_glow", "section_title_shadow", "section_bar_shadow", "table_pad_x",
         "table_pad_y", "subheading_mark_bold", "subheading_mark_size", "bullet_mark_size",
         "table_font", "table_header_font", "separator_offset", "section_title_baseline",
-        "poster_symbol_font", "block_gap", "block_title_gap",
+        "poster_symbol_font", "block_gap", "block_title_gap", "bullet_pitch", "table_rule_mode",
     ]
 }
 
@@ -436,8 +485,16 @@ fn ytick_label_pad() { style_get("ytick_label_pad", tick_label_pad()) }
 // starts their height above it (~0.716 em in Arial / Helvetica), i.e. ink
 // gap = pad − 0.716 × size. The y tick labels are always measured to the
 // right edge of their box (the end of the label's advance) and centred on
-// their tick by box; category names (which wrap in their slots) by box.
+// their tick as `ytick_label_align()` says; category names (which wrap in
+// their slots) by box.
 fn tick_label_pad_mode() { style_get("tick_label_pad_mode", "box") }
+
+// How a y tick label is centred on its tick: "cap_middle" (default) — the
+// middle of its digits' height (the core "cap_middle" anchor: half the
+// font's cap height above the baseline, which digits share in lining
+// figures), so the number looks centred whatever the font's ascent and
+// descent; "box" — the middle of its line box (before 2026-10).
+fn ytick_label_align() { style_get("ytick_label_align", "cap_middle") }
 
 // Axis labels (`xlabel` / `ylabel`): size (pt), font, and their gap to the
 // tick labels (cm; the turned y label sits twice that away).
@@ -1739,6 +1796,413 @@ fn scheme_equilibrium_fill(eo, t, g, vertical) {
 }
 
 // ---------------------------------------------------------------------------
+// Figure kit (lab icons, vector notes, colour bars, cycle arrows)
+// ---------------------------------------------------------------------------
+//
+// Recurring figure furniture as functions: nothing takes coordinates. The
+// icons are simple line art drawn with core paths and rects on a common
+// height (`labware_size()`), so they line up in a `scheme`; the notes, bars
+// and arrows size themselves from hooks and the panel they are given.
+
+// The kinds `labware` draws.
+fn labware_kinds() {
+    ["vial", "tube", "flask", "erlenmeyer", "beaker", "funnel", "dish", "cuvette", "syringe"]
+}
+
+// `labware(kind)` / `labware(kind, opts)`: a piece of lab glassware as line
+// art, `labware_size()` tall (a dish 0.42 of that), its width following its
+// shape: "vial" (capped), "tube" (test tube), "flask" (round-bottom),
+// "erlenmeyer", "beaker", "funnel", "dish" (Petri dish, side view),
+// "cuvette", "syringe" (needle down). Options:
+//   level         liquid fill, 0 (empty) .. 1 (full) of the vessel
+//                 (default `labware_level()`)
+//   liquid        liquid colour or gradient (default `labware_liquid()`)
+//   size          height, cm (default `labware_size()`)
+//   stroke        line colour (default `labware_stroke()`)
+//   stroke_width  line width, cm (default `labware_stroke_width()`)
+//   lid           dish only: draw the lid (default true)
+// A `stack` of fixed size (its lines inside the box): use it like an image,
+// `step(labware("flask", #{ level: 0.5 }), "Step 1")`.
+fn labware(kind) { labware(kind, #{}) }
+fn labware(kind, opts) {
+    shape_opts("labware", opts, ["level", "liquid", "size", "stroke", "stroke_width", "lid"]);
+    if !labware_kinds().contains(kind) {
+        throw `labware(): unknown kind "${kind}" (${list_names(labware_kinds())})`;
+    }
+    let lv = plot_opt(opts, "level", labware_level());
+    if !plot_finite(lv) || lv < 0 || lv > 1 {
+        throw `labware(): level must be a number from 0 to 1 (got ${lv})`;
+    }
+    let size = plot_opt(opts, "size", labware_size());
+    let sw = plot_opt(opts, "stroke_width", labware_stroke_width());
+    if !plot_finite(size) || !plot_finite(sw) || !(sw >= 0) || !(size > sw * 2) {
+        throw `labware(): size must be a length larger than the line width (got size ${size}, stroke_width ${sw})`;
+    }
+    let lid = plot_opt(opts, "lid", true);
+    if kind != "dish" && opts.contains("lid") { throw `labware(): lid is a "dish" option`; }
+    // Unit box (height 1) -> cm: scale k, offset o (half a line in).
+    let k = (size - sw).to_float();
+    let o = sw.to_float() / 2.0;
+    let g = labware_shape(kind, lv.to_float(), lid);
+    let ink = plot_opt(opts, "stroke", labware_stroke());
+    let wet = plot_opt(opts, "liquid", labware_liquid());
+    let parts = [];
+    for p in g.liquid { parts.push(lw_node(p, k, o).fill(wet)); }
+    for p in g.lines {
+        parts.push(lw_node(p, k, o).stroke(ink).stroke_width(sw * p.weight).join("round").cap("round"));
+    }
+    for p in g.solid { parts.push(lw_node(p, k, o).fill(ink)); }
+    stack(parts).width(g.w * k + sw).height(g.h * k + sw)
+}
+
+// A drawing instruction in the unit box: #{ pts, arc (optional: [r, x, y,
+// sweep, large] after `pts`, then `rest` points), closed, weight }.
+fn lw_shape(pts, closed) { #{ pts: pts, arc: (), rest: [], closed: closed, weight: 1.0 } }
+fn lw_thin(pts) { #{ pts: pts, arc: (), rest: [], closed: false, weight: 0.6 } }
+fn lw_arced(pts, arc, rest, closed) { #{ pts: pts, arc: arc, rest: rest, closed: closed, weight: 1.0 } }
+
+// Shape `p` as a core path, its unit points scaled by `k` and moved by `o`.
+fn lw_node(p, k, o) {
+    let q = [];
+    for v in p.pts { q.push([o + v[0] * k, o + v[1] * k]); }
+    let n = path(q);
+    if type_of(p.arc) != "()" {
+        let a = p.arc;
+        n = n.arc(a[0] * k, o + a[1] * k, o + a[2] * k, #{ sweep: a[3], large: a[4] });
+    }
+    for v in p.rest { n = n.to(o + v[0] * k, o + v[1] * k); }
+    if p.closed { n.closed() } else { n }
+}
+
+// The circle segment of radius `r` about (cx, cy) below the line y = `yl`
+// (a liquid in a round bottom), as a closed shape.
+fn lw_segment(cx, cy, r, yl) {
+    let d = yl - cy;
+    let hw = (r * r - d * d).max(0.0).sqrt();
+    lw_arced([[cx - hw, yl]], [r, cx + hw, yl, "ccw", yl < cy], [], true)
+}
+
+// The geometry of `kind` in a unit box (height 1, or less for a dish):
+// #{ w, h, liquid: [..], lines: [..], solid: [..] } of `lw_*` shapes, with
+// the liquid at level `lv`.
+fn labware_shape(kind, lv, lid) {
+    let liquid = [];
+    let lines = [];
+    let solid = [];
+    let w = 0.0;
+    let h = 1.0;
+    if kind == "vial" {
+        w = 0.46;
+        if lv > 0.0 {
+            let yl = 1.0 - lv * 0.78;
+            liquid.push(lw_shape([[0.04, yl], [0.42, yl], [0.42, 0.95], [0.38, 1.0], [0.08, 1.0], [0.04, 0.95]], true));
+        }
+        lines.push(lw_shape([[0.04, 0.2], [0.42, 0.2], [0.42, 0.95], [0.38, 1.0], [0.08, 1.0], [0.04, 0.95]], true));
+        solid.push(lw_shape([[0.09, 0.0], [0.37, 0.0], [0.37, 0.2], [0.09, 0.2]], true));
+    } else if kind == "tube" {
+        w = 0.3;
+        if lv > 0.0 {
+            let yl = 0.96 - lv * 0.9;
+            liquid.push(if yl >= 0.86 { lw_segment(0.15, 0.86, 0.1, yl) }
+                        else { lw_arced([[0.05, yl], [0.05, 0.86]], [0.1, 0.25, 0.86, "ccw", false], [[0.25, yl]], true) });
+        }
+        lines.push(lw_arced([[0.0, 0.0], [0.05, 0.04], [0.05, 0.86]], [0.1, 0.25, 0.86, "ccw", false],
+                            [[0.25, 0.04], [0.3, 0.0]], false));
+    } else if kind == "flask" {
+        // A sphere (r 0.38 about (0.4, 0.62)) under a neck 0.14 wide.
+        w = 0.8;
+        let yj = 0.62 - (0.38 * 0.38 - 0.07 * 0.07).sqrt();
+        if lv > 0.0 { liquid.push(lw_segment(0.4, 0.62, 0.38, 1.0 - lv * (1.0 - yj - 0.04))); }
+        lines.push(lw_arced([[0.29, 0.0], [0.33, 0.04], [0.33, yj]], [0.38, 0.47, yj, "ccw", true],
+                            [[0.47, 0.04], [0.51, 0.0]], false));
+    } else if kind == "erlenmeyer" {
+        w = 0.8;
+        if lv > 0.0 {
+            let yl = (1.0 - lv * 0.62).min(0.95);
+            let xl = 0.3 - (yl - 0.36) / 0.59 * 0.27;
+            liquid.push(lw_shape([[xl, yl], [0.8 - xl, yl], [0.77, 0.95], [0.73, 1.0], [0.07, 1.0], [0.03, 0.95]], true));
+        }
+        lines.push(lw_shape([[0.27, 0.0], [0.3, 0.04], [0.3, 0.36], [0.03, 0.95], [0.07, 1.0], [0.73, 1.0],
+                             [0.77, 0.95], [0.5, 0.36], [0.5, 0.04], [0.53, 0.0]], false));
+    } else if kind == "beaker" {
+        w = 0.8;
+        if lv > 0.0 {
+            let yl = 1.0 - lv * 0.9;
+            liquid.push(lw_shape([[0.07, yl], [0.73, yl], [0.73, 0.97], [0.7, 1.0], [0.1, 1.0], [0.07, 0.97]], true));
+        }
+        lines.push(lw_shape([[0.0, 0.0], [0.07, 0.07], [0.07, 0.97], [0.1, 1.0], [0.7, 1.0], [0.73, 0.97],
+                             [0.73, 0.04], [0.77, 0.0]], false));
+        for y in [0.4, 0.58, 0.76] { lines.push(lw_thin([[0.07, y], [0.2, y]])); }
+    } else if kind == "funnel" {
+        w = 0.8;
+        if lv > 0.0 {
+            let yl = 0.5 - lv * 0.46;
+            let xl = 0.34 - (0.5 - yl) / 0.5 * 0.32;
+            liquid.push(lw_shape([[xl, yl], [0.8 - xl, yl], [0.46, 0.5], [0.34, 0.5]], true));
+        }
+        lines.push(lw_shape([[0.02, 0.0], [0.78, 0.0], [0.46, 0.5], [0.46, 1.0], [0.34, 0.92], [0.34, 0.5]], true));
+    } else if kind == "dish" {
+        w = 1.3;
+        h = 0.42;
+        if lv > 0.0 {
+            let yl = 0.42 - lv * 0.3;
+            liquid.push(lw_shape([[0.06, yl], [1.24, yl], [1.24, 0.42], [0.06, 0.42]], true));
+        }
+        lines.push(lw_shape([[0.06, 0.1], [0.06, 0.42], [1.24, 0.42], [1.24, 0.1]], false));
+        if lid { lines.push(lw_shape([[0.0, 0.2], [0.0, 0.0], [1.3, 0.0], [1.3, 0.2]], false)); }
+    } else if kind == "cuvette" {
+        w = 0.42;
+        if lv > 0.0 {
+            let yl = 1.0 - lv * 0.86;
+            liquid.push(lw_shape([[0.04, yl], [0.38, yl], [0.38, 1.0], [0.04, 1.0]], true));
+        }
+        lines.push(lw_shape([[0.04, 0.0], [0.38, 0.0], [0.38, 1.0], [0.04, 1.0]], true));
+        lines.push(lw_thin([[0.04, 0.1], [0.38, 0.1]]));
+        for x in [0.11, 0.31] { lines.push(lw_thin([[x, 0.1], [x, 1.0]])); }
+    } else if kind == "syringe" {
+        w = 0.42;
+        if lv > 0.0 {
+            let yl = 0.8 - lv * 0.5;
+            liquid.push(lw_shape([[0.09, yl], [0.33, yl], [0.33, 0.8], [0.09, 0.8]], true));
+        }
+        lines.push(lw_shape([[0.21, 0.04], [0.21, 0.24]], false));            // rod
+        lines.push(lw_shape([[0.0, 0.16], [0.42, 0.16]], false));             // flange
+        lines.push(lw_shape([[0.09, 0.16], [0.33, 0.16], [0.33, 0.8], [0.09, 0.8]], true));
+        lines.push(lw_shape([[0.15, 0.8], [0.27, 0.8], [0.24, 0.86], [0.18, 0.86]], true));
+        lines.push(lw_thin([[0.21, 0.86], [0.21, 1.0]]));                      // needle
+        for y in [0.42, 0.53, 0.64] { lines.push(lw_thin([[0.09, y], [0.15, y]])); }
+        solid.push(lw_shape([[0.07, 0.0], [0.35, 0.0], [0.35, 0.04], [0.07, 0.04]], true));
+        solid.push(lw_shape([[0.09, 0.24], [0.33, 0.24], [0.33, 0.3], [0.09, 0.3]], true));
+    }
+    #{ w: w, h: h, liquid: liquid, lines: lines, solid: solid }
+}
+
+// `vector_note(item, label)` / `(item, label, opts)`: a straight arrow drawn
+// across `item` (a molecule image, a crystal photo: a dipole, a field, an
+// axis), its `label` (a string, spans or a node; "" for none) just beyond the
+// arrow head, in the arrow's colour (a string label haloed in `label_halo()`,
+// as panel labels are). Positions are fractions of the item's
+// box, not layout: the arrow fills a unit viewbox over the item, which keeps
+// the label inside the item (`contain`: the arrow's box gives up what the
+// label would hang out by). Options:
+//   from, to     [fx, fy] fractions (default [0.2, 0.75] -> [0.8, 0.25], a
+//                left-to-right diagonal upwards)
+//   color        arrow and label colour (default `vector_note_color()`)
+//   width        line width, cm (default `vector_note_width()`)
+//   size         label size, pt (default `vector_note_size()`)
+//   gap          clear space around the label, cm (default `vector_note_gap()`)
+//   head         "end" (default), "both", "start", "none"
+//   head_size, head_width  as for the core arrow
+fn vector_note(item, label) { vector_note(item, label, #{}) }
+fn vector_note(item, label, opts) {
+    shape_opts("vector_note", opts, ["from", "to", "color", "width", "size", "gap", "head",
+                                     "head_size", "head_width"]);
+    let f = plot_numbers("vector_note", "`from`", plot_opt(opts, "from", [0.2, 0.75]));
+    let t = plot_numbers("vector_note", "`to`", plot_opt(opts, "to", [0.8, 0.25]));
+    if f.len() != 2 || t.len() != 2 { throw "vector_note(): `from` and `to` are [fx, fy] fractions"; }
+    let dx = t[0] - f[0];
+    let dy = t[1] - f[1];
+    let m = if dx.abs() > dy.abs() { dx.abs() } else { dy.abs() };
+    if m == 0.0 { throw "vector_note(): `from` and `to` coincide"; }
+    let head = plot_opt(opts, "head", "end");
+    if !["end", "both", "start", "none"].contains(head) {
+        throw `vector_note(): unknown head "${head}" (end, both, start, none)`;
+    }
+    let c = plot_opt(opts, "color", vector_note_color());
+    let a = arrow(f[0], f[1], t[0], t[1]).viewbox(0, 0, 1, 1).stroke(c)
+        .stroke_width(plot_opt(opts, "width", vector_note_width())).head(head);
+    if opts.contains("head_size") { a = a.head_size(opts.head_size); }
+    if opts.contains("head_width") { a = a.head_width(opts.head_width); }
+    let layers = [a];
+    let none = type_of(label) == "()" || (type_of(label) == "string" && label == "");
+    if !none {
+        let lt = type_of(label);
+        let lab = if lt == "string" || poster_is_rich(label) {
+            // Haloed like a panel label, so it reads over the drawing.
+            let t = text(label).size(plot_opt(opts, "size", vector_note_size())).color(c);
+            let hc = label_halo();
+            if hc == "" { t } else { halo(t, hc, label_halo_width()) }
+        } else if lt == "Node" { label }
+        else { throw `vector_note(): the label must be a string, spans or a node (got ${lt})`; };
+        // Beyond the head: the label's box touches the tip from the side the
+        // arrow comes from (a corner for a diagonal, an edge's middle for a
+        // level or upright arrow).
+        let ax = 0.5 - 0.5 * dx / m;
+        let ay = 0.5 - 0.5 * dy / m;
+        layers.push(col([lab]).pad(plot_opt(opts, "gap", vector_note_gap())).at(t[0], t[1]).anchor(ax, ay));
+    }
+    // Centred in whatever box it is given, hugging the item (a stretched
+    // stack would spread the arrow past a fixed-size item).
+    col([stack([as_node(item), stack(layers).viewbox(0, 0, 1, 1).contain()])])
+        .main("center").cross("center")
+}
+
+// `colorbar(fill, labels)` / `(fill, labels, opts)`: a colour scale — a bar
+// filled with `fill` (an array of colours, spread evenly as a gradient, or
+// of [offset, colour] stops; or a ready paint, `linear(..)`) with `labels`
+// (strings, numbers or spans; "" for a gap) spread evenly along it: the
+// first at the start (left / bottom), the last at the end, flush with the
+// bar's ends, the others centred on their place. Options:
+//   direction  "horizontal" (default; labels below) or "vertical" (low at
+//              the bottom; labels right)
+//   length     cm, or "fill" (the length its parent gives it); default
+//              `colorbar_length()`
+//   thickness  cm (default `colorbar_thickness()`)
+//   size       label size, pt (default `colorbar_label_size()`)
+//   gap        bar to labels, cm (default `colorbar_gap()`)
+//   border     colour ("" for none; default `colorbar_border()`)
+//   discrete   true: one block per colour instead of a gradient
+//   title      a caption above the bar (a string, spans or a node)
+fn colorbar(fill, labels) { colorbar(fill, labels, #{}) }
+fn colorbar(fill, labels, opts) {
+    shape_opts("colorbar", opts, ["direction", "length", "thickness", "size", "gap", "border",
+                                  "discrete", "title"]);
+    let dir = plot_opt(opts, "direction", "horizontal");
+    if dir != "horizontal" && dir != "vertical" {
+        throw `colorbar(): unknown direction "${dir}" (horizontal, vertical)`;
+    }
+    let vertical = dir == "vertical";
+    if type_of(labels) != "array" || poster_is_rich(labels) { labels = [labels]; }
+    let th = plot_opt(opts, "thickness", colorbar_thickness());
+    let len = plot_opt(opts, "length", colorbar_length());
+    if type_of(len) != "string" || len != "fill" {
+        if !plot_finite(len) || !(len > 0) { throw `colorbar(): length must be a length in cm or "fill" (got ${len})`; }
+    }
+    let border = plot_opt(opts, "border", colorbar_border());
+    // The bar: a gradient (or solid) rect, or a row / column of blocks.
+    let bar = ();
+    if plot_opt(opts, "discrete", false) {
+        if type_of(fill) != "array" || fill.len() == 0 { throw "colorbar(): discrete needs an array of colours"; }
+        let blocks = [];
+        for x in fill {
+            let col_ = if type_of(x) == "array" { x[1] } else { x };
+            blocks.push(rect().fill(col_).flex(1));
+        }
+        if vertical { blocks.reverse(); }
+        bar = if vertical { col(blocks).stretch() } else { row(blocks).stretch() };
+        // The border over the blocks (a container's own is painted under them).
+        if border != "" {
+            bar = stack([bar, rect().stroke(border).stroke_width(colorbar_border_width())]);
+        }
+    } else {
+        let paint = if type_of(fill) == "array" { linear(if vertical { 270 } else { 0 }, fill) } else { fill };
+        bar = rect().fill(paint);
+        if border != "" { bar = bar.stroke(border).stroke_width(colorbar_border_width()); }
+    }
+    bar = if vertical { bar.width(th) } else { bar.height(th) };
+    // The labels: a unit viewbox stack along the bar (it measures as its
+    // largest label across).
+    let n = labels.len();
+    let size = plot_opt(opts, "size", colorbar_label_size());
+    let ls = [];
+    for i in 0..n {
+        let x = labels[i];
+        if type_of(x) == "string" && x == "" { continue; }
+        if type_of(x) == "i64" || type_of(x) == "f64" { x = `${x}`; }
+        let t = scheme_text("colorbar", x, size, "center");
+        let p = if n == 1 { 0.5 } else { i.to_float() / (n - 1).to_float() };
+        let e = if n == 1 { 0.5 } else if i == 0 { 0.0 } else if i == n - 1 { 1.0 } else { 0.5 };
+        ls.push(if vertical { t.at(0, 1.0 - p).anchor(0, if e == 0.5 { "cap_middle" } else { 1.0 - e }) }
+                else { t.at(p, 0).anchor(e, 0) });
+    }
+    let g = plot_opt(opts, "gap", colorbar_gap());
+    let fixed = type_of(len) != "string";
+    let body = if vertical {
+        let r = row([bar, stack(ls).viewbox(0, 0, 1, 1)]).spacing(g).stretch();
+        if fixed { r.height(len) } else { r }
+    } else {
+        let c = col([bar, stack(ls).viewbox(0, 0, 1, 1)]).spacing(g).stretch();
+        if fixed { c.width(len) } else { c }
+    };
+    let title = plot_opt(opts, "title", ());
+    if type_of(title) == "()" { return body; }
+    let head = scheme_text("colorbar", title, size, if vertical { "start" } else { "center" });
+    // A filling bar fills what is left under its title.
+    if !fixed { return col([head, body.flex(1)]).spacing(g).stretch(); }
+    col([head, body]).spacing(g).cross(if vertical { "start" } else { "center" })
+}
+
+// `cycle_arrows(item)` / `(item, opts)`: two curved arrows around `item` (a
+// panel, a structure, or a string: a label) — a rotation, a reversible
+// switch. Above and below it by default, both turning one way, each spanning
+// `cycle_arrow_span()` of the item's side and bulging `cycle_arrow_depth()`
+// out; labels optional, beside each arrow in its colour. Options:
+//   direction  "cw" (default) or "ccw"
+//   sides      "top-bottom" (default) or "left-right"
+//   colors     [first, second] (top/left first), or `color` for both
+//              (default `cycle_arrow_color()`)
+//   labels     [first, second] (strings, spans or nodes; "" / () for none)
+//   width      line width, cm (default `cycle_arrow_width()`)
+//   depth      cm (default `cycle_arrow_depth()`); span: a fraction
+//   gap        arrow to label, cm (default `cycle_arrow_gap()`)
+//   size       label size, pt (default `base_size()`)
+// The arcs are core `curved_arrow`s in unit viewboxes, so they follow the
+// item's size.
+fn cycle_arrows(item) { cycle_arrows(item, #{}) }
+fn cycle_arrows(item, opts) {
+    shape_opts("cycle_arrows", opts, ["direction", "sides", "colors", "color", "labels", "width",
+                                      "depth", "span", "gap", "size"]);
+    let dir = plot_opt(opts, "direction", "cw");
+    if dir != "cw" && dir != "ccw" { throw `cycle_arrows(): unknown direction "${dir}" (cw, ccw)`; }
+    let sides = plot_opt(opts, "sides", "top-bottom");
+    if sides != "top-bottom" && sides != "left-right" {
+        throw `cycle_arrows(): unknown sides "${sides}" (top-bottom, left-right)`;
+    }
+    let c = plot_opt(opts, "color", cycle_arrow_color());
+    let cs = plot_opt(opts, "colors", [c, c]);
+    if type_of(cs) != "array" || cs.len() != 2 { throw "cycle_arrows(): colors must be [first, second]"; }
+    let labels = plot_opt(opts, "labels", [(), ()]);
+    if type_of(labels) != "array" || labels.len() != 2 || poster_is_rich(labels) {
+        throw "cycle_arrows(): labels must be [first, second]";
+    }
+    let span = plot_opt(opts, "span", cycle_arrow_span());
+    if !plot_finite(span) || !(span > 0) || span > 1 { throw `cycle_arrows(): span must be a fraction in (0, 1] (got ${span})`; }
+    let a = (1.0 - span) / 2.0;
+    let b = 1.0 - a;
+    let w = plot_opt(opts, "width", cycle_arrow_width());
+    let depth = plot_opt(opts, "depth", cycle_arrow_depth());
+    let lr = sides == "left-right";
+    // Clockwise chords (the item side of each band), bulging outwards by a
+    // positive bend; anticlockwise runs them backwards, bent the other way.
+    let chords = if lr { [[1.0, b, 1.0, a], [0.0, a, 0.0, b]] } else { [[a, 1.0, b, 1.0], [b, 0.0, a, 0.0]] };
+    let bend = 0.75;
+    let bands = [];
+    for i in 0..2 {
+        let q = chords[i];
+        let arc = if dir == "cw" { curved_arrow(q[0], q[1], q[2], q[3], bend) }
+                  else { curved_arrow(q[2], q[3], q[0], q[1], -bend) };
+        arc = arc.viewbox(0, 0, 1, 1).stroke(cs[i]).stroke_width(w);
+        bands.push(if lr { arc.width(depth) } else { arc.height(depth) });
+    }
+    let size = plot_opt(opts, "size", base_size());
+    let labs = [];
+    for i in 0..2 {
+        let x = labels[i];
+        let none = type_of(x) == "()" || (type_of(x) == "string" && x == "");
+        labs.push(if none { () } else {
+            let t = type_of(x);
+            if t == "string" || poster_is_rich(x) { text(x).size(size).color(cs[i]).center() }
+            else if t == "Node" { x }
+            else { throw `cycle_arrows(): a label must be a string, spans or a node (got ${t})`; }
+        });
+    }
+    let g = plot_opt(opts, "gap", cycle_arrow_gap());
+    let n = if type_of(item) == "string" || poster_is_rich(item) { fg_text(item).size(size) } else { as_node(item) };
+    let parts = [];
+    if lr {
+        if type_of(labs[0]) != "()" { parts.push(col([labs[0]]).main("center")); parts.push(rect().width(g)); }
+        parts += [bands[0], col([n]).main("center").cross("center"), bands[1]];
+        if type_of(labs[1]) != "()" { parts.push(rect().width(g)); parts.push(col([labs[1]]).main("center")); }
+        return col([row(parts).stretch()]).main("center").cross("center");
+    }
+    if type_of(labs[0]) != "()" { parts.push(col([labs[0]]).cross("center")); parts.push(rect().height(g)); }
+    parts += [bands[0], row([n]).main("center").cross("center"), bands[1]];
+    if type_of(labs[1]) != "()" { parts.push(rect().height(g)); parts.push(col([labs[1]]).cross("center")); }
+    // Centred in its box, the arcs as wide as the item (or its labels).
+    col([col(parts).stretch()]).main("center").cross("center")
+}
+
+// ---------------------------------------------------------------------------
 // Plots (data -> core nodes through `viewbox` stacks/paths and `anchor`)
 // ---------------------------------------------------------------------------
 //
@@ -2864,10 +3328,15 @@ fn plot_build(opts, series) {
             });
         }
     }
+    let yal = ytick_label_align();
+    if yal != "cap_middle" && yal != "box" {
+        throw `ytick_label_align(): must be "cap_middle" or "box" (got ${yal})`;
+    }
+    let yay = if yal == "box" { 0.5 } else { "cap_middle" };
     let yl = [];
     for i in 0..ya.ticks.len() {
         if ya.ticks[i] >= y0 - 1e-9 && ya.ticks[i] <= y1 + 1e-9 {
-            yl.push(plot_label(ya.labels[i], tsize, tfont).at(1, ya.ticks[i]).anchor(1, 0.5));
+            yl.push(plot_label(ya.labels[i], tsize, tfont).at(1, ya.ticks[i]).anchor(1, yay));
         }
     }
     // Left band, as tall as the area and right-aligned to the axis: the y tick
@@ -3149,11 +3618,15 @@ fn section_title_font() { style_get("section_title_font", "") }
 // Bar height (cm): 2.3 cm for the 53.5 pt title.
 fn section_bar_height() { style_get("section_bar_height", section_title_size() * 0.043) }
 
-// Where the bar title sits: () (default) — its box centred on the bar (both
-// ways), or a length — its first baseline that many cm below the bar top
-// (placed with the core baseline anchor, so it is font-exact; still
-// centred across). A node title (`section(text(..), ..)`, or a numbered one,
-// a row) has no baseline and stays centred by its box.
+// Where the bar title sits: () (default) — optically centred on the bar: the
+// middle of its first line's capitals (the core "cap_middle" anchor, from
+// the font's cap height) on the bar's middle, centred across, so a Latin
+// title set in a face with tall CJK metrics doesn't sit low; or a length —
+// its first baseline that many cm below the bar top (the core baseline
+// anchor, font-exact; still centred across). A node title
+// (`section(text(..), ..)`, or a numbered one, a row) is centred by the cap
+// middle of its first text (by its box when it has none) by default, and by
+// its box with a length.
 fn section_title_baseline() { style_get("section_title_baseline", ()) }
 
 // Bar fill (colour or gradient), border colour ("" for none), border width
@@ -3238,6 +3711,12 @@ fn bullet_gap() { style_get("bullet_gap", bullet_size() * 0.004) }
 // a mark of another size stays on the first line's baseline.
 fn bullet_mark_size() { style_get("bullet_mark_size", bullet_size()) }
 
+// The distance (cm) between the first baselines of consecutive items, which
+// then replaces `bullet_gap()` (the core column `baseline_pitch`): a list on
+// a fixed line grid whatever its marks, fonts and wrapped lines; () (default)
+// for none. `bullets(items, #{ pitch })` sets it for one list.
+fn bullet_pitch() { style_get("bullet_pitch", ()) }
+
 // `subheading`: the mark before it ("" for none) and its size (pt; 32 pt at 24).
 fn subheading_mark() { style_get("subheading_mark", "■") }
 fn subheading_size() { style_get("subheading_size", base_size() * 1.335) }
@@ -3272,7 +3751,11 @@ fn poster_mark_font(x) {
 // `table`: text size (pt), rule colour, rule width (cm; 1 pt at 24 pt), the
 // header rule (3x), rules ("grid", "rows": horizontal only, "booktabs": top,
 // header and bottom, "none"), cell padding (cm), cell fill and header fill
-// ("" for none).
+// ("" for none). `table_rule_mode()`: "space" (default) — each rule is a
+// filled strip between the rows / cells, taking its width; "overlay" — the
+// rules are drawn over the cell boundaries (inner ones centred on them, the
+// outer frame just inside the table's edge), so they take no space: the
+// rows sit edge to edge and the table is as tall (wide) as its cells.
 fn table_size() { style_get("table_size", base_size()) }
 fn table_rule() {
     let f = fg();
@@ -3281,6 +3764,7 @@ fn table_rule() {
 fn table_rule_width() { style_get("table_rule_width", base_size() * 0.00147) }
 fn table_header_rule_width() { style_get("table_header_rule_width", table_rule_width() * 3.0) }
 fn table_rules() { style_get("table_rules", "grid") }
+fn table_rule_mode() { style_get("table_rule_mode", "space") }
 fn table_pad() { style_get("table_pad", base_size() * 0.011) }
 
 // Cell padding left and right / top and bottom (cm); both follow `table_pad()`.
@@ -3535,15 +4019,18 @@ fn section_title(s) {
 // node used as is; the title gets `section_title_glow()` /
 // `section_title_shadow()` (a node title through a row around it, so effects
 // it carries itself stay). The title is anchored on the bar's centre in a
-// unit viewbox, so it stays centred and keeps its size even when its line
-// box (a CJK font's tall ascent + descent) is taller than the bar.
+// unit viewbox by its cap middle (see `section_title_baseline`), so it stays
+// centred and keeps its size even when its line box (a CJK font's tall
+// ascent + descent) is taller than the bar.
 fn section_bar(s) {
     let t = if type_of(s) == "Node" { row([s]) } else { section_title(s) };
     t = poster_effect("section_title_glow", t, "glow", section_title_glow(), section_title_glow_look());
     t = poster_effect("section_title_shadow", t, "shadow", section_title_shadow(), section_title_shadow_look());
     let h = section_bar_height();
     let b = section_title_baseline();
-    let bar = if type_of(b) == "()" || type_of(s) == "Node" {
+    let bar = if type_of(b) == "()" {
+        stack([t.at(0.5, 0.5).anchor(0.5, "cap_middle")]).viewbox(0, 0, 1, 1)
+    } else if type_of(s) == "Node" {
         stack([t.at(0.5, 0.5).anchor(0.5, 0.5)]).viewbox(0, 0, 1, 1)
     } else {
         // The title's first baseline `b` cm below the bar top (cm down,
@@ -3637,8 +4124,9 @@ fn section_make(n, title, content, opts) {
         if st == "" { "" } else { panel_label(st, n - 1) }
     };
     let s = if label == "" { title } else if node {
-        // The number in the title style, a space (0.28 em) before the node.
-        row([section_title(label), title]).cross("center")
+        // The number in the title style, a space (0.28 em) before the node,
+        // the two optically centred on each other.
+        row([section_title(label), title]).cross("cap_middle")
             .spacing(section_title_size() * 0.28 * 2.54 / 72.0)
     } else { poster_prefix(`${label} `, title) };
     let items = if type_of(content) == "array" { nodes(content) } else { [as_node(content)] };
@@ -3731,14 +4219,22 @@ fn subheading(s) {
 // A bulleted list with a hanging indent: each item (a string or a node) in a
 // cell `bullet_indent()` right of its `bullet_mark()`, so wrapped lines align
 // with the first. An array item is a nested list under the previous item.
+// `bullets(items, #{ pitch })`: the items' first baselines `pitch` cm apart
+// (default `bullet_pitch()`; nested lists too) instead of `bullet_gap()`.
 // Each item is a baseline-aligned row (`cross("baseline")`), so the mark sits
 // on the first line's baseline — measured on the shaped text, exact for any
 // font and for a mark of another size or font (`bullet_mark_size()`,
 // `poster_symbol_font()`); a node item uses its first text's baseline (one
 // without text sits on the mark's baseline by its bottom edge).
-fn bullets(items) {
+fn bullets(items) { bullets(items, #{}) }
+fn bullets(items, opts) {
     if type_of(items) != "array" {
         throw `bullets(): expected an array of items (got ${type_of(items)})`;
+    }
+    poster_check_opts("bullets", opts, ["pitch"]);
+    let pitch = plot_opt(opts, "pitch", bullet_pitch());
+    if type_of(pitch) != "()" && !(plot_finite(pitch) && pitch > 0) {
+        throw `bullets(): pitch must be a positive length in cm or () (got ${pitch})`;
     }
     let ind = bullet_indent();
     let size = bullet_size();
@@ -3746,14 +4242,15 @@ fn bullets(items) {
     let out = [];
     for x in items {
         if type_of(x) == "array" && !poster_is_rich(x) {
-            out.push(row([rect().width(ind), bullets(x).flex(1)]).stretch());
+            out.push(row([rect().width(ind), bullets(x, #{ pitch: pitch }).flex(1)]).stretch());
             continue;
         }
         let item = if type_of(x) == "string" || poster_is_rich(x) { fg_text(x).size(size) } else { x };
         let mark = poster_mark_font(fg_text(bullet_mark()).size(ms)).width(ind);
         out.push(row([mark, item.flex(1)]).cross("baseline"));
     }
-    col(out).spacing(bullet_gap()).stretch()
+    let c = col(out).spacing(bullet_gap()).stretch();
+    if type_of(pitch) == "()" { c } else { c.baseline_pitch(pitch) }
 }
 
 // `table(rows)` / `table(rows, opts)`: `rows` is an array of arrays of cells
@@ -3770,13 +4267,15 @@ fn bullets(items) {
 //           per-script map; default `table_font()`, header `table_header_font()`)
 //   header_font  the header row's font (default `font`, else `table_header_font()`)
 //   fonts   one font per column ("" / () for the table's), over `font`
-// The rules are filled rects between the cells (`table_rule()`,
-// `table_rule_width()`), so the grid is exact at any size; cells are filled
+//   rule_mode  "space" or "overlay" (default `table_rule_mode()`)
+// The rules are filled rects (`table_rule()`, `table_rule_width()`), so the
+// grid is exact at any size: between the cells ("space"), or laid over the
+// cell boundaries without taking room ("overlay"). Cells are filled
 // `table_fill()` / `table_header_fill()`. Node cells keep their own font.
 fn table(rows) { table(rows, #{}) }
 fn table(rows, opts) {
     poster_check_opts("table", opts, ["header", "widths", "align", "rules", "pad", "pad_x", "pad_y",
-                                      "font", "header_font", "fonts"]);
+                                      "font", "header_font", "fonts", "rule_mode"]);
     if type_of(rows) != "array" || rows.len() == 0 { throw "table(): expected a non-empty array of rows"; }
     let nc = 0;
     for r in rows {
@@ -3811,11 +4310,20 @@ fn table(rows, opts) {
     if !["grid", "rows", "booktabs", "none"].contains(rules) {
         throw `table(): unknown rules "${rules}" (grid, rows, booktabs, none)`;
     }
+    let mode = plot_opt(opts, "rule_mode", table_rule_mode());
+    if mode != "space" && mode != "overlay" {
+        throw `table(): unknown rule_mode "${mode}" (space, overlay)`;
+    }
     let rc = table_rule();
     let rw = table_rule_width();
     let vertical = rules == "grid";
     let inner = rules == "grid" || rules == "rows";
     let outer = rules != "none";
+    if mode == "overlay" {
+        let fonts = #{ cf: cf, body: body_font, head: head_font, own_head: opts.contains("header_font") };
+        let r = #{ rc: rc, rw: rw, vertical: vertical, inner: inner, outer: outer };
+        return table_overlay(rows, header, ws, al, px, py, fonts, r);
+    }
     let parts = [];
     if outer { parts.push(rect().height(rw).fill(rc)); }
     for i in 0..rows.len() {
@@ -3856,6 +4364,64 @@ fn table(rows, opts) {
         total += v;
     }
     if vertical { total += rw * (nc + 1).to_float(); }
+    t.width(total)
+}
+
+// `table` with rule_mode "overlay": the rows edge to edge, each a unit
+// viewbox stack with its horizontal rule(s) laid over it — the rule above it
+// centred on its top edge (the table's top rule, and the bottom one under the
+// last row, just inside) — and each cell likewise with its vertical rule on
+// its left edge (and the last one on its right). Later rows and cells paint
+// over earlier ones, so every rule lies on top of the cells either side.
+// `f`: fonts (cf, body, head, own_head); `r`: rules (rc, rw, vertical,
+// inner, outer).
+fn table_overlay(rows, header, ws, al, px, py, f, r) {
+    let out = [];
+    let n = rows.len();
+    for i in 0..n {
+        let head = header && i == 0;
+        let cells = [];
+        let j = 0;
+        let last = rows[i].len() - 1;
+        let ci = 0;
+        for x in rows[i] {
+            let k = table_span(x);
+            let content = if type_of(x) == "map" { x.content } else { x };
+            let font = if head { f.head } else { f.body };
+            if type_of(f.cf) != "()" && !table_no_font(f.cf[j]) && !(head && f.own_head) {
+                font = f.cf[j];
+            }
+            let cell = table_cell(content, head, al[j], px, py, font);
+            if r.vertical {
+                // Its left rule centred on the boundary (inside at the
+                // table's left edge), the table's right edge on the last.
+                let layers = [cell, rect().width(r.rw).fill(r.rc).x(0).anchor(if ci == 0 { 0 } else { 0.5 }, 0)];
+                if ci == last { layers.push(rect().width(r.rw).fill(r.rc).x(1).anchor(1, 0)); }
+                cell = stack(layers).viewbox(0, 0, 1, 1);
+            }
+            cells += if k == 1 { [poster_sized("table", cell, ws[j], false)] }
+                     else { table_spanned(cell, ws, j, k, 0.0, table_cell_fill(head)) };
+            j += k;
+            ci += 1;
+        }
+        let layers = [row(cells).stretch()];
+        // The rule above this row: the table's top (inside), the header
+        // rule or an inner one (centred on the boundary).
+        let top = if i == 0 { if r.outer { [r.rw, 0] } else { () } }
+                  else if i == 1 && header && r.outer { [table_header_rule_width(), 0.5] }
+                  else if r.inner { [r.rw, 0.5] } else { () };
+        if type_of(top) != "()" { layers.push(rect().height(top[0]).fill(r.rc).y(0).anchor(0, top[1])); }
+        if i == n - 1 && r.outer { layers.push(rect().height(r.rw).fill(r.rc).y(1).anchor(0, 1)); }
+        out.push(stack(layers).viewbox(0, 0, 1, 1));
+    }
+    let t = col(out).stretch();
+    // All widths absolute: the table is exactly as wide as its columns.
+    let total = 0.0;
+    for w in ws {
+        let v = poster_cm("table", w);
+        if type_of(v) == "()" { return t; }
+        total += v;
+    }
     t.width(total)
 }
 

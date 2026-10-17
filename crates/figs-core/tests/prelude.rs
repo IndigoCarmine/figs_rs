@@ -1606,7 +1606,7 @@ fn scheme_arrows_fill_point_down_and_pair_up() {
 fn layout_helper_examples() {
     // Read from the examples directory: one loads a CSV relative to it.
     let examples = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
-    for name in ["schemes.figs", "layout_helpers.figs"] {
+    for name in ["schemes.figs", "layout_helpers.figs", "figure_kit.figs"] {
         let src = std::fs::read_to_string(examples.join(name)).unwrap();
         let doc = Document::from_script_in(&src, Some(&examples))
             .unwrap_or_else(|e| panic!("{name}: {e}"));

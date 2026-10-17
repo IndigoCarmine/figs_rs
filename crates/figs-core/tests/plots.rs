@@ -653,6 +653,10 @@ fn plot_option_errors_point_at_the_call() {
 struct PerChar;
 const CHAR_W: f32 = 5.0;
 const LINE_H: f32 = 10.0;
+/// Where the top y tick label (8 pt, centred on its tick by its cap middle,
+/// `ytick_label_align()`) reaches above the axis: its synthetic cap middle,
+/// 0.1 em half-leading + 0.8 em ascent − 0.35 em (half a 0.7 em cap height).
+const CAP_MID: f32 = 8.0 * (0.1 + 0.8 - 0.35);
 impl LeafMeasure for PerChar {
     fn measure_text(&self, t: &TextProps, _max_width: f32) -> Size {
         Size::new(CHAR_W * t.content.chars().count() as f32, LINE_H)
@@ -811,8 +815,34 @@ fn rotated_y_label_sits_left_of_the_tick_labels() {
     approx(area.x - (yl.x + yl.w), 2.0 * gap + 3.0 * CHAR_W + tl + gap);
     let tick = p.text("0.4");
     assert!(yl.x + yl.w < tick.x, "{yl:?} vs {tick:?}");
-    // Nothing above the axis but the top tick label's half-line overhang.
-    approx(area.y, panel.y + pp + LINE_H / 2.0);
+    // Nothing above the axis but the top tick label's overhang (above its
+    // cap middle, which is on the tick).
+    approx(area.y, panel.y + pp + CAP_MID);
+}
+
+#[test]
+fn y_tick_labels_are_centred_on_their_ticks_by_cap_middle() {
+    let src = |pre: &str| {
+        format!(
+            r#"{pre} page(12, 9, plot(#{{ x: [0, 10], y: [0, 1] }},
+                [line_plot([0, 10], [0, 1])]).flex(1)).unit("cm")"#
+        )
+    };
+    // Default: the label's cap middle (synthetic: CAP_MID below its top) on
+    // the tick; "box": the middle of its line box.
+    for (pre, off) in [
+        ("", CAP_MID),
+        (r#"style(#{ ytick_label_align: "box" });"#, LINE_H / 2.0),
+    ] {
+        let p = Plotted::new(&src(pre));
+        let area = p.area();
+        for (s, v) in [("0.4", 0.4f32), ("0.8", 0.8)] {
+            let t = p.text(s);
+            approx(t.y + off, area.y + area.h * (1.0 - v));
+        }
+    }
+    let e = eval_script(&src(r#"style(#{ ytick_label_align: "middle" });"#)).unwrap_err();
+    assert!(e.message.contains("ytick_label_align"), "{}", e.message);
 }
 
 // ---- csv() -------------------------------------------------------------------
@@ -1532,7 +1562,7 @@ fn label_room_only_when_labelled() {
     let pp = hook_pt("plot_pad");
     // Standalone: the area starts right under the top tick label's overhang.
     let alone = Plotted::new(&format!(r#"page(12, 9, {plot}.flex(1)).unit("cm")"#));
-    approx(alone.area().y, pp + LINE_H / 2.0);
+    approx(alone.area().y, pp + CAP_MID);
     let band = |raw: &RawDocument| {
         raw.nodes
             .values()
@@ -1549,7 +1579,7 @@ fn label_room_only_when_labelled() {
         let p = Plotted::new(&format!(
             r#"page(12, "auto", col([{wrap}]).stretch()).unit("cm")"#
         ));
-        approx(p.area().y, room + pp + LINE_H / 2.0);
+        approx(p.area().y, room + pp + CAP_MID);
         approx(rect_of(&p.l, "root").h, 9.0 * 72.0 / 2.54); // still 4:3
         assert_eq!(band(&p.raw), 1);
     }

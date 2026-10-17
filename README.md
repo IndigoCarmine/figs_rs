@@ -1187,6 +1187,10 @@ Components (lengths in cm, font sizes in pt):
 | `scheme(items)` / `scheme(items, opts)` / `scheme_v(..)` | A reaction scheme or process flow without coordinates: `items` (nodes, strings like `"+"`, `step`s, `arrow_step`s) in a row `scheme_gap()` apart, every item centred on one axis. Options `direction` (`"right"` / `"down"` = `scheme_v`), `gap`, `align`, `arrow_length` (cm or `"fill"` for every arrow). See *Schemes*. |
 | `step(node, #{ above, below, left, right })` / `step(node, "caption")` | A node with captions (strings at `scheme_label_size()`, centred), `scheme_label_gap()` from it; each caption is balanced by an invisible copy on the opposite side, so the node stays on the scheme's axis. |
 | `arrow_step(label)` / `arrow_step(opts)` | An arrow for `scheme` with text above / below it (`scheme_v`: right / left). Options `above`, `below`, `length` (cm, default `scheme_arrow_length()`, or `"fill"`: share the spare width), `head` (`"end"`, `"both"`, `"start"`, `"none"`), `equilibrium` (`true` or a map of `equilibrium` options: the ⇌ pair), `color` (default `fg()`), `width` (default `scheme_arrow_width()`), `head_size`, `head_width`. |
+| `labware(kind)` / `labware(kind, opts)` | Lab glassware as clean line art (core paths), all `labware_size()` tall (1.2 cm at 8 pt; a dish 0.42 of it) so they line up in a `scheme`: `"vial"`, `"tube"`, `"flask"` (round-bottom), `"erlenmeyer"`, `"beaker"`, `"funnel"`, `"dish"` (Petri dish), `"cuvette"`, `"syringe"`. Options `level` (liquid, 0 … 1; default `labware_level()` = 0), `liquid` (colour or gradient; `labware_liquid()`), `size` (height, cm), `stroke` / `stroke_width` (`labware_stroke()` / `labware_stroke_width()`), `lid` (dish). See *Figure kit*. |
+| `vector_note(item, label)` / `(item, label, opts)` | A straight arrow across a panel (a dipole over a structure, a field over a photo), `label` just beyond its head in its colour (haloed like a panel label). `from` / `to` are `[fx, fy]` **fractions of the item's box** (default `[0.2, 0.75]` → `[0.8, 0.25]`); the label is kept inside the item. Options `color` (`vector_note_color()` = `accent()`), `width`, `size`, `gap`, `head`, `head_size`, `head_width`. |
+| `colorbar(fill, labels)` / `(fill, labels, opts)` | A colour scale: a bar filled with `fill` (colours spread as a gradient, `[offset, colour]` stops, or a ready paint) and `labels` spread evenly along it — the ends flush with the bar's ends, the rest centred. Options `direction` (`"horizontal"`: labels below; `"vertical"`: low at the bottom, labels right), `length` (cm or `"fill"`; `colorbar_length()`), `thickness`, `size`, `gap`, `border` (`""` for none), `discrete: true` (one block per colour), `title`. |
+| `cycle_arrows(item)` / `(item, opts)` | Two curved arrows around a panel or a label (a string): a rotation, a reversible switch. Above and below by default (`sides: "left-right"`), both turning `direction` `"cw"` / `"ccw"`, spanning `cycle_arrow_span()` of the side and bulging `cycle_arrow_depth()` out (core `curved_arrow`s in unit viewboxes, so they follow the item). Options `colors: [a, b]` / `color`, `labels: [a, b]` (beside each arc, in its colour), `width`, `depth`, `span`, `gap`, `size`. |
 | `pin(node, corner)` / `pin(node, corner, inset)` | Any node pinned `inset` (default `label_inset()`) in from a corner of the enclosing stack — what `labeled` and `scalebar` use. |
 | `captioned(item, c)` | `item` above caption `c` (a string becomes `caption(c)`, a node is used as is), `caption_gap()` apart; the item takes the spare height and the caption spans the item's width, so its centered text sits under the middle of the panel whatever the parent's cross alignment. |
 | `nodes(items)` / `as_node(x)` | Bare-string sugar: a string becomes `body(s)`. Use `col(nodes([...]))` to get it in core containers. |
@@ -1234,6 +1238,13 @@ fn scheme_label_size() { 7 }        // step captions and arrow labels, pt (defau
 fn scheme_label_gap() { 0.05 }      // caption / label to its node or arrow, cm (default caption_gap())
 fn side_width() { 0.5 }             // side(main, note): the note's share (default 0.4)
 fn side_gap() { 0.4 }               // between panel and note, cm (default gap())
+fn labware_size() { 1.5 }           // lab icon height, cm (default base_size() * 0.15 = 1.2)
+fn labware_liquid() { "#f2d17a" }   // their liquid (default "#9cc8ea"); labware_level() 0 .. 1 (default 0)
+fn labware_stroke_width() { 0.03 }  // their lines, cm (default base_size() * 0.0045); labware_stroke() colour
+fn vector_note_color() { "#2a6fdb" }  // vector_note arrow + label (default accent()); _width, _size, _gap
+fn colorbar_length() { 4 }          // cm, or "fill" (default base_size() * 0.4 = 3.2); colorbar_thickness() 0.24
+fn colorbar_border() { "" }         // colour bar outline (default fg() / black); colorbar_label_size(), _gap
+fn cycle_arrow_color() { "#7b2cbf" }  // cycle_arrows (default accent()); _width, _depth (cm), _span (0.7), _gap
 fn fg() { "#ffffff" }       // colour of semantic text and (via plot_fg()) plots (default "": renderer black, no colour set)
 fn page_bg() { "#0f1a2e" }  // background of page(preset, root) (default "": none)
 ```
@@ -1430,8 +1441,9 @@ scheme([
     arrow_step(#{ equilibrium: true, above: "hν", below: "Δ" }),   // ⇌
     step(image("d.png").height(1.5), "Isomer D"),
 ])
-scheme([step(flask, "Step 1"), arrow_step("mix"), step(funnel, "Step 2")], #{ arrow_length: "fill" })
-scheme_v([step(flask, #{ right: "Dissolve A" }), arrow_step("stir, 2 h"), step(dish, #{ right: "Dry" })])
+let flask = labware("flask", #{ level: 0.5 });     // icons: see "Figure kit" below
+scheme([step(flask, "Step 1"), arrow_step("mix"), step(labware("funnel"), "Step 2")], #{ arrow_length: "fill" })
+scheme_v([step(flask, #{ right: "Dissolve A" }), arrow_step("stir, 2 h"), step(labware("dish"), #{ right: "Dry" })])
 ```
 
 A caption is balanced by an invisible copy of itself (opacity 0, which no
@@ -1447,6 +1459,34 @@ The other recurring patterns are functions too, so a figure needs no
 items), `section(.., #{ footer })` (references at the bottom of a section) and
 `plot_dimension` (a labelled span in a plot) — see
 [`examples/layout_helpers.figs`](examples/layout_helpers.figs).
+
+**Figure kit.** The furniture of chemistry and materials figures is built in
+too, so a scheme or a panel needs no hand-drawn shapes
+([`examples/figure_kit.figs`](examples/figure_kit.figs)):
+
+```rhai
+scheme([
+    step(labware("flask", #{ level: 0.5 }), "Dissolve A"), arrow_step("stir, 2 h"),
+    step(labware("funnel"), "Filter"), arrow_step("dry"),
+    step(labware("dish", #{ level: 0.3, liquid: "#d9c7a3" }), "Collect"),
+], #{ arrow_length: "fill" })
+vector_note(image("molecule.png").height(3), markup("*μ*"))             // a dipole arrow
+vector_note(img, "E", #{ from: [0.1, 0.5], to: [0.9, 0.5] })             // fractions of the image
+side(image("map.png"), colorbar(["#000004", "#b73779", "#fcfdbf"], [0, 50, 100],
+     #{ direction: "vertical" }), #{ width: "auto" })
+cycle_arrows(image("switch.png").height(2), #{ colors: ["#7b2cbf", "#2a9d8f"], labels: ["UV", "Vis"] })
+```
+
+`labware` icons share one height (`labware_size()`), so they sit on a
+scheme's axis like images; their lines stay inside their box and the liquid
+is a filled shape under the outline. `vector_note`'s `from` / `to` are
+fractions of the item's box — not layout positions: the arrow is drawn in a
+unit viewbox over the item, the label placed beyond the head on the side the
+arrow comes from, and a `contain` overlay keeps it inside the item.
+`colorbar` puts its end labels flush with the bar's ends (nothing hangs past
+it) and is a plain node: beside a panel with `side`, under one in a `vbox`.
+`cycle_arrows` and `vector_note` centre themselves in the box they are given,
+hugging their item.
 
 **Errors point at your script.** An error raised inside the framework is
 reported at *your* call into it, named after the function you called — never at
@@ -1581,7 +1621,8 @@ shared values, so output is unchanged until you set one):
 | Setting | Measures (cm) | Default |
 |---|---|---|
 | `xtick_label_pad` / `ytick_label_pad` | tick end → x labels below / y labels left of the axis. Negative moves the label box onto the tick; tick room + pad < 0 (the box across the axis) is an error | `tick_label_pad()` |
-| `tick_label_pad_mode` | what the x pad reaches to: `"box"` — the top of the labels' line box (half-leading and the font's ascent above the digits included); `"baseline"` — their first baseline, placed with the core [baseline anchor](#baselines) on the shaped text, so it is font-exact. The digits' ink starts their height above it (≈ 0.716 em in Arial / Helvetica): ink gap = pad − 0.716 × size. The y labels are always measured to their box's right edge (the end of the advance) and centred on the tick; category names (which wrap in their slots) by box | `"box"` |
+| `tick_label_pad_mode` | what the x pad reaches to: `"box"` — the top of the labels' line box (half-leading and the font's ascent above the digits included); `"baseline"` — their first baseline, placed with the core [baseline anchor](#baselines) on the shaped text, so it is font-exact. The digits' ink starts their height above it (≈ 0.716 em in Arial / Helvetica): ink gap = pad − 0.716 × size. The y labels are always measured to their box's right edge (the end of the advance) and centred on the tick as `ytick_label_align()` says; category names (which wrap in their slots) by box | `"box"` |
+| `ytick_label_align` | how a y tick label is centred on its tick: `"cap_middle"` — by the middle of its digits (the core [`"cap_middle"` anchor](#optical-middle-cap_middle), half the font's cap height above the baseline), so numbers look centred whatever the font's ascent / descent; `"box"` — by the middle of its line box (the behaviour before) | `"cap_middle"` |
 | `xlabel_pad` / `ylabel_pad` | x tick labels' box → x label's box / y tick labels → the turned y label, **≥ 0** (a negative pad is an error naming the offset to use instead, so a title can never slide into its tick labels) | `axis_label_pad()` / twice that |
 | `xlabel_offset` / `ylabel_offset` | **exact placement**, `> 0` or `()`: the axis → the x label's first baseline (below) / the turned y label's baseline (left of the axis; an unrotated y label: its baseline above the top of the axis, left-aligned). Independent of the tick labels — nothing moves out of the way, so a small offset overlaps them by design | `()`: follow the tick labels by the pads |
 
@@ -1742,15 +1783,15 @@ poster(#{
 | `poster(header, body)` / `poster(preset, header, body)` | A `poster_size()` page (default `"a0"`; any paper preset, `-landscape` too) on `poster_bg()` (a colour or gradient; default `page_bg()`), the header above the body, `poster_margin()` from the edges. `header` is a node, a map for `poster_header`, or `()`; `body` an array (→ `rows`) or a node. |
 | `poster_header(#{ title, authors, affiliations, logos, number })` | Logos (`poster_logo_height()` tall) on the left; the title (`poster_title_size()`, bold) and the author line centred right of them; the poster number bold in the top-right corner; a `poster_header_rule()` under it all. |
 | `author_line(authors, affiliations)` | Authors are names (strings or rich text: `markup("**A. Author**")`) or `#{ name, aff: [1, 2], presenter: true }`; affiliations are strings or rich text too. With `affiliation_position()` `"before"` (default, the Japanese convention): `（Univ. A¹・Univ. B²）○A. Author¹・B. Author¹,²` on one line; `"below"`: the authors, then the numbered affiliations. The line is one text node of rich-text spans — affiliation numbers are superscript spans — so it wraps like any text; a single affiliation is not numbered. |
-| `section(title, content)` / `section(number, title, content)` / `(…, opts)` | A bar (`section_bar_height()`, `section_bar_fill()`, `section_bar_border()`, square unless `section_bar_radius()`) with the title centred on it, over `content` (an array of items `section_gap()` apart, or one node) padded `section_pad()`. Numbered `section_label_style()` (`"1."` → "1. Title") in the order sections are built; an integer `number` restarts the count from it, a string is used as is (`""` for none). The title is a string, rich text, or a text node used as is (the number goes before it in the bar's title style; `section_title(s)` gives that style to chain setters on). Effects: `section_title_glow()`, `section_title_shadow()`, `section_bar_shadow()`. Options (a map as the last argument): `footer` — item(s) pushed to the bottom of the section (references, a take-home `note`), the content taking the spare height above them. |
+| `section(title, content)` / `section(number, title, content)` / `(…, opts)` | A bar (`section_bar_height()`, `section_bar_fill()`, `section_bar_border()`, square unless `section_bar_radius()`) with the title optically centred on it (by its cap middle — the core [`"cap_middle"` anchor](#optical-middle-cap_middle) — or on a baseline with `section_title_baseline()`), over `content` (an array of items `section_gap()` apart, or one node) padded `section_pad()`. Numbered `section_label_style()` (`"1."` → "1. Title") in the order sections are built; an integer `number` restarts the count from it, a string is used as is (`""` for none). The title is a string, rich text, or a text node used as is (the number goes before it in the bar's title style; `section_title(s)` gives that style to chain setters on). Effects: `section_title_glow()`, `section_title_shadow()`, `section_bar_shadow()`. Options (a map as the last argument): `footer` — item(s) pushed to the bottom of the section (references, a take-home `note`), the content taking the spare height above them. |
 | `block(title, items)` / `block(title, items, opts)` | A `subheading(title)` (a node is used as is; `""` for none) over `items` side by side in equal flex shares, `block_title_gap()` below the heading and `block_gap()` apart. Options `widths` (flex weights, `"4cm"`, `"auto"`), `gap`, `title_gap`, `align` (`"start"` default, `"center"`, `"end"`, `"stretch"`, `"baseline"`). |
 | `columns(items)` / `columns(items, widths)` / `columns(items, widths, opts)` | Side by side, `poster_gutter()` apart, with a dashed `vsep` in each gutter (`separators()`), starting `separator_inset()` down (the middle of the bars). Widths: flex weights, `"12cm"` lengths, `"auto"`. Options (also as the second argument): `gutter` — one length or one per gutter (so each row of a poster can have its own); `separators` — `true` / `false`, or one per gutter: `true`, `false`, a number (a separator ending that many cm below the top of the row) or `#{ start, end, offset }` (cm from the top of the row; `start` defaults to the bar middle, `end` to the bottom; `offset` cm right of the gutter centre, negative left, default `separator_offset()` = 0). |
 | `rows(items)` / `rows(items, heights)` / `rows(items, heights, opts)` | Down the page, `poster_row_gap()` apart (dashed `hsep`s with `row_separators()`); same sizes as `columns`. Options: `gaps` (one or one per gap), `separators` (`true` / `false`, or one per gap). |
 | `vsep()` / `vsep(w)`, `hsep()` / `hsep(h)` | The dashed separators (`separator_color()`, `separator_width()`, `separator_dash()`) on their own: vertical in a gutter `w` wide / horizontal across the parent in a band `h` tall. |
 | `frame(content)` / `dashed_frame(content)` | A thin rounded border box (`frame_color()`, `frame_width()`, `frame_radius()`, `frame_pad()`; `frame_dash()`). Square grey boxes are core setters: `frame(..).radius(0).stroke("#7f7f7f")`. |
 | `note(s)` / `ref(s)` / `subheading(s)` | The highlighted take-home sentence (centred, `note_color()`) / a reference line (`ref_size()`, centred) / `"■ " + s` (`subheading_mark()`, `subheading_size()`; the mark bold on its own with `subheading_mark_bold()`, sized with `subheading_mark_size()`). |
-| `bullets(items)` | A list with a hanging indent: each item in a cell `bullet_indent()` right of its `bullet_mark()`, so wrapped lines align; an array item is a nested list. Each item is a baseline-aligned row, so the mark — in its own size (`bullet_mark_size()`) and font (`poster_symbol_font()`) — sits exactly on the first line's baseline (a node item: its first text's; one without text sits on it by its bottom edge). |
-| `table(rows)` / `table(rows, opts)` | Rows of cells (strings, numbers, spans, nodes; `colspan(n, x)` spans n columns); the first row a bold header above a `table_header_rule_width()` rule. Options `header` (false: none), `widths`, `align` (one or per column), `rules` (`"grid"`, `"rows"`, `"booktabs"`, `"none"`), `pad` / `pad_x` / `pad_y`, `font` (every text cell: a family, fallback list or per-script map; default `table_font()`, the header `table_header_font()`), `header_font` (the header row; default `font`), `fonts` (one per column, `""` for the table's; over `font`). Node cells keep their own font; string and span cells keep the bold header. Rules are filled rects between the cells, so the grid is exact (a spanning cell covers the rules between its columns); cells are padded `table_pad_x()` left and right, `table_pad_y()` top and bottom (both default `table_pad()`), filled `table_fill()` / `table_header_fill()`. |
+| `bullets(items)` / `bullets(items, #{ pitch })` | A list with a hanging indent: each item in a cell `bullet_indent()` right of its `bullet_mark()`, so wrapped lines align; an array item is a nested list. Each item is a baseline-aligned row, so the mark — in its own size (`bullet_mark_size()`) and font (`poster_symbol_font()`) — sits exactly on the first line's baseline (a node item: its first text's; one without text sits on it by its bottom edge). `pitch` (cm; default `bullet_pitch()` = `()`, none) puts the items' first baselines exactly that far apart instead of `bullet_gap()` — the core [baseline pitch](#baseline-pitch) — so lists of mixed sizes keep one line grid. |
+| `table(rows)` / `table(rows, opts)` | Rows of cells (strings, numbers, spans, nodes; `colspan(n, x)` spans n columns); the first row a bold header above a `table_header_rule_width()` rule. Options `header` (false: none), `widths`, `align` (one or per column), `rules` (`"grid"`, `"rows"`, `"booktabs"`, `"none"`), `pad` / `pad_x` / `pad_y`, `font` (every text cell: a family, fallback list or per-script map; default `table_font()`, the header `table_header_font()`), `header_font` (the header row; default `font`), `fonts` (one per column, `""` for the table's; over `font`), `rule_mode` (`"space"` default, `"overlay"`; default `table_rule_mode()`). Node cells keep their own font; string and span cells keep the bold header. Rules are filled rects, so the grid is exact: with `"space"` they lie between the cells and take their width (a spanning cell covers the rules between its columns); with `"overlay"` they are laid over the cell boundaries — inner rules centred on them, the frame just inside the table's edge — and take no room, so rows sit edge to edge and the table is exactly as tall as its cells; cells are padded `table_pad_x()` left and right, `table_pad_y()` top and bottom (both default `table_pad()`), filled `table_fill()` / `table_header_fill()`. |
 
 All sizes derive from `base_size()`, so `style("poster")` (24 pt body) on A0
 gives the proportions of a typical PowerPoint poster: 53.5 pt titles on 2.3 cm
@@ -1772,7 +1813,7 @@ fn section_bar_radius() { 0.3 }        // rounded bars (default 0: square)
 fn section_label_style() { "" }        // no numbers (default "1.")
 fn separators() { false }              // plain gutters (default true)
 fn separator_offset() { -0.05 }        // separators 0.5 mm left of the gutter centre (default 0)
-fn section_title_baseline() { 1.6 }    // bar title baseline 1.6 cm below the bar top (default (): centred)
+fn section_title_baseline() { 1.6 }    // bar title baseline 1.6 cm below the bar top (default (): optically centred)
 fn table_font() { "Yu Gothic" }       // table cells (default "": page font); table_header_font() follows it
 style(#{ note_color: "#ff6b5a", poster_gutter: 1.0, table_rules: "booktabs" });
 style(#{ section_title_glow: #{ blur: 0.15, color: "#000000c0" }, section_bar_shadow: false });
@@ -1796,13 +1837,18 @@ Hooks: `poster_size`, `poster_bg`, `poster_margin`, `poster_gutter`,
 `section_title_shadow`, `section_bar_shadow`, `table_pad_x`, `table_pad_y`,
 `subheading_mark_bold`, `subheading_mark_size`, `bullet_mark_size`,
 `table_font`, `table_header_font`, `separator_offset`,
-`section_title_baseline`, `poster_symbol_font`, `block_gap`, `block_title_gap`. Lengths are cm; the section counter is
-fresh for every evaluation. A section title is anchored on the bar's centre,
-so it stays centred even when a CJK font's line box is taller than the bar —
-or, with `section_title_baseline()` set (cm from the bar top), its first
-baseline is placed there with the core baseline anchor (font-exact, still
-centred across; default `()` = centred by box). A node title (or a numbered
-one, a row) has no baseline and stays centred.
+`section_title_baseline`, `poster_symbol_font`, `block_gap`, `block_title_gap`,
+`bullet_pitch`, `table_rule_mode`. Lengths are cm; the section counter is
+fresh for every evaluation. A section title is anchored on the bar's centre
+by its **cap middle** (half the font's cap height above its first baseline:
+the core `"cap_middle"` anchor), so it looks centred whatever the font's
+ascent and descent — a Latin title set with a CJK fallback face's tall line
+box no longer sits low — and keeps its size even when that line box is
+taller than the bar. With `section_title_baseline()` set (cm from the bar
+top) its first baseline is placed there instead (font-exact, still centred
+across). A node title (or a numbered one: a row lining the number and the
+node up by their cap middles) is centred by the cap middle of its first text
+(by its box with no text; by its box with `section_title_baseline()`).
 
 **Marks in a deliberate font.** ■ ● ○ • – — are "ambiguous" characters that
 [follow their neighbours](#fonts-fallback-lists-per-script-families-weights-italic),

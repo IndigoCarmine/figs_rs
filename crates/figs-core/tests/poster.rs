@@ -9,12 +9,18 @@
 
 use std::path::Path;
 
-use figs_core::geom::{Color, Paint, PathSegment, Rect, Size, TextAlign};
+use figs_core::geom::{
+    AnchorValue, BaselineKind, Color, Paint, PathSegment, Rect, Size, TextAlign,
+};
 use figs_core::layout::{ComputedLayout, PaintContent};
 use figs_core::schema::span::Script;
 use figs_core::schema::{ImageProps, NodeKind, RawDocument, RawNode, TextProps};
 use figs_core::units::Unit;
 use figs_core::{eval_script, layout, Document, LeafMeasure, NullMeasurer};
+
+/// Without fonts a text's cap middle ("cap_middle") is 0.55 em below its box
+/// top: 0.1 em half-leading + 0.8 em ascent − half a 0.7 em cap height.
+const CAP_MID_EM: f32 = 0.55;
 
 /// Every text block measures `TEXT_W` x `TEXT_H` pt (an explicit width wins).
 struct FixedText;
@@ -171,7 +177,8 @@ fn section_is_a_bar_over_padded_content() {
     let kids = children(&d, "root");
     assert_eq!(kids.len(), 2);
     let (bar_id, bar) = kids[0];
-    // The bar: a unit-viewbox stack with the title anchored on its centre,
+    // The bar: a unit-viewbox stack with the title anchored on its centre
+    // by its cap middle (optically centred),
     // 53.52 pt titles on a 2.3 cm bar at poster scale, square, gradient fill.
     assert_eq!(bar.kind, NodeKind::Stack);
     assert_eq!(bar.viewbox, Some([0.0, 0.0, 1.0, 1.0]));
@@ -183,7 +190,10 @@ fn section_is_a_bar_over_padded_content() {
     assert_eq!(title.content.as_deref(), Some("1. Intro"));
     approx(title.font_size.unwrap(), 24.0 * 2.23);
     assert_eq!(title.color, hex("#ffffff"));
-    assert_eq!(title.anchor, Some([0.5.into(), 0.5.into()]));
+    assert_eq!(
+        title.anchor,
+        Some([0.5.into(), AnchorValue::Baseline(BaselineKind::CapMiddle)])
+    );
     assert_eq!((title.x, title.y), (Some(0.5), Some(0.5)));
     // The content: padded `section_pad()`, items `section_gap()` apart, the
     // bare string a body text.
@@ -208,10 +218,11 @@ fn section_geometry_title_centred_on_the_bar() {
     let kids = children(&d, "root");
     assert_xywh(rect_of(&l, kids[0].0), 0.0, 0.0, 200.0, 30.0);
     assert_xywh(rect_of(&l, kids[1].0), 0.0, 30.0, 200.0, 70.0);
-    // The title's box is centred on the bar.
+    // The title is centred on the bar: across by its box, up and down by
+    // its cap middle (8 × 2.23 pt title).
     let t = text_rect(&l, "1. A");
     approx(t.x + t.w / 2.0, 100.0);
-    approx(t.y + t.h / 2.0, 15.0);
+    approx(t.y + CAP_MID_EM * 8.0 * 2.23, 15.0);
     // Content inside the padding.
     // (A bare `rect()` keeps its natural height: content isn't stretched.)
     let item = children(&d, kids[1].0)[0].0;
@@ -517,6 +528,101 @@ fn bullets_hang_their_text() {
     let d = raw(r#"style(#{ bullet_mark: "–", bullet_size: 30 }); page(10, 10, bullets(["x"]))"#);
     assert_eq!(text_node(&d, "–").1.font_size, Some(30.0));
     assert_eq!(text_node(&d, "x").1.font_size, Some(30.0));
+}
+
+#[test]
+fn bullets_on_a_baseline_pitch() {
+    // Synthetic metrics: every item's first baseline 7.2 pt below its top, so
+    // a 20 pt pitch puts the item tops 20 pt apart (nested lists too).
+    for pre in [
+        "",
+        "fn bullet_pitch() { 20 }",
+        "style(#{ bullet_pitch: 20 });",
+    ] {
+        let opts = if pre.is_empty() {
+            ", #{ pitch: 20 }"
+        } else {
+            ""
+        };
+        let src = format!(
+            r#"{pre} fn bullet_gap() {{ 4 }}
+               page(100, 100, bullets(["one", "two", ["sub", "sub2"]]{opts})).unit("pt")"#
+        );
+        let l = layout(&Document::from_script(&src).unwrap(), &NullMeasurer);
+        let y = |s: &str| text_rect(&l, s).y;
+        approx(y("two") - y("one"), 20.0);
+        approx(y("sub") - y("two"), 20.0);
+        approx(y("sub2") - y("sub"), 20.0);
+    }
+    // Without a pitch, the gap.
+    let d = raw(r#"page(10, 10, bullets(["a", "b"]))"#);
+    assert!(d.nodes.values().all(|n| n.baseline_pitch.is_none()));
+    assert!(fail(r#"page(10, 10, bullets(["a"], #{ pitch: "x" }))"#).contains("pitch"));
+    assert!(fail(r#"page(10, 10, bullets(["a"], #{ gap: 1 }))"#).contains("unknown option"));
+}
+
+#[test]
+fn table_rules_overlaid_on_the_cell_boundaries() {
+    let base = r#"
+        fn table_rule_width() { 1 }
+        fn table_header_rule_width() { 3 }
+        fn table_pad() { 2 }
+    "#;
+    let rows = r#"[["a", "b"], ["c", "d"], ["e", 5]]"#;
+    for how in [
+        format!(r#"{base} page(100, 100, table({rows}, #{{ rule_mode: "overlay" }})).unit("pt")"#),
+        format!(
+            r#"{base} style(#{{ table_rule_mode: "overlay" }}); page(100, 100, table({rows})).unit("pt")"#
+        ),
+    ] {
+        let l = lay_fixed(&how);
+        // No room for the rules: 50-wide cells, rows 14 tall, edge to edge.
+        assert_xywh(text_rect(&l, "a"), 2.0, 2.0, 46.0, 10.0);
+        assert_xywh(text_rect(&l, "b"), 52.0, 2.0, 46.0, 10.0);
+        assert_xywh(text_rect(&l, "c"), 2.0, 16.0, 46.0, 10.0);
+        assert_xywh(text_rect(&l, "e"), 2.0, 30.0, 46.0, 10.0);
+        let rules = filled_rects(&l);
+        // Top (inside), header (centred on y 14), inner (on 28), bottom
+        // (inside the 42 pt table).
+        let mut ys: Vec<(f32, f32)> = rules
+            .iter()
+            .filter(|r| r.w > 50.0)
+            .map(|r| (r.y, r.h))
+            .collect();
+        ys.sort_by(|a, b| a.0.total_cmp(&b.0));
+        assert_eq!(ys, [(0.0, 1.0), (12.5, 3.0), (27.5, 1.0), (41.0, 1.0)]);
+        // Vertical: the left edge inside, 50 centred, the right edge inside.
+        let vert: Vec<_> = rules.iter().filter(|r| r.w < 50.0).collect();
+        assert_eq!(vert.len(), 9);
+        let mut xs: Vec<f32> = vert.iter().map(|r| r.x).collect();
+        xs.sort_by(f32::total_cmp);
+        xs.dedup();
+        assert_eq!(xs, [0.0, 49.5, 99.0]);
+        for r in &vert {
+            assert_eq!((r.w, r.h), (1.0, 14.0));
+        }
+        // The rules paint over the cells they cross.
+        let last_text = l
+            .nodes
+            .iter()
+            .rposition(|n| matches!(&n.content, PaintContent::Text(t) if t.content == "e"))
+            .unwrap();
+        let last_rule = l
+            .nodes
+            .iter()
+            .rposition(|n| matches!(&n.content, PaintContent::Rect { fill: Some(_), .. }))
+            .unwrap();
+        assert!(last_rule > last_text);
+    }
+    // "rows" / "booktabs" / "none" draw the same rules as with "space".
+    let count = |rules: &str| {
+        filled_rects(&lay_fixed(&format!(
+            r#"{base} page(100, 100, table({rows}, #{{ rule_mode: "overlay", rules: "{rules}" }})).unit("pt")"#
+        )))
+        .len()
+    };
+    assert_eq!((count("rows"), count("booktabs"), count("none")), (4, 3, 0));
+    assert!(fail(r#"page(10, 10, table([["a"]], #{ rule_mode: "x" }))"#).contains("rule_mode"));
 }
 
 #[test]
@@ -876,7 +982,8 @@ fn section_takes_a_text_node_title() {
     let d = raw(src);
     let l = lay_fixed(src);
     // The node keeps its own look; the number goes before it in the title
-    // style, a space (0.28 em) apart, the pair centred on the bar.
+    // style, a space (0.28 em) apart, the pair centred on the bar, both by
+    // their cap middles (72 pt number, 12 pt default node).
     let (_, x) = text_node(&d, "X");
     assert_eq!(x.font_size, None);
     assert_eq!(x.color, hex("#ff0000"));
@@ -887,8 +994,8 @@ fn section_takes_a_text_node_title() {
     let b = text_rect(&l, "X");
     approx(b.x - (a.x + a.w), 72.0 * 0.28 * 2.54 / 72.0);
     approx((a.x + b.x + b.w) / 2.0, 100.0);
-    approx(a.y + a.h / 2.0, 15.0);
-    approx(b.y + b.h / 2.0, 15.0);
+    approx(a.y + CAP_MID_EM * 72.0, 15.0);
+    approx(b.y + CAP_MID_EM * 12.0, 15.0);
     // Effects go on a row around the title, so the node's own stay.
     let d = raw(
         r#"style("poster-dark"); page(30, 20, section("", text("X").glow(0.5), rect())).unit("cm")"#,
@@ -1228,10 +1335,10 @@ fn section_title_on_a_baseline() {
         assert_eq!(bar.viewbox, Some([0.0, 0.0, 1.0, 30.0]));
         approx(bar.height.unwrap(), 30.0);
     }
-    // The default centres the box, as before.
+    // The default centres it optically (by its cap middle).
     let l = lay_fixed(&src("", "\"A\""));
     let t = text_rect(&l, "1. A");
-    approx(t.y + t.h / 2.0, 15.0);
+    approx(t.y + CAP_MID_EM * 8.0 * 2.23, 15.0);
     // Rich titles have a baseline too; node titles (a row) stay centred.
     let l = lay_fixed(&src(
         "fn section_title_baseline() { 22 }",
