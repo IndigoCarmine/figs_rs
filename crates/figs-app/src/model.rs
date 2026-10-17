@@ -74,6 +74,13 @@ fn blank(kind: NodeKind) -> RawNode {
         head_size: None,
         head_width: None,
         head_style: None,
+        from: None,
+        to: None,
+        from_at: None,
+        to_at: None,
+        route: None,
+        gap: None,
+        band: None,
     }
 }
 
@@ -105,6 +112,10 @@ pub fn new_node(kind: NodeKind) -> RawNode {
             n.fill = Some(Color::parse_hex("#6ea8fe").unwrap().into());
             n.width = Some(120.0);
             n.height = Some(80.0);
+        }
+        // Its `from` / `to` are set by whoever adds it (the ids of two nodes).
+        NodeKind::Connector => {
+            n.stroke_width = Some(2.0);
         }
         NodeKind::Path => {
             n.points = vec![[0.0, 60.0], [60.0, 0.0], [120.0, 60.0]];

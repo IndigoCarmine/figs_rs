@@ -106,6 +106,11 @@ You provide: hierarchy, style, content, and constraints (`flex`, `aspect_ratio`,
   `head_style`; **path** adds `fill`, `closed`, `stroke_align` (closed only).
 - **ellipse**: `fill`, `stroke`, `stroke_width`, `stroke_align`, `dash`, `cap`,
   `join`.
+- **connector**: `from`, `to` (node ids), `from_at`, `to_at`, `route`, `gap`,
+  `band`, plus `stroke`, `stroke_width`, `dash`, `cap`, `join`, `head`,
+  `head_size`, `head_width`, `head_style`, `corner_radius` (elbow corners) and
+  `fill` (band) — a line between two laid-out nodes that takes no room (see
+  [Connectors](#connectors)).
 
 `stroke_align = "inside" | "center" | "outside"` says where the stroke of a
 closed outline — rect, ellipse, closed path, container border — lies: its
@@ -1076,6 +1081,54 @@ fit). A single child taller than its box is clamped to it (it is given a box
 of that size), so the report comes from the level where the children add
 up.
 
+### Connectors
+
+A `connector` draws a line — or a wide band — **between two other nodes,
+after layout**, from points of their final boxes. The ends may be anywhere on
+the page (different rows, columns, stacks, rotated or shrunk containers), so
+zoom lines from an image region to its magnified inset, callout leaders and
+flowchart links need no page coordinates:
+
+```toml
+[nodes.link]
+type = "connector"
+from = "photo"          # node ids
+to = "detail"
+from_at = [0.62, 0.30]  # fractions of from's box (or "right", "top-left", …)
+to_at = "left"          # default for both: "auto"
+route = "elbow"         # "straight" (default) | "elbow" | "curve"
+head = "end"            # none (default) | start | end | both
+dash = [0.2, 0.1]
+corner_radius = 0.3     # rounds elbow corners
+gap = [0, 0.1]          # keep the ends off the boxes ([start, end] or one number)
+```
+
+- **Attachment** (`from_at` / `to_at`): a side (`"left"`, `"right"`, `"top"`,
+  `"bottom"`, the middle of it), a corner (`"top-left"`, …), `"center"`,
+  `[fx, fy]` fractions of the box (mapped through the node's rotation), or
+  `"auto"` (default): the side facing the other end — left/right when the
+  boxes are apart horizontally, else top/bottom; two auto ends whose boxes
+  overlap across that direction meet in the middle of the overlap, so a link
+  between neighbours runs straight.
+- **Route**: `straight`; `elbow` — horizontal and vertical runs leaving
+  each end along its side (both sides horizontal: H-V-H through the middle;
+  both vertical: V-H-V; one of each: a single corner), corners rounded by
+  `corner_radius`; `curve` — a cubic leaving and entering along the sides.
+- **Band**: `band = w` fills an outline `w` wide around the route instead of
+  stroking it (a block arrow; mitred corners), with triangular `head`s
+  (`head_size` long and `head_width` across, default 1 × and 2 × the band),
+  filled with `fill` (a colour or a gradient over the band's box; default the
+  `stroke` colour, else black). Translucent fills and `opacity` work as on
+  any node.
+- **Layout**: a connector takes **no room** in its parent (no spacing either)
+  and is painted where it sits among its siblings — so one placed before a
+  group in a `stack` is drawn *behind* it — under its ancestors' clips and
+  effects. A connector can't attach to another connector; an unknown id is
+  an error.
+
+Scripts build one with `connect(a, b[, opts])` (see
+[Scripting](#scripting-with-rhai-figs)).
+
 ## Scripting with Rhai (`.figs`)
 
 For variables, arithmetic and reusable components, author a
@@ -1172,6 +1225,15 @@ setters:
   `.font(name | list | #{ latin, cjk, symbol, fallback })`, and the text
   defaults `.scripts(..)`, `.font_synthesis(..)`, `.synthetic_bold_width(em)`,
   `.synthetic_slant(deg)`.
+- **connectors**: `connect(a, b)` / `connect(a, b, #{ from, to, route, head,
+  head_style, head_size, head_width, stroke, width, dash, cap, band, fill,
+  radius, gap, opacity })` — `a` / `b` are node values (`let img =
+  image(..); … connect(img, inset)`: the node wherever it ends up in the tree,
+  its last copy if placed twice) or ids given with `.id("name")`; `from` /
+  `to` are attachment points (`"right"`, `[fx, fy]`, …). Place the
+  connector anywhere in the tree (it takes no room); see
+  [Connectors](#connectors). `.id(s)` makes `s` the node's document id
+  (`""` clears it; `root` / `node<N>` are reserved), `.id()` reads it.
 - **script-only**: `.meta(key, value)` / `.meta(key)` (a note on the node for
   other script code, `()` when unset; never part of the document — how a plot
   asks `labeled` for label room), `.prepend(child)` (insert a first child into

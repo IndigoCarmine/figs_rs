@@ -87,7 +87,7 @@ fn own_axis<M: LeafMeasure>(ctx: &Ctx<M>, idx: usize, own: Size) -> (f32, f32) {
                 return middle;
             }
             let content = if *contain {
-                layout_stack_contained(ctx, children, *viewbox, content, None, &mut Vec::new())
+                layout_stack_contained(ctx, children, &[], *viewbox, content, None, &mut Vec::new())
             } else {
                 content
             };

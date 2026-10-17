@@ -137,6 +137,7 @@ pub fn kind_badge(kind: NodeKind) -> (Color32, &'static str) {
         NodeKind::Line | NodeKind::Arrow | NodeKind::Ellipse | NodeKind::Path => {
             (hex("#f07aa8"), "V")
         }
+        NodeKind::Connector => (hex("#f07aa8"), "L"),
     }
 }
 

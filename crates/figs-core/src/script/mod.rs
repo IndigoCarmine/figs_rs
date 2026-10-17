@@ -48,7 +48,8 @@ use crate::geom::{
     StrokeAlign, TextAlign,
 };
 use crate::schema::{
-    ArcRadius, NodeKind, PageHeight, RawDocument, RawGlow, RawNode, RawPage, RawSegment, RawShadow,
+    ArcRadius, NodeKind, PageHeight, RawAttach, RawDocument, RawGlow, RawNode, RawPage, RawSegment,
+    RawShadow,
 };
 use crate::units::Unit;
 
@@ -72,6 +73,29 @@ pub struct ScriptNode {
     /// first line (left end of its baseline). The `anchor` that says so
     /// depends on the final `rotate`, so it is filled in at lowering.
     baseline_origin: bool,
+    /// Identity of the node as built (copies made by setters keep it), so a
+    /// connector can name a node value: `connect(a, b)`.
+    uid: u64,
+    /// `.id(s)`: the node's id in the lowered document (else synthesised).
+    explicit_id: Option<String>,
+    /// A connector's two ends, resolved to ids at lowering.
+    link: Option<Box<[LinkRef; 2]>>,
+}
+
+/// One end of a connector as the script named it.
+#[derive(Clone, Debug)]
+enum LinkRef {
+    /// A node value (its [`ScriptNode::uid`]).
+    Node(u64),
+    /// An id given with `.id(s)`.
+    Id(String),
+}
+
+/// A fresh [`ScriptNode::uid`].
+fn next_uid() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 /// The whole document a script returns: a page plus its root node.
@@ -303,6 +327,13 @@ fn blank_node(kind: NodeKind) -> RawNode {
         head_size: None,
         head_width: None,
         head_style: None,
+        from: None,
+        to: None,
+        from_at: None,
+        to_at: None,
+        route: None,
+        gap: None,
+        band: None,
     }
 }
 
@@ -313,6 +344,9 @@ fn leaf(kind: NodeKind) -> ScriptNode {
         sites: Default::default(),
         meta: Map::new(),
         baseline_origin: false,
+        uid: next_uid(),
+        explicit_id: None,
+        link: None,
     }
 }
 
@@ -333,7 +367,7 @@ fn cast_children(children: Array) -> Result<Vec<ScriptNode>, Box<EvalAltResult>>
         let node = child
             .try_cast::<ScriptNode>()
             .ok_or_else(|| {
-                err("container children must be nodes (col/row/stack/text/rect/image/line/arrow/ellipse/path)")
+                err("container children must be nodes (col/row/stack/text/rect/image/line/arrow/ellipse/path/connect)")
             })?;
         out.push(node);
     }
@@ -347,6 +381,9 @@ fn make_container(kind: NodeKind, children: Array) -> Result<ScriptNode, Box<Eva
         sites: Default::default(),
         meta: Map::new(),
         baseline_origin: false,
+        uid: next_uid(),
+        explicit_id: None,
+        link: None,
     })
 }
 
@@ -467,6 +504,174 @@ fn arc_segment(
         }
     }
     Ok(seg)
+}
+
+/// One end of `connect(a, b)`: a node value or an id string.
+fn link_ref(which: &str, v: Dynamic) -> Result<LinkRef, Box<EvalAltResult>> {
+    if v.is_string() {
+        return Ok(LinkRef::Id(v.into_string().unwrap_or_default()));
+    }
+    match v.try_cast::<ScriptNode>() {
+        Some(n) => Ok(LinkRef::Node(n.uid)),
+        None => Err(err(format!(
+            "connect(): `{which}` must be a node or a node id (a string given with .id(..))"
+        ))),
+    }
+}
+
+/// An attachment option of `connect`: a named point or `[fx, fy]`.
+fn cast_attach(key: &str, v: Dynamic) -> Result<RawAttach, Box<EvalAltResult>> {
+    let names = crate::schema::Attach::NAMES;
+    if v.is_string() {
+        let s = v.into_string().unwrap_or_default();
+        crate::schema::Attach::parse(&s).ok_or_else(|| {
+            err(format!(
+                "connect(): unknown `{key}` point \"{s}\" ({names})"
+            ))
+        })?;
+        return Ok(RawAttach::Named(s));
+    }
+    let bad = || err(format!("connect(): `{key}` must be one of {names}"));
+    let a = v.try_cast::<Array>().ok_or_else(bad)?;
+    match a.as_slice() {
+        [x, y] => Ok(RawAttach::Frac([
+            dyn_to_f32(x).ok_or_else(bad)?,
+            dyn_to_f32(y).ok_or_else(bad)?,
+        ])),
+        _ => Err(bad()),
+    }
+}
+
+/// The options `connect(a, b, opts)` accepts.
+const CONNECT_KEYS: &str = "from, to, route, head, head_style, head_size, head_width, stroke, color, width, dash, cap, band, fill, radius, gap, opacity";
+
+/// `connect(a, b[, opts])`: a connector node from `a` to `b`.
+fn connect_fn(a: Dynamic, b: Dynamic, opts: Map) -> NodeResult {
+    let mut sn = leaf(NodeKind::Connector);
+    sn.link = Some(Box::new([link_ref("a", a)?, link_ref("b", b)?]));
+    let r = &mut sn.node;
+    let num = |k: &str, v: &Dynamic| {
+        dyn_to_f32(v).ok_or_else(|| err(format!("connect(): `{k}` must be a number")))
+    };
+    let string = |k: &str, v: Dynamic| {
+        v.into_string()
+            .map_err(|_| err(format!("connect(): `{k}` must be a string")))
+    };
+    for (k, v) in opts {
+        let k = k.as_str();
+        match k {
+            "from" => r.from_at = Some(cast_attach(k, v)?),
+            "to" => r.to_at = Some(cast_attach(k, v)?),
+            "route" => {
+                let s = string(k, v)?;
+                r.route = Some(crate::schema::ConnectorRoute::parse(&s).ok_or_else(|| {
+                    err(format!(
+                        "connect(): unknown route \"{s}\" (straight, elbow, curve)"
+                    ))
+                })?);
+            }
+            "head" => {
+                let s = string(k, v)?;
+                r.head = Some(parse_head(&s).ok_or_else(|| {
+                    err(format!(
+                        "connect(): unknown head \"{s}\" (none, start, end, both)"
+                    ))
+                })?);
+            }
+            "head_style" => {
+                let s = string(k, v)?;
+                r.head_style = Some(parse_head_style(&s).ok_or_else(|| {
+                    err(format!("connect(): unknown head_style \"{s}\" (triangle, stealth, open, barb_left, barb_right)"))
+                })?);
+            }
+            "head_size" => r.head_size = Some(num(k, &v)?),
+            "head_width" => r.head_width = Some(match dyn_to_f32(&v) {
+                Some(w) => HeadWidth::Abs(w),
+                None => v
+                    .into_string()
+                    .ok()
+                    .and_then(|s| HeadWidth::parse_ratio(&s))
+                    .ok_or_else(|| {
+                        err(r#"connect(): `head_width` must be a length or a multiple like "3x""#)
+                    })?,
+            }),
+            "stroke" | "color" => r.stroke = Some(parse_color("connect", &string(k, v)?)?),
+            "width" => r.stroke_width = Some(num(k, &v)?),
+            "dash" => {
+                let a = v
+                    .try_cast::<Array>()
+                    .ok_or_else(|| err("connect(): `dash` must be an array of numbers"))?;
+                r.dash = a.iter().map(|d| num(k, d)).collect::<Result<_, _>>()?;
+            }
+            "cap" => {
+                let s = string(k, v)?;
+                r.cap = Some(parse_cap(&s).ok_or_else(|| {
+                    err(format!(
+                        "connect(): unknown cap \"{s}\" (butt, round, square)"
+                    ))
+                })?);
+            }
+            "band" => r.band = Some(num(k, &v)?),
+            "fill" => {
+                r.fill = Some(if v.is_string() {
+                    parse_color("connect", &string(k, v)?)?.into()
+                } else {
+                    v.try_cast::<Paint>()
+                        .ok_or_else(|| err("connect(): `fill` must be a colour or a gradient"))?
+                })
+            }
+            "radius" => r.corner_radius = Some(num(k, &v)?),
+            "gap" => {
+                r.gap = Some(match dyn_to_f32(&v) {
+                    Some(g) => crate::schema::RawGap::Both(g),
+                    None => {
+                        let a = v.try_cast::<Array>().unwrap_or_default();
+                        match a.as_slice() {
+                            [g0, g1] => crate::schema::RawGap::Ends([num(k, g0)?, num(k, g1)?]),
+                            _ => {
+                                return Err(err(
+                                    "connect(): `gap` must be a number or [start, end]",
+                                ))
+                            }
+                        }
+                    }
+                })
+            }
+            "opacity" => {
+                let o = num(k, &v)?;
+                if !(0.0..=1.0).contains(&o) {
+                    return Err(err("connect(): `opacity` must be from 0 to 1"));
+                }
+                r.opacity = Some(o);
+            }
+            _ => {
+                return Err(err(format!(
+                    "connect(): unknown option \"{k}\" ({CONNECT_KEYS})"
+                )))
+            }
+        }
+    }
+    Ok(sn)
+}
+
+/// `.id(s)`: the node's id in the document (`connect("a", "b")` and TOML
+/// name it); `""` clears it.
+fn id_setter(mut n: ScriptNode, id: &str) -> NodeResult {
+    if id.is_empty() {
+        n.explicit_id = None;
+        return Ok(n);
+    }
+    let synthetic = id == "root"
+        || id
+            .strip_prefix("node")
+            .is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()));
+    if synthetic {
+        return Err(err(format!(
+            "`id`: \"{id}\" is reserved for generated ids (root, node1, node2, …); pick another"
+        )));
+    }
+    n.explicit_id = Some(id.to_string());
+    Ok(n)
 }
 
 /// `page(width, height, root)`; `height` may be a number or `"auto"` (fit the
@@ -740,10 +945,17 @@ fn reg_enum<T: Clone + Send + Sync + 'static>(
 // ---------------------------------------------------------------------------
 
 /// Flatten the node tree into a `RawDocument`, synthesising ids (`root`, then
-/// `node1`, `node2`, … in pre-order) and filling each node's `children`. The
-/// offset call sites of each node are classified against `src` (the user's
-/// script) into the returned [`SourceMap`].
-fn lower(doc: ScriptDoc, src: &str) -> (RawDocument, SourceMap) {
+/// `node1`, `node2`, … in pre-order; a node given `.id(s)` gets `s`) and
+/// filling each node's `children`. A connector's ends become ids: a node
+/// value names the last copy of it placed (pre-order), an id string the node
+/// with that id. The offset call sites of each node are classified against
+/// `src` (the user's script) into the returned [`SourceMap`].
+fn lower(doc: ScriptDoc, src: &str) -> Result<(RawDocument, SourceMap), String> {
+    // Which copy (pre-order position) of a node with an explicit id gets
+    // it: the last one placed.
+    let mut chosen: HashMap<String, (usize, u64)> = HashMap::new();
+    let mut counter = 0usize;
+    claim_ids(&doc.root, 0, &mut counter, &mut chosen)?;
     let mut nodes: HashMap<String, RawNode> = HashMap::new();
     let mut map = SourceMap::new();
     let mut counter = 0usize;
@@ -751,25 +963,103 @@ fn lower(doc: ScriptDoc, src: &str) -> (RawDocument, SourceMap) {
         nodes: &mut nodes,
         map: &mut map,
         src,
+        chosen: &chosen,
+        by_uid: HashMap::new(),
+        links: Vec::new(),
     };
-    assign(doc.root, "root".to_string(), &mut counter, &mut out);
+    let root_id = node_id(&doc.root, 0, &chosen);
+    assign(doc.root, root_id.clone(), &mut counter, &mut out);
+    let (by_uid, links) = (
+        std::mem::take(&mut out.by_uid),
+        std::mem::take(&mut out.links),
+    );
+    for (id, ends) in links {
+        let mut resolved = Vec::with_capacity(2);
+        for (end, which) in ends.iter().zip(["from", "to"]) {
+            resolved.push(match end {
+                LinkRef::Node(uid) => by_uid.get(uid).cloned().ok_or_else(|| {
+                    format!("connect(): the `{which}` node is not on the page (put it in the tree under page(..))")
+                })?,
+                LinkRef::Id(s) if chosen.contains_key(s) => s.clone(),
+                LinkRef::Id(s) => {
+                    let mut known: Vec<&str> = chosen.keys().map(String::as_str).collect();
+                    known.sort();
+                    let known = if known.is_empty() {
+                        "none; give a node one with .id(..)".to_string()
+                    } else {
+                        known.join(", ")
+                    };
+                    return Err(format!(
+                        "connect(): no node has the id \"{s}\" (ids on the page: {known})"
+                    ));
+                }
+            });
+        }
+        let n = nodes.get_mut(&id).expect("connector lowered");
+        n.to = resolved.pop();
+        n.from = resolved.pop();
+    }
     let mut page = doc.page;
-    page.root = "root".to_string();
-    (RawDocument { page, nodes }, map)
+    page.root = root_id;
+    Ok((RawDocument { page, nodes }, map))
+}
+
+/// Pre-order walk (same numbering as [`assign`]) recording, per explicit id,
+/// the position of its last copy; two different nodes with one id are an
+/// error.
+fn claim_ids(
+    sn: &ScriptNode,
+    pos: usize,
+    counter: &mut usize,
+    chosen: &mut HashMap<String, (usize, u64)>,
+) -> Result<(), String> {
+    if let Some(id) = &sn.explicit_id {
+        if let Some(&(_, uid)) = chosen.get(id) {
+            if uid != sn.uid {
+                return Err(format!(
+                    "`id`: \"{id}\" is given to two different nodes (ids must be unique)"
+                ));
+            }
+        }
+        chosen.insert(id.clone(), (pos, sn.uid));
+    }
+    for child in &sn.children {
+        *counter += 1;
+        claim_ids(child, *counter, counter, chosen)?;
+    }
+    Ok(())
+}
+
+/// The id of the node at pre-order position `pos`.
+fn node_id(sn: &ScriptNode, pos: usize, chosen: &HashMap<String, (usize, u64)>) -> String {
+    match &sn.explicit_id {
+        Some(id) if chosen.get(id).is_some_and(|&(p, _)| p == pos) => id.clone(),
+        _ if pos == 0 => "root".to_string(),
+        _ => format!("node{pos}"),
+    }
 }
 
 struct Lowered<'a> {
     nodes: &'a mut HashMap<String, RawNode>,
     map: &'a mut SourceMap,
     src: &'a str,
+    chosen: &'a HashMap<String, (usize, u64)>,
+    /// Node uid -> id of its last copy placed so far.
+    by_uid: HashMap<u64, String>,
+    /// Connectors to fill in: (id, ends).
+    links: Vec<(String, [LinkRef; 2])>,
 }
 
 fn assign(mut sn: ScriptNode, id: String, counter: &mut usize, out: &mut Lowered<'_>) {
+    out.by_uid.insert(sn.uid, id.clone());
+    if let Some(link) = sn.link.take() {
+        out.links.push((id.clone(), *link));
+    }
     let children = std::mem::take(&mut sn.children);
     let mut child_ids = Vec::with_capacity(children.len());
     for child in children {
         *counter += 1;
-        let cid = format!("node{}", *counter);
+        let cid = node_id(&child, *counter, out.chosen);
         child_ids.push(cid.clone());
         assign(child, cid, counter, out);
     }
@@ -1074,6 +1364,17 @@ fn build_engine(base_dir: Option<&Path>) -> Engine {
             checked_paint("absolute", p)
         },
     );
+    // Connectors: a line (or band) between two nodes, drawn after layout.
+    engine.register_fn("connect", |a: Dynamic, b: Dynamic| {
+        connect_fn(a, b, Map::new())
+    });
+    engine.register_fn("connect", connect_fn);
+    // The node's id in the document (connectors and TOML refer to it).
+    engine.register_fn("id", id_setter);
+    // The id a node will get, if set with `.id(s)` (else "").
+    engine.register_fn("id", |n: ScriptNode| {
+        n.explicit_id.clone().unwrap_or_default()
+    });
     // Diagnostics: a human-readable name (an overflow warning uses it).
     engine.register_fn("name", |n: ScriptNode, s: &str| {
         set_node(n, |r| r.name = Some(s.to_string()))
@@ -1414,5 +1715,9 @@ pub fn eval_script_mapped(
     let doc = value
         .try_cast::<ScriptDoc>()
         .ok_or_else(ScriptError::not_a_document)?;
-    Ok(lower(doc, src))
+    lower(doc, src).map_err(|message| ScriptError {
+        message,
+        line: None,
+        column: None,
+    })
 }

@@ -181,6 +181,11 @@ pub enum NodeKind {
     Ellipse,
     /// A polyline (or polygon when `closed`) through `points`.
     Path,
+    /// A line (or a wide band) between two other nodes, `from` and `to`,
+    /// drawn after layout between points of their final boxes. It takes no
+    /// room in its parent; where it sits in the tree only decides its paint
+    /// order (and the clips / effects it is under).
+    Connector,
 }
 
 /// A single node as written in TOML. All type-specific fields are optional;
@@ -470,6 +475,88 @@ pub struct RawNode {
     /// `barb_right`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub head_style: Option<HeadStyle>,
+
+    // ---- connector (`stroke` / `stroke_width` / `dash` / `cap` / `join` /
+    //      `head*` / `fill` / `corner_radius` above are shared) ----
+    /// Connector: the id of the node it starts at.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    /// Connector: the id of the node it ends at.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    /// Connector: where on `from`'s box it starts — a side (`"left"`,
+    /// `"right"`, `"top"`, `"bottom"`, a corner like `"top-left"`,
+    /// `"center"`), `[fx, fy]` fractions of the box, or `"auto"` (default:
+    /// the side facing the other node).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_at: Option<RawAttach>,
+    /// Connector: where on `to`'s box it ends (as `from_at`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to_at: Option<RawAttach>,
+    /// Connector: `straight` (default), `elbow` (horizontal / vertical runs,
+    /// corners rounded by `corner_radius`) or `curve` (a cubic leaving and
+    /// entering along the sides' normals).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route: Option<ConnectorRoute>,
+    /// Connector: keep the ends this far (page unit) off the attachment
+    /// points — one number for both ends or `[start, end]`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gap: Option<RawGap>,
+    /// Connector: draw a filled band this wide (page unit) along the route
+    /// instead of a stroke — a block arrow (`head` puts triangular heads on
+    /// it, `head_size` long, `head_width` across; default 1 × and 2 × the
+    /// band). Filled with `fill` (default: the `stroke` colour, else black).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub band: Option<f32>,
+}
+
+/// Where a connector attaches to a node's box: a named point or fractions.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum RawAttach {
+    /// `"auto"`, `"center"`, a side (`"left"`, …) or a corner (`"top-left"`, …).
+    Named(String),
+    /// `[fx, fy]`: fractions of the box (`[0, 0]` top-left, `[1, 0.5]` right middle).
+    Frac([f32; 2]),
+}
+
+/// A connector's path between its two ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ConnectorRoute {
+    #[default]
+    Straight,
+    Elbow,
+    Curve,
+}
+
+impl ConnectorRoute {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "straight" => ConnectorRoute::Straight,
+            "elbow" => ConnectorRoute::Elbow,
+            "curve" => ConnectorRoute::Curve,
+            _ => return None,
+        })
+    }
+}
+
+/// A connector's end gaps: one length for both ends, or `[start, end]`.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum RawGap {
+    Both(f32),
+    Ends([f32; 2]),
+}
+
+impl RawGap {
+    /// `[start, end]`.
+    pub fn ends(self) -> [f32; 2] {
+        match self {
+            RawGap::Both(g) => [g, g],
+            RawGap::Ends(e) => e,
+        }
+    }
 }
 
 /// `shadow = { dx, dy, blur, spread, color }` (lengths in the page unit; all

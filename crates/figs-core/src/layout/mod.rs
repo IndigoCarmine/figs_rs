@@ -37,6 +37,7 @@ pub mod arrange;
 mod axis;
 mod baseline;
 pub mod computed;
+mod connect;
 pub mod measure;
 
 pub use computed::{
@@ -289,6 +290,9 @@ pub fn layout<M: LeafMeasure>(doc: &Document, measurer: &M) -> ComputedLayout {
         for &c in n.kind.children() {
             parents[c] = Some(i);
         }
+        for &(_, c) in n.kind.overlays() {
+            parents[c] = Some(i);
+        }
     }
     let mut ctx = Ctx {
         doc,
@@ -324,6 +328,7 @@ pub fn layout<M: LeafMeasure>(doc: &Document, measurer: &M) -> ComputedLayout {
 
     let mut nodes = Vec::with_capacity(doc.nodes.len());
     arrange::arrange(&ctx, doc.root, root_box, None, &mut nodes);
+    connect::place_connectors(doc, &mut nodes);
 
     let overflows = ctx.overflows.into_inner();
     for o in &overflows {

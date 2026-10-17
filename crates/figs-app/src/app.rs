@@ -859,5 +859,6 @@ pub fn kind_label(k: figs_core::schema::NodeKind) -> &'static str {
         Arrow => "arrow",
         Ellipse => "ellipse",
         Path => "path",
+        Connector => "connector",
     }
 }

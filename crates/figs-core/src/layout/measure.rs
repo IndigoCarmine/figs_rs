@@ -80,7 +80,7 @@ fn measure_own<M: LeafMeasure>(ctx: &Ctx<M>, idx: usize, c: Constraints) -> Size
             &node.common,
             explicit_tight(&node.common, c),
         ),
-        NodeType::Rect(_) | NodeType::Ellipse(_) => Size::default(),
+        NodeType::Rect(_) | NodeType::Ellipse(_) | NodeType::Connector(_) => Size::default(),
         // Coordinates live in the content box, so the intrinsic size is the
         // outline's extent from its origin (exact curve bounds, not control
         // points; not the tight bounding box) plus padding. Viewbox coordinates

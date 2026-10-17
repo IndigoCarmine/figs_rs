@@ -383,6 +383,23 @@ fn inspector(app: &mut FigsApp, ui: &mut egui::Ui, _p: &Palette) {
                             changed |= head_style_combo(ui, "Head style", &mut node.head_style);
                         }
                     }
+                    NodeKind::Connector => {
+                        // Ends by node id; attachment points / route / gap
+                        // are edited in the source.
+                        section(ui, "Connector");
+                        changed |= text_single(ui, "From", &mut node.from);
+                        changed |= text_single(ui, "To", &mut node.to);
+                        changed |= opt_num(ui, "Band", &mut node.band, 0.25);
+                        changed |= opt_paint(ui, "Fill", &mut node.fill);
+                        changed |= opt_color(ui, "Stroke", &mut node.stroke);
+                        changed |= opt_num(ui, "Stroke width", &mut node.stroke_width, 0.25);
+                        changed |= opt_num(ui, "Corner radius", &mut node.corner_radius, 0.25);
+                        changed |= dash_field(ui, "Dash", &mut node.dash);
+                        changed |= head_seg(ui, "Head", &mut node.head);
+                        changed |= opt_num(ui, "Head size", &mut node.head_size, 0.25);
+                        changed |= head_width_field(ui, "Head width", &mut node.head_width);
+                        changed |= head_style_combo(ui, "Head style", &mut node.head_style);
+                    }
                 }
 
                 if matches!(kind, NodeKind::Column | NodeKind::Row | NodeKind::Stack) {
@@ -1292,6 +1309,7 @@ fn parse_type_value(rest: &str) -> Option<NodeKind> {
         "arrow" => Some(NodeKind::Arrow),
         "ellipse" => Some(NodeKind::Ellipse),
         "path" => Some(NodeKind::Path),
+        "connector" => Some(NodeKind::Connector),
         _ => None,
     }
 }
@@ -1417,6 +1435,26 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
                     "head_width",
                     "head_style",
                 ]),
+                Some(NodeKind::Connector) => v.extend([
+                    "from",
+                    "to",
+                    "from_at",
+                    "to_at",
+                    "route",
+                    "gap",
+                    "band",
+                    "fill",
+                    "stroke",
+                    "stroke_width",
+                    "corner_radius",
+                    "dash",
+                    "cap",
+                    "join",
+                    "head",
+                    "head_size",
+                    "head_width",
+                    "head_style",
+                ]),
                 Some(NodeKind::Ellipse) => v.extend([
                     "fill",
                     "stroke",
@@ -1483,7 +1521,30 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
 fn enum_values(key: &str) -> Vec<&'static str> {
     match key {
         "type" => vec![
-            "column", "row", "stack", "text", "rect", "image", "line", "arrow", "ellipse", "path",
+            "column",
+            "row",
+            "stack",
+            "text",
+            "rect",
+            "image",
+            "line",
+            "arrow",
+            "ellipse",
+            "path",
+            "connector",
+        ],
+        "route" => vec!["straight", "elbow", "curve"],
+        "from_at" | "to_at" => vec![
+            "auto",
+            "center",
+            "left",
+            "right",
+            "top",
+            "bottom",
+            "top-left",
+            "top-right",
+            "bottom-left",
+            "bottom-right",
         ],
         "cap" => vec!["butt", "round", "square"],
         "head" => vec!["none", "start", "end", "both"],

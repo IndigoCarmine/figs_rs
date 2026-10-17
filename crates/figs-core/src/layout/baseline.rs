@@ -113,7 +113,7 @@ fn own_baseline<M: LeafMeasure>(
         } => {
             // A contained stack lays its children out in a shrunken box.
             let content = if *contain {
-                layout_stack_contained(ctx, children, *viewbox, content, None, &mut Vec::new())
+                layout_stack_contained(ctx, children, &[], *viewbox, content, None, &mut Vec::new())
             } else {
                 content
             };

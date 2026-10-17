@@ -71,13 +71,14 @@ pub(crate) fn arrange<M: LeafMeasure>(
             children,
             viewbox,
             contain,
+            overlays,
             ..
         } => {
             let content = rect.inset(node.common.padding);
             if *contain {
-                layout_stack_contained(ctx, children, *viewbox, content, xf, out);
+                layout_stack_contained(ctx, children, overlays, *viewbox, content, xf, out);
             } else {
-                layout_stack(ctx, children, *viewbox, content, xf, out);
+                layout_stack(ctx, children, overlays, *viewbox, content, xf, out);
             }
         }
         NodeType::Text(_) => warn_unwrapped_overflow(ctx, idx, rect),
@@ -189,16 +190,39 @@ fn rotated_frame(
 fn layout_stack<M: LeafMeasure>(
     ctx: &Ctx<M>,
     children: &[usize],
+    overlays: &[(usize, usize)],
     viewbox: Option<ViewBox>,
     content: Rect,
     xf: Option<Affine>,
     out: &mut Vec<ComputedNode>,
 ) {
-    for (&child, slot) in children
-        .iter()
-        .zip(stack_slots(ctx, children, viewbox, content))
-    {
+    let slots = stack_slots(ctx, children, viewbox, content);
+    arrange_in_order(ctx, children, overlays, slots, content, xf, out);
+}
+
+/// Arrange in-flow `children` in their `slots`, and each connector of
+/// `overlays` (out of flow; see `NodeType::overlays`) in its place among
+/// them, with an empty box at the `content` origin — it is drawn once every
+/// box is known ([`super::connect::place_connectors`]).
+fn arrange_in_order<M: LeafMeasure>(
+    ctx: &Ctx<M>,
+    children: &[usize],
+    overlays: &[(usize, usize)],
+    slots: Vec<Rect>,
+    content: Rect,
+    xf: Option<Affine>,
+    out: &mut Vec<ComputedNode>,
+) {
+    let empty = Rect::new(content.x, content.y, 0.0, 0.0);
+    let mut pending = overlays.iter().peekable();
+    for (k, (&child, slot)) in children.iter().zip(slots).enumerate() {
+        while let Some(&(_, c)) = pending.next_if(|(at, _)| *at <= k) {
+            arrange(ctx, c, empty, xf, out);
+        }
         arrange(ctx, child, slot, xf, out);
+    }
+    for &(_, c) in pending {
+        arrange(ctx, c, empty, xf, out);
     }
 }
 
@@ -259,6 +283,7 @@ const CONTAIN_EPS: f32 = 0.01;
 pub(super) fn layout_stack_contained<M: LeafMeasure>(
     ctx: &Ctx<M>,
     children: &[usize],
+    overlays: &[(usize, usize)],
     viewbox: Option<ViewBox>,
     bounds: Rect,
     xf: Option<Affine>,
@@ -272,7 +297,7 @@ pub(super) fn layout_stack_contained<M: LeafMeasure>(
     for _ in 0..CONTAIN_PASSES {
         placed.clear();
         used = bounds.inset(inset);
-        layout_stack(ctx, children, viewbox, used, xf, &mut placed);
+        layout_stack(ctx, children, overlays, viewbox, used, xf, &mut placed);
         let Some(ink) = union_of(&placed, to_local) else {
             break;
         };
@@ -329,6 +354,8 @@ fn union_of(nodes: &[ComputedNode], to_local: Option<Affine>) -> Option<Rect> {
 pub(super) struct Flex<'a> {
     pub axis: Axis,
     pub children: &'a [usize],
+    /// Connector children, out of flow (see `NodeType::overlays`).
+    pub overlays: &'a [(usize, usize)],
     pub spacing: f32,
     /// Column: first baselines this far apart (see `pitch_gaps`).
     pub pitch: Option<f32>,
@@ -354,6 +381,7 @@ impl<'a> Flex<'a> {
             main_axis,
             cross_axis,
             equal_height,
+            overlays,
             ..
         } = &ctx.doc.nodes[idx].kind
         else {
@@ -362,6 +390,7 @@ impl<'a> Flex<'a> {
         Some(Flex {
             axis: *axis,
             children,
+            overlays,
             spacing: *spacing,
             pitch: baseline_pitch.filter(|_| *axis == Axis::Vertical),
             main_align: *main_axis,
@@ -426,9 +455,7 @@ fn layout_children<M: LeafMeasure>(
                 have,
                 OverflowAction::Shrunk(s),
             );
-            for (&child, slot) in flex.children.iter().zip(slots) {
-                arrange(ctx, child, slot, cxf, out);
-            }
+            arrange_in_order(ctx, flex.children, flex.overlays, slots, virt, cxf, out);
             return false;
         }
     }
@@ -459,9 +486,7 @@ fn layout_children<M: LeafMeasure>(
         };
         report_overflow(ctx, idx, flex, &slots, have + over, have, action);
     }
-    for (&child, slot) in flex.children.iter().zip(slots) {
-        arrange(ctx, child, slot, xf, out);
-    }
+    arrange_in_order(ctx, flex.children, flex.overlays, slots, content, xf, out);
     clip && overflow == Overflow::Clip
 }
 
@@ -545,6 +570,7 @@ pub(super) fn flex_slots<M: LeafMeasure>(ctx: &Ctx<M>, flex: &Flex, content: Rec
         cross_align,
         content_h,
         equal_height,
+        ..
     } = *flex;
     let n = children.len();
     if n == 0 {
@@ -890,5 +916,7 @@ fn paint_content(kind: &NodeType, common: &Common, rect: Rect) -> PaintContent {
             stroke: props.stroke.clone(),
             stroke_align: props.stroke_align,
         },
+        // Drawn after layout (`connect::place_connectors`).
+        NodeType::Connector(_) => PaintContent::Container,
     }
 }

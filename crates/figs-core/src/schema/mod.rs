@@ -11,11 +11,12 @@ pub mod resolve;
 pub mod span;
 
 pub use parse::{
-    ArcRadius, NodeKind, PageHeight, RawDocument, RawGlow, RawNode, RawPage, RawSegment, RawShadow,
+    ArcRadius, ConnectorRoute, NodeKind, PageHeight, RawAttach, RawDocument, RawGap, RawGlow,
+    RawNode, RawPage, RawSegment, RawShadow,
 };
 pub use resolve::{
-    Common, Decoration, Document, EllipseProps, ImageProps, Node, NodeType, PageInfo, PathProps,
-    RectProps, ResolveError, TextProps,
+    Attach, Common, ConnectorProps, Decoration, Document, EllipseProps, ImageProps, Node, NodeType,
+    PageInfo, PathProps, RectProps, ResolveError, TextProps,
 };
 pub use span::{
     parse_family_list, FitWidth, FontSpec, FontStyle, FontSynthesis, RawSpan, Script,

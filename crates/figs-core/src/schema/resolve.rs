@@ -20,7 +20,7 @@ use crate::geom::{
 use crate::path::arc_to_cubics;
 
 use super::parse::RawPage;
-use super::parse::{NodeKind, RawDocument, RawNode, RawSegment};
+use super::parse::{ConnectorRoute, NodeKind, RawAttach, RawDocument, RawNode, RawSegment};
 use super::span::{FitWidth, FontSpec, FontStyle, TextSpan, TextTypography};
 
 /// Default raster resolution for PNG output when `page.dpi` is unset.
@@ -222,6 +222,10 @@ pub enum NodeType {
         overflow: Overflow,
         /// Background / border / clip (`None` = a plain container).
         decoration: Option<Box<Decoration>>,
+        /// Connector children (out of flow): `(k, node)` paints `node` just
+        /// before in-flow child `k` (`k == children.len()`: after them all),
+        /// keeping the written order.
+        overlays: Vec<(usize, usize)>,
     },
     /// Children overlap inside the content box, painted in order (later = on
     /// top), each positioned by its own `x`/`y` — in points, or in `viewbox`
@@ -233,6 +237,8 @@ pub enum NodeType {
         contain: bool,
         /// Background / border / clip (`None` = a plain stack).
         decoration: Option<Box<Decoration>>,
+        /// Connector children, as for a column/row.
+        overlays: Vec<(usize, usize)>,
     },
     Image(ImageProps),
     Text(TextProps),
@@ -240,6 +246,8 @@ pub enum NodeType {
     /// `line`, `arrow` and `path` all resolve to a stroked/filled polyline.
     Path(PathProps),
     Ellipse(EllipseProps),
+    /// A line or band between two other nodes, placed after layout.
+    Connector(ConnectorProps),
 }
 
 impl NodeType {
@@ -260,6 +268,73 @@ impl NodeType {
             _ => &[],
         }
     }
+
+    /// Connector children of a container, `(k, node)`: painted just before
+    /// in-flow child `k` (see `NodeType::Container::overlays`).
+    pub fn overlays(&self) -> &[(usize, usize)] {
+        match self {
+            NodeType::Container { overlays, .. } | NodeType::Stack { overlays, .. } => overlays,
+            _ => &[],
+        }
+    }
+}
+
+/// Where a connector attaches to a node's box.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Attach {
+    /// The side (middle) facing the other end, chosen after layout.
+    Auto,
+    /// Fractions `[fx, fy]` of the node's (unrotated) box.
+    Frac([f32; 2]),
+}
+
+impl Attach {
+    /// The names `parse` accepts.
+    pub const NAMES: &'static str = "auto, center, left, right, top, bottom, top-left, top-right, bottom-left, bottom-right, or [fx, fy]";
+
+    /// A named point: `auto`, `center`, a side or a corner (`top-left`;
+    /// `_` works as well as `-`).
+    pub fn parse(s: &str) -> Option<Attach> {
+        let f = |x: f32, y: f32| Some(Attach::Frac([x, y]));
+        match s.replace('_', "-").as_str() {
+            "auto" => Some(Attach::Auto),
+            "center" | "centre" | "middle" => f(0.5, 0.5),
+            "left" => f(0.0, 0.5),
+            "right" => f(1.0, 0.5),
+            "top" => f(0.5, 0.0),
+            "bottom" => f(0.5, 1.0),
+            "top-left" | "left-top" => f(0.0, 0.0),
+            "top-right" | "right-top" => f(1.0, 0.0),
+            "bottom-left" | "left-bottom" => f(0.0, 1.0),
+            "bottom-right" | "right-bottom" => f(1.0, 1.0),
+            _ => None,
+        }
+    }
+}
+
+/// A resolved connector: two node indices and how to join them (lengths in
+/// points). See [`crate::layout`] for the placement.
+#[derive(Debug, Clone)]
+pub struct ConnectorProps {
+    pub from: usize,
+    pub to: usize,
+    pub from_at: Attach,
+    pub to_at: Attach,
+    pub route: ConnectorRoute,
+    /// How far each end stays off its attachment point `[start, end]`.
+    pub gap: [f32; 2],
+    /// Elbow corner radius.
+    pub radius: f32,
+    /// Band width: a filled block arrow instead of a stroke.
+    pub band: Option<f32>,
+    /// The band's fill (band only).
+    pub fill: Option<Paint>,
+    /// The line (or the band's outline).
+    pub stroke: Option<StrokeStyle>,
+    pub head: ArrowHead,
+    pub head_size: f32,
+    pub head_width: f32,
+    pub head_style: HeadStyle,
 }
 
 /// A container's own painting: a background `fill` and a border `stroke`
@@ -434,10 +509,59 @@ pub fn resolve(raw: RawDocument) -> Result<Document, ResolveError> {
         nodes.push(convert_node(id, raw_node, &index_of, factor)?);
     }
 
+    // Connector children are out of flow: move them to the overlays.
+    let is_connector: Vec<bool> = nodes
+        .iter()
+        .map(|n| matches!(n.kind, NodeType::Connector(_)))
+        .collect();
+    for node in &mut nodes {
+        if let NodeType::Container {
+            children, overlays, ..
+        }
+        | NodeType::Stack {
+            children, overlays, ..
+        } = &mut node.kind
+        {
+            if children.iter().any(|&c| is_connector[c]) {
+                let mut flow = Vec::with_capacity(children.len());
+                for &c in children.iter() {
+                    if is_connector[c] {
+                        overlays.push((flow.len(), c));
+                    } else {
+                        flow.push(c);
+                    }
+                }
+                *children = flow;
+            }
+        }
+    }
+    // A connector joins two laid-out boxes, not another connector.
+    for node in &nodes {
+        if let NodeType::Connector(c) = &node.kind {
+            for (field, end) in [("from", c.from), ("to", c.to)] {
+                if is_connector[end] {
+                    return Err(ResolveError::InvalidField {
+                        node: node.id.clone(),
+                        field,
+                        reason: format!(
+                            "`{}` is a connector; a connector joins two other nodes",
+                            nodes[end].id
+                        ),
+                    });
+                }
+            }
+        }
+    }
+
     // Each non-root node may be referenced by at most one parent.
     let mut parent_count = vec![0u32; nodes.len()];
     for node in &nodes {
-        for &c in node.kind.children() {
+        for &c in node
+            .kind
+            .children()
+            .iter()
+            .chain(node.kind.overlays().iter().map(|(_, c)| c))
+        {
             parent_count[c] += 1;
         }
     }
@@ -806,6 +930,7 @@ fn convert_node(
         });
     }
     let is_container = matches!(raw.kind, NodeKind::Column | NodeKind::Row | NodeKind::Stack);
+    check_connector_fields(id, raw)?;
     if raw.clip && !is_container {
         return Err(ResolveError::InvalidField {
             node: id.to_string(),
@@ -895,6 +1020,7 @@ fn convert_node(
                 equal_height: raw.equal_height,
                 overflow: raw.overflow.unwrap_or_default(),
                 decoration: decoration()?,
+                overlays: Vec::new(),
             }
         }
         NodeKind::Stack => NodeType::Stack {
@@ -902,6 +1028,7 @@ fn convert_node(
             viewbox,
             contain: raw.contain,
             decoration: decoration()?,
+            overlays: Vec::new(),
         },
         NodeKind::Image => {
             let src = raw.src.clone().ok_or_else(|| ResolveError::MissingField {
@@ -1045,6 +1172,7 @@ fn convert_node(
             stroke: shape_stroke(id, raw, factor, raw.fill.is_none())?,
             stroke_align: raw.stroke_align.unwrap_or_default(),
         }),
+        NodeKind::Connector => connector(id, raw, index_of, factor, fill.clone())?,
     };
 
     let effects = effects(id, raw, factor)?;
@@ -1062,6 +1190,150 @@ fn convert_node(
         kind,
         effects,
     })
+}
+
+/// The connector-only fields (`from`, `to`, `from_at`, `to_at`, `route`,
+/// `gap`, `band`) only on a connector.
+fn check_connector_fields(id: &str, raw: &RawNode) -> Result<(), ResolveError> {
+    if raw.kind == NodeKind::Connector {
+        if !raw.children.is_empty() {
+            return Err(ResolveError::InvalidField {
+                node: id.to_string(),
+                field: "children",
+                reason: "a connector has no children".into(),
+            });
+        }
+        return Ok(());
+    }
+    let given = [
+        ("from", raw.from.is_some()),
+        ("to", raw.to.is_some()),
+        ("from_at", raw.from_at.is_some()),
+        ("to_at", raw.to_at.is_some()),
+        ("route", raw.route.is_some()),
+        ("gap", raw.gap.is_some()),
+        ("band", raw.band.is_some()),
+    ];
+    match given.iter().find(|(_, g)| *g) {
+        Some((field, _)) => Err(ResolveError::InvalidField {
+            node: id.to_string(),
+            field,
+            reason: "only a connector has it".into(),
+        }),
+        None => Ok(()),
+    }
+}
+
+/// A connector's resolved payload.
+fn connector(
+    id: &str,
+    raw: &RawNode,
+    index_of: &HashMap<&str, usize>,
+    factor: f32,
+    fill: Option<Paint>,
+) -> Result<NodeType, ResolveError> {
+    let invalid = |field, reason: String| ResolveError::InvalidField {
+        node: id.to_string(),
+        field,
+        reason,
+    };
+    let end = |field: &'static str, v: &Option<String>| -> Result<usize, ResolveError> {
+        let name = v.as_deref().ok_or(ResolveError::MissingField {
+            node: id.to_string(),
+            kind: "connector",
+            field,
+        })?;
+        if name == id {
+            return Err(invalid(field, "a connector can't attach to itself".into()));
+        }
+        index_of
+            .get(name)
+            .copied()
+            .ok_or_else(|| invalid(field, format!("no node has the id `{name}`")))
+    };
+    let from = end("from", &raw.from)?;
+    let to = end("to", &raw.to)?;
+    let attach = |field, v: &Option<RawAttach>| -> Result<Attach, ResolveError> {
+        match v {
+            None => Ok(Attach::Auto),
+            Some(RawAttach::Frac(f)) if f.iter().all(|x| x.is_finite()) => Ok(Attach::Frac(*f)),
+            Some(RawAttach::Frac(_)) => Err(invalid(field, "fractions must be finite".into())),
+            Some(RawAttach::Named(s)) => Attach::parse(s)
+                .ok_or_else(|| invalid(field, format!("unknown point `{s}` ({})", Attach::NAMES))),
+        }
+    };
+    let from_at = attach("from_at", &raw.from_at)?;
+    let to_at = attach("to_at", &raw.to_at)?;
+    let gap = raw.gap.map_or([0.0, 0.0], |g| g.ends());
+    if !gap.iter().all(|g| g.is_finite()) {
+        return Err(invalid("gap", "must be finite lengths".into()));
+    }
+    let radius = raw.corner_radius.unwrap_or(0.0) * factor;
+    if !(radius.is_finite() && radius >= 0.0) {
+        return Err(invalid(
+            "corner_radius",
+            "must be a non-negative length".into(),
+        ));
+    }
+    let band = match raw.band {
+        Some(b) if b.is_finite() && b > 0.0 => Some(b * factor),
+        Some(b) => {
+            return Err(invalid(
+                "band",
+                format!("must be a positive width, got {b}"),
+            ))
+        }
+        None => None,
+    };
+    let (fill, stroke) = match band {
+        // A band is filled (with `fill`, else the stroke colour); a stroke
+        // as well only when both are given.
+        Some(_) => {
+            let fill = fill.or_else(|| Some(raw.stroke.unwrap_or(Color::BLACK).into()));
+            let stroke = if raw.fill.is_some() {
+                shape_stroke(id, raw, factor, false)?
+            } else {
+                None
+            };
+            (fill, stroke)
+        }
+        None => (None, shape_stroke(id, raw, factor, true)?),
+    };
+    let stroke_w = stroke.as_ref().map_or(0.0, |s| s.width);
+    let head_size = match (raw.head_size, band) {
+        (Some(h), _) => h * factor,
+        (None, Some(b)) => b,
+        (None, None) => stroke_w * DEFAULT_HEAD_SIZE_PER_STROKE,
+    };
+    let head_width = match (raw.head_width, band) {
+        (Some(HeadWidth::Abs(w)), _) => w * factor,
+        (Some(w @ HeadWidth::PerStroke(_)), Some(b)) => w.resolve(b),
+        (Some(w @ HeadWidth::PerStroke(_)), None) => w.resolve(stroke_w),
+        (None, Some(b)) => 2.0 * b,
+        (None, None) => head_size * DEFAULT_HEAD_WIDTH_PER_SIZE,
+    };
+    if !(head_size.is_finite() && head_size >= 0.0 && head_width.is_finite() && head_width >= 0.0) {
+        return Err(invalid(
+            "head_size",
+            "head_size / head_width must be non-negative lengths".into(),
+        ));
+    }
+    Ok(NodeType::Connector(ConnectorProps {
+        from,
+        to,
+        from_at,
+        to_at,
+        route: raw.route.unwrap_or_default(),
+        gap: [gap[0] * factor, gap[1] * factor],
+        radius,
+        band,
+        fill,
+        stroke,
+        head: raw.head.unwrap_or(ArrowHead::None),
+        head_size,
+        head_width,
+        head_style: raw.head_style.unwrap_or_default(),
+    }))
 }
 
 /// `shadow` / `glow` / `opacity`, validated and converted to points. A glow

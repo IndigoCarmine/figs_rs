@@ -32,6 +32,7 @@ fn kind_tag(t: &NodeType) -> &'static str {
         NodeType::Rect(_) => "rect",
         NodeType::Path(_) => "path",
         NodeType::Ellipse(_) => "ellipse",
+        NodeType::Connector(_) => "connector",
     }
 }
 
