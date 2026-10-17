@@ -1363,3 +1363,255 @@ fn poster_example_uses_the_poster_style() {
     assert_eq!(cap.font_size, Some(24.0));
     assert_eq!(cap.align, Some(TextAlign::Center));
 }
+
+// ---- overlay, side, schemes -----------------------------------------------------
+
+/// The (single) laid-out text reading `s`.
+fn text_at(l: &ComputedLayout, s: &str) -> Rect {
+    let v = texts_at(l, s);
+    assert_eq!(v.len(), 1, "expected one text {s:?}, got {v:?}");
+    v[0]
+}
+
+/// The laid-out texts reading `s`, in paint order.
+fn texts_at(l: &ComputedLayout, s: &str) -> Vec<Rect> {
+    l.nodes
+        .iter()
+        .filter(|n| matches!(&n.content, PaintContent::Text(t) if t.content == s))
+        .map(|n| n.rect)
+        .collect()
+}
+
+fn script_err(src: &str) -> String {
+    eval_script(&format!("page(1, 1, {src})"))
+        .err()
+        .unwrap_or_else(|| panic!("{src} should fail"))
+        .to_string()
+}
+
+#[test]
+fn overlay_places_nodes_by_position_name() {
+    let l = lay_fixed(
+        r#"fn overlay_inset() { 5 } fn overlay_gap() { 2 }
+        page(100, 80, overlay(rect(), #{
+            "top-left": text("TL"), top: text("T"), left: "L", center: text("C"),
+            "bottom-right": [text("B1"), text("B2")],
+        })).unit("pt")"#,
+    );
+    let r = |s| text_at(&l, s);
+    approx(r("TL").x, 5.0);
+    approx(r("TL").y, 5.0);
+    approx(r("T").x, 40.0);
+    approx(r("T").y, 5.0);
+    approx(r("L").x, 5.0);
+    approx(r("L").y, 35.0);
+    approx(r("C").x, 40.0);
+    approx(r("C").y, 35.0);
+    // Several nodes at one position: a column, gap apart, at its corner.
+    approx(r("B2").x, 75.0);
+    approx(r("B2").y, 65.0);
+    approx(r("B1").y, 53.0);
+    // Options override the hooks; errors list the positions.
+    let l = lay_fixed(
+        r#"page(100, 80, overlay(rect(), #{ "bottom-left": text("X") }, #{ inset: 3 })).unit("pt")"#,
+    );
+    approx(text_at(&l, "X").x, 3.0);
+    approx(text_at(&l, "X").y, 67.0);
+    let e = script_err(r#"overlay(rect(), #{ middle: text("x") })"#);
+    assert!(
+        e.contains("unknown position \"middle\" (top-left, top, top-right, left, center"),
+        "{e}"
+    );
+    let e = script_err(r#"overlay(rect(), text("x"))"#);
+    assert!(e.contains("expected a map of position"), "{e}");
+}
+
+#[test]
+fn side_puts_a_note_beside_a_panel() {
+    // Default: right, side_width() 0.4 of the width (less the gap), centred.
+    let l = lay_fixed(
+        r#"page(100, 50, col([side(rect().height(40), "N", #{ gap: 10 })]).stretch()).unit("pt")"#,
+    );
+    let n = text_at(&l, "N");
+    approx(n.x, 64.0);
+    approx(n.w, 36.0);
+    approx(n.y, 15.0);
+    // Left, natural width, top-aligned; an array is a column.
+    let l = lay_fixed(
+        r#"style(#{ side_gap: 4 }); fn caption_gap() { 3 }
+        page(100, 50, col([side(rect().height(40), ["N", "M"],
+            #{ side: "left", width: "auto", align: "start" })]).stretch()).unit("pt")"#,
+    );
+    approx(text_at(&l, "N").x, 0.0);
+    approx(text_at(&l, "N").y, 0.0);
+    approx(text_at(&l, "M").y, 13.0);
+    for (src, want) in [
+        (
+            r#"side(rect(), "n", #{ side: "top" })"#,
+            "unknown side \"top\"",
+        ),
+        (
+            r#"side(rect(), "n", #{ width: 1.5 })"#,
+            "width must be a fraction",
+        ),
+        (
+            r#"side(rect(), "n", #{ big: 1 })"#,
+            "unknown option \"big\"",
+        ),
+        (
+            r#"side(rect(), 3)"#,
+            "side: expected a string, spans or a node",
+        ),
+    ] {
+        let e = script_err(src);
+        assert!(e.contains(want), "{src}: {e}");
+    }
+}
+
+const SCHEME_HOOKS: &str = r#"fn scheme_gap() { 4 } fn scheme_label_gap() { 2 }
+    fn scheme_arrow_length() { 30 } fn scheme_arrow_width() { 1 }"#;
+
+#[test]
+fn scheme_centres_items_and_balances_captions() {
+    let src = format!(
+        r#"{SCHEME_HOOKS}
+        page(200, 100, scheme([rect().width(10).height(40), arrow_step("up"),
+                               step(rect().width(10).height(20), "cap")])).unit("pt")"#
+    );
+    let l = lay_fixed(&src);
+    let d = raw(&src);
+    // Every item is centred on the row's axis (y = 50): the step's node too,
+    // its caption below balanced by an invisible copy above.
+    let up = texts_at(&l, "up");
+    assert_eq!(up.len(), 2, "the label and its invisible copy");
+    let ys: Vec<f32> = up.iter().map(|r| r.y).collect();
+    assert!(ys.contains(&36.0) && ys.contains(&54.0), "{ys:?}");
+    let ys: Vec<f32> = texts_at(&l, "cap").iter().map(|r| r.y).collect();
+    assert!(ys.contains(&28.0) && ys.contains(&62.0), "{ys:?}");
+    let ghosts = d
+        .nodes
+        .values()
+        .filter(|n| matches!(n.content.as_deref(), Some("cap") | Some("up")))
+        .filter(|n| n.opacity == Some(0.0))
+        .count();
+    assert_eq!(ghosts, 2);
+    // The arrow: 30 long, its head 4 x the width across, on the axis; the
+    // row is centred (10 + 4 + 30 + 4 + 20 = 68 wide).
+    let id = d
+        .nodes
+        .iter()
+        .find(|(_, n)| n.kind == NodeKind::Arrow)
+        .map(|(id, _)| id.clone())
+        .unwrap();
+    let a = rect_of(&l, &id);
+    approx(a.x, 66.0 + 14.0);
+    approx(a.w, 30.0);
+    approx(a.h, 4.0);
+    approx(a.y + a.h / 2.0, 50.0);
+    approx(up[0].x, 66.0 + 14.0 + 5.0);
+}
+
+#[test]
+fn scheme_arrows_fill_point_down_and_pair_up() {
+    // "fill": the arrow takes the spare width.
+    let l = lay_fixed(&format!(
+        r#"{SCHEME_HOOKS}
+        page(200, 100, scheme([text("a"), arrow_step(#{{ length: "fill" }}), text("b")])).unit("pt")"#
+    ));
+    approx(text_at(&l, "a").x, 0.0);
+    approx(text_at(&l, "b").x, 180.0);
+    // The same for every arrow through the scheme's `arrow_length`.
+    let l = lay_fixed(&format!(
+        r#"{SCHEME_HOOKS}
+        page(200, 100, scheme([text("a"), arrow_step("x"), text("b")], #{{ arrow_length: "fill" }})).unit("pt")"#
+    ));
+    approx(text_at(&l, "b").x, 180.0);
+    // Down the page: a vertical arrow, its label to the right.
+    let src = format!(
+        r#"{SCHEME_HOOKS}
+        page(100, 200, scheme_v([text("a"), arrow_step("x"), text("b")])).unit("pt")"#
+    );
+    let d = raw(&src);
+    let arrow = d
+        .nodes
+        .values()
+        .find(|n| n.kind == NodeKind::Arrow)
+        .unwrap();
+    assert_eq!(arrow.points[0][0], arrow.points[1][0]);
+    assert!(arrow.points[1][1] > arrow.points[0][1]);
+    let l = lay_fixed(&src);
+    approx(
+        text_at(&l, "b").y - text_at(&l, "a").y,
+        10.0 + 4.0 + 30.0 + 4.0,
+    );
+    let xs: Vec<f32> = texts_at(&l, "x").iter().map(|r| r.x).collect();
+    assert!(xs.iter().any(|&x| x > text_at(&l, "a").x), "{xs:?}");
+    // ⇌: two barbed arrows, fixed or filling, in the arrow colour.
+    for len in ["", "length: \"fill\","] {
+        let d = raw(&format!(
+            r##"page(10, 5, scheme([text("a"), arrow_step(#{{ {len} equilibrium: true, color: "#ff0000" }}), text("b")]))"##
+        ));
+        let arrows: Vec<&RawNode> = d
+            .nodes
+            .values()
+            .filter(|n| n.kind == NodeKind::Arrow)
+            .collect();
+        assert_eq!(arrows.len(), 2, "{len}");
+        for a in arrows {
+            assert_eq!(a.stroke, Color::parse_hex("#ff0000").ok(), "{len}");
+            assert!(a.head_style.is_some(), "{len}");
+        }
+    }
+    // Both heads; errors.
+    let d = raw(r#"page(10, 5, scheme([arrow_step(#{ head: "both" })]))"#);
+    let a = d
+        .nodes
+        .values()
+        .find(|n| n.kind == NodeKind::Arrow)
+        .unwrap();
+    assert!(format!("{:?}", a.head).contains("Both"), "{:?}", a.head);
+    for (src, want) in [
+        (
+            r#"scheme([arrow_step(#{ head: "x" })])"#,
+            "unknown head \"x\"",
+        ),
+        (
+            r#"scheme([arrow_step(#{ length: -1 })])"#,
+            "an arrow length",
+        ),
+        (
+            r#"scheme([arrow_step(#{ big: 1 })])"#,
+            "unknown option \"big\"",
+        ),
+        (r#"scheme([#{ a: 1 }])"#, "must be an arrow_step"),
+        (
+            r#"scheme([], #{ direction: "up" })"#,
+            "unknown direction \"up\"",
+        ),
+        (
+            r#"scheme([step(rect(), #{ over: "x" })])"#,
+            "step: unknown option \"over\"",
+        ),
+        (
+            r#"scheme([arrow_step(#{ length: "fill", equilibrium: #{ barb: "hook" } })])"#,
+            "needs a fixed length",
+        ),
+    ] {
+        let e = script_err(src);
+        assert!(e.contains(want), "{src}: {e}");
+    }
+}
+
+#[test]
+fn layout_helper_examples() {
+    // Read from the examples directory: one loads a CSV relative to it.
+    let examples = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    for name in ["schemes.figs", "layout_helpers.figs"] {
+        let src = std::fs::read_to_string(examples.join(name)).unwrap();
+        let doc = Document::from_script_in(&src, Some(&examples))
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        let l = layout(&doc, &NullMeasurer);
+        assert!(!l.nodes.is_empty());
+        assert!(l.nodes[0].rect.w <= l.page.width_pt + 0.01);
+    }
+}

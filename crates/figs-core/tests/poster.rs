@@ -1105,8 +1105,10 @@ fn subheading_and_bullet_marks_style_on_their_own() {
     assert_eq!(root.spans[0].font_size, None);
     assert_eq!(root.spans[1].text, "S");
 
-    // A bigger / smaller bullet mark is moved so the baselines meet.
-    let k = 0.93 * 2.54 / 72.0;
+    // A bigger / smaller bullet mark sits on the text's baseline: each item
+    // is a baseline row. (These fixed metrics have no shaping, so baselines
+    // are the synthetic 0.9 em below the top at line height 1.2.)
+    let k = 0.9;
     let src = |m: f32| {
         format!(
             r#"fn bullet_indent() {{ 15 }} fn bullet_size() {{ 24 }} fn bullet_mark_size() {{ {m} }}
@@ -1339,4 +1341,92 @@ fn poster_marks_get_the_symbol_slot() {
     // Without the slot the line is unchanged (one merged run).
     let d = raw(r#"page(80, 10, author_line([#{ name: "A", presenter: true }], ["U"]))"#);
     assert_eq!(spans(&d.nodes["root"]), [("（U）○A".to_string(), false)]);
+}
+
+// ---- bullet baselines, section footers, blocks ------------------------------------
+
+#[test]
+fn bullet_marks_sit_on_the_shaped_text_baseline() {
+    // Real fonts: a mark of another size (and glyph) shares the first line's
+    // baseline exactly, as the backends draw it.
+    let fs = figs_core::FontStore::new().with_default_family("Liberation Sans, Arial");
+    for ms in [8, 12, 20] {
+        let d = Document::from_script(&format!(
+            r#"fn bullet_size() {{ 12 }} fn bullet_mark_size() {{ {ms} }} fn bullet_mark() {{ "■" }}
+               page(200, 100, bullets(["Item text", "A second, much longer item that wraps onto more lines than one"])).unit("pt")"#
+        ))
+        .unwrap();
+        let l = layout(&d, &fs);
+        let baselines = |s: &str| -> Vec<f32> {
+            l.nodes
+                .iter()
+                .filter_map(|n| match &n.content {
+                    PaintContent::Text(t) if t.content == s => {
+                        let shaped =
+                            fs.shape(&figs_core::render::geometry::text_props(t), n.rect.w);
+                        Some(n.rect.y + shaped.lines[0].baseline)
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        let marks = baselines("■");
+        let mut items = baselines("Item text");
+        items.extend(baselines(
+            "A second, much longer item that wraps onto more lines than one",
+        ));
+        assert_eq!((marks.len(), items.len()), (2, 2));
+        for (m, t) in marks.iter().zip(&items) {
+            assert!((m - t).abs() < 0.01, "mark {ms} pt: {m} vs {t}");
+        }
+    }
+}
+
+#[test]
+fn section_footer_ends_the_section() {
+    let hooks = r#"fn section_bar_height() { 20 } fn section_pad() { 5 } fn section_gap() { 4 }"#;
+    let l = lay_fixed(&format!(
+        r#"{hooks} page(100, 200, section("S", ["a"], #{{ footer: ["f1", "f2"] }})).unit("pt")"#
+    ));
+    approx(text_rect(&l, "a").y, 25.0);
+    approx(text_rect(&l, "f2").y, 185.0);
+    approx(text_rect(&l, "f1").y, 171.0);
+    // One footer node; a numbered section with options; the old forms.
+    let l = lay_fixed(&format!(
+        r#"{hooks} page(100, 200, section(7, "S", "a", #{{ footer: "f" }})).unit("pt")"#
+    ));
+    approx(text_rect(&l, "f").y, 185.0);
+    let d = raw(r#"page(10, 10, section(3, "S", ["a"]))"#);
+    assert!(texts(&d).iter().any(|s| s == "3. S"));
+    let d = raw(r#"page(10, 10, section("", "S", "a", #{}))"#);
+    assert!(texts(&d).iter().any(|s| s == "S"));
+    assert!(
+        fail(r#"page(1, 1, section("S", "a", #{ foot: 1 }))"#).contains("unknown option \"foot\"")
+    );
+}
+
+#[test]
+fn block_is_a_subheading_over_side_by_side_items() {
+    let hooks = r#"fn block_gap() { 6 } fn block_title_gap() { 3 } fn subheading_mark() { "" }"#;
+    let l = lay_fixed(&format!(
+        r#"{hooks} page(100, 100, col([block("H", ["a", "b"])]).stretch()).unit("pt")"#
+    ));
+    assert_xywh(text_rect(&l, "H"), 0.0, 0.0, 100.0, 10.0);
+    assert_xywh(text_rect(&l, "a"), 0.0, 13.0, 47.0, 10.0);
+    assert_xywh(text_rect(&l, "b"), 53.0, 13.0, 47.0, 10.0);
+    // Ratios, lengths; no title.
+    let l = lay_fixed(&format!(
+        r#"{hooks} page(100, 100, col([block("", ["a", "b"], #{{ widths: [1, 3], gap: 2 }})]).stretch()).unit("pt")"#
+    ));
+    assert_xywh(text_rect(&l, "a"), 0.0, 0.0, 24.5, 10.0);
+    approx(text_rect(&l, "b").x, 26.5);
+    let d = raw(r#"style("poster"); page(10, 10, block("Head", [rect()]))"#);
+    assert!(texts(&d).iter().any(|s| s == "■ Head"));
+    assert!(
+        fail(r#"page(1, 1, block("H", ["a"], #{ widths: [1, 2] }))"#)
+            .contains("1 items but 2 sizes")
+    );
+    assert!(
+        fail(r#"page(1, 1, block("H", ["a"], #{ align: "x" }))"#).contains("unknown align \"x\"")
+    );
 }

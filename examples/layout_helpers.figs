@@ -1,0 +1,37 @@
+// Recurring figure patterns as functions — no positions in user code:
+//   overlay(item, map)   nodes over a panel by position name ("top-right", …)
+//   side(main, note)     a panel with a text block beside it
+//   block(title, items)  a subheading over side-by-side items
+//   section(.., #{ footer })  a section ending in references / a take-home note
+//   plot_dimension(..)   a labelled dimension arrow in data coordinates
+//   bullets(..)          marks on the text baseline, whatever their size
+// Everything here is fictional placeholder content and synthetic data.
+style("poster", #{ base_size: 12, bullet_mark_size: 16 });
+let h = csv("data/heating.csv");
+
+let curve = plot(#{ xlabel: "T [°C]", ylabel: "α", x: [20, 100], y: [0, 1.1] }, [
+    scatter(h.T, h.a10, "10 μM"),
+    plot_dimension(40, 70, 1.0, "ΔT = 30 °C"),
+    plot_dimension_v(85, 0.1, 0.9, "Δα", #{ left: true }),
+]);
+
+page("a3-landscape", columns([
+    section("Results", [
+        block("Two samples", [
+            overlay(image("img/sunlit.png"), #{
+                "top-right": halo(body("Sample 1"), "#ffffff", 0.05),
+                bottom: [body("25 °C"), body("dark field")],
+            }),
+            overlay(image("img/tile.png"), #{ "top-left": body("Sample 2"), "bottom-right": "×10" }),
+        ]),
+        side(curve, ["The transition sharpens with concentration.",
+                     note("ΔT shrinks by a third.")]),
+    ], #{ footer: [ref("A. Author et al., J. Fict. Chem. 2024, 1, 1."),
+                   ref("B. Author et al., Fict. Lett. 2025, 2, 10.")] }),
+    section("Summary", [
+        bullets(["A first finding that is long enough to wrap onto a second line.",
+                 "A second finding.", ["a detail", "another detail"]]),
+        side(image("img/tile.png").aspect(1.0), "Mark and text share a baseline.",
+             #{ side: "left", width: 0.6 }),
+    ], #{ footer: note("Take-home: one line at the bottom of the section.") }),
+], [3, 2]).pad(1))

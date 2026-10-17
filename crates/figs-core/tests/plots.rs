@@ -2195,3 +2195,69 @@ fn inset_example_lays_out() {
     let page_w = l.page.width_pt;
     assert!(l.nodes.iter().all(|n| n.rect.x + n.rect.w <= page_w + 0.5));
 }
+
+// ---- dimension lines ----------------------------------------------------------------
+
+#[test]
+fn plot_dimension_labels_a_span_in_data_coordinates() {
+    let gap = 8.0 * 0.012 * CM; // tick_label_pad() at 8 pt
+    let p = Plotted::new(
+        r#"page(12, 9, plot(#{ x: [0, 10], y: [0, 1], legend: "" }, [
+            line_plot([0, 10], [0, 1]),
+            plot_dimension(2, 6, 0.5, "D"),
+            plot_dimension(2, 6, 0.25, "E", #{ below: true }),
+            plot_dimension_v(5, 0.2, 0.8, "V"),
+            plot_dimension_v(9, 0.2, 0.8, "W", #{ left: true }),
+        ]).flex(1)).unit("cm")"#,
+    );
+    let area = p.area();
+    let ax = |u: f32| area.x + area.w * u;
+    let ay = |v: f32| area.y + area.h * (1.0 - v);
+    let d = p.text("D");
+    approx(d.x + d.w / 2.0, ax(0.4));
+    approx(d.y + d.h, ay(0.5) - gap);
+    let e = p.text("E");
+    approx(e.y, ay(0.25) + gap);
+    let v = p.text("V");
+    approx(v.x, ax(0.5) + gap);
+    approx(v.y + v.h / 2.0, ay(0.5));
+    let w = p.text("W");
+    approx(w.x + w.w, ax(0.9) - gap);
+    // Double-headed arrows between the data points.
+    let heads: Vec<_> = p
+        .raw
+        .nodes
+        .values()
+        .filter(|n| n.kind == NodeKind::Arrow)
+        .map(|n| (format!("{:?}", n.head), n.points.clone()))
+        .collect();
+    assert_eq!(heads.len(), 4);
+    assert!(heads.iter().all(|(h, _)| h.contains("Both")), "{heads:?}");
+    assert!(heads
+        .iter()
+        .any(|(_, pts)| pts[0] == [2.0, 0.5] && pts[1] == [6.0, 0.5]));
+    for (src, want) in [
+        (
+            r#"plot_dimension(1, 2, 0.5, 3)"#,
+            "the label must be a string",
+        ),
+        (
+            r#"plot_dimension(1, 2, 0.5, "x", #{ below: 1 })"#,
+            "must be true or false",
+        ),
+        (
+            r#"plot_dimension(1, 2, 0.5, "x", #{ left: true })"#,
+            "unknown option \"left\"",
+        ),
+        (
+            r#"plot_dimension_v(1, 0, 1, "x", #{ below: true })"#,
+            "unknown option \"below\"",
+        ),
+    ] {
+        let e = eval_script(&format!("page(\"single\", plot([{src}]))"))
+            .err()
+            .unwrap_or_else(|| panic!("{src} should fail"))
+            .to_string();
+        assert!(e.contains(want), "{src}: {e}");
+    }
+}
