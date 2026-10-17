@@ -480,7 +480,13 @@ pub(crate) fn shape(
     let bounded = max_width.is_finite() && max_width > 0.0;
     // A fitted text never wraps; each of its lines is fitted to `max_width`.
     let fit = text.fit_width.filter(|_| bounded);
-    let width = (text.wrap && text.fit_width.is_none() && bounded).then_some(max_width);
+    // A line's width leaves its last character's trailing tracking out (see
+    // `ShapedLine::width`), but cosmic-text breaks on the advance *with* it:
+    // allow the largest trailing tracking past the box, so a text shaped at
+    // its own natural width (the layout's measure) keeps its lines.
+    let trailing_room = runs.iter().map(|r| r.style.tracking).fold(0.0f32, f32::max);
+    let width =
+        (text.wrap && text.fit_width.is_none() && bounded).then_some(max_width + trailing_room);
     let node_line = (text.font_size * text.line_height).max(1.0);
     let mut scratch = ShapeBuffer::default();
     let typo = text.typography;

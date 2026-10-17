@@ -251,6 +251,60 @@ fn letter_spacing_widens_and_wraps_earlier() {
 }
 
 #[test]
+fn tracked_text_fits_its_own_natural_width() {
+    // The natural width leaves the last character's trailing tracking out;
+    // shaping at that width must not wrap the last word because of it.
+    let fs = store();
+    for (content, ls) in [("Take-home message", 0.1), ("ab cd", 0.3), ("SPACED", 0.05)] {
+        let t = TextProps {
+            letter_spacing: ls,
+            ..TextProps::plain(content, 20.0)
+        };
+        let natural = fs.shape(&t, f32::INFINITY);
+        assert_eq!(natural.lines.len(), 1);
+        let at = fs.shape(&t, natural.size.w);
+        assert_eq!(
+            at.lines.len(),
+            1,
+            "{content:?} wrapped at its natural width"
+        );
+        assert!((at.size.w - natural.size.w).abs() < 1e-3);
+        // One tracking step narrower still breaks (wrapping sees the
+        // tracking between the words).
+        if content.contains(' ') {
+            let tight = fs.shape(&t, natural.size.w - ls * 20.0 - 0.5);
+            assert!(tight.lines.len() > 1, "{content:?}");
+        }
+    }
+    // Through layout: a tracked text at its natural width in a row is drawn
+    // (shaped at its laid-out width, as the backends do) on one line.
+    let src = r#"
+        [page]
+        width = 400
+        height = 200
+        unit = "pt"
+        root = "r"
+
+        [nodes.r]
+        type = "row"
+        children = ["t"]
+
+        [nodes.t]
+        type = "text"
+        content = "Take-home message here"
+        font_size = 20
+        letter_spacing = 0.12
+    "#;
+    let computed = layout(&Document::from_toml(src).unwrap(), &fs);
+    let t = computed.nodes.iter().find(|n| n.id == "t").unwrap();
+    let figs_core::layout::PaintContent::Text(tb) = &t.content else {
+        panic!("text")
+    };
+    let drawn = fs.shape(&figs_core::render::geometry::text_props(tb), t.rect.w);
+    assert_eq!(drawn.lines.len(), 1, "drawn text wrapped at {}", t.rect.w);
+}
+
+#[test]
 fn long_latin_word_breaks_inside_a_narrow_box() {
     let fs = store();
     let t = TextProps::plain("Pneumonoultramicroscopic", 14.0);
