@@ -336,6 +336,9 @@ fn blank_node(kind: NodeKind) -> RawNode {
         route: None,
         gap: None,
         band: None,
+        from_shape: None,
+        dpi: None,
+        overhang: false,
     }
 }
 
@@ -568,7 +571,7 @@ fn cast_box(key: &str, v: Dynamic) -> Result<[f32; 4], Box<EvalAltResult>> {
 }
 
 /// The options `connect(a, b, opts)` accepts.
-const CONNECT_KEYS: &str = "from, to, from_box, to_box, route, head, head_style, head_size, head_width, stroke, color, width, dash, cap, band, fill, radius, gap, opacity";
+const CONNECT_KEYS: &str = "from, to, from_box, to_box, route, head, head_style, head_size, head_width, stroke, color, width, dash, cap, band, fill, radius, gap, opacity, from_shape";
 
 /// `connect(a, b[, opts])`: a connector node from `a` to `b`.
 fn connect_fn(a: Dynamic, b: Dynamic, opts: Map) -> NodeResult {
@@ -593,7 +596,7 @@ fn connect_fn(a: Dynamic, b: Dynamic, opts: Map) -> NodeResult {
                 let s = string(k, v)?;
                 r.route = Some(crate::schema::ConnectorRoute::parse(&s).ok_or_else(|| {
                     err(format!(
-                        "connect(): unknown route \"{s}\" (straight, elbow, curve)"
+                        "connect(): unknown route \"{s}\" (straight, elbow, curve, cone, outline)"
                     ))
                 })?);
             }
@@ -639,6 +642,14 @@ fn connect_fn(a: Dynamic, b: Dynamic, opts: Map) -> NodeResult {
                 })?);
             }
             "band" => r.band = Some(num(k, &v)?),
+            "from_shape" => {
+                let s = string(k, v)?;
+                r.from_shape = Some(crate::schema::EndShape::parse(&s).ok_or_else(|| {
+                    err(format!(
+                        "connect(): unknown from_shape \"{s}\" (box, ellipse)"
+                    ))
+                })?);
+            }
             "fill" => {
                 r.fill = Some(if v.is_string() {
                     parse_color("connect", &string(k, v)?)?.into()
@@ -731,6 +742,7 @@ fn page_fn(
             synthetic_bold_width: None,
             synthetic_slant: None,
             min_stroke_px: None,
+            image_dpi: None,
         },
         root,
     })
@@ -1437,13 +1449,28 @@ fn build_engine(base_dir: Option<&Path>) -> Engine {
             "visible" => crate::geom::Overflow::Visible,
             "clip" => crate::geom::Overflow::Clip,
             "shrink" => crate::geom::Overflow::Shrink,
+            "fit" => crate::geom::Overflow::Fit,
             _ => {
                 return Err(err(format!(
-                    "`overflow`: unknown mode `{mode}` (visible, clip, shrink)"
+                    "`overflow`: unknown mode `{mode}` (visible, clip, shrink, fit)"
                 )))
             }
         };
         Ok(set_node(n, |r| r.overflow = Some(v)))
+    });
+    // Take no room across the parent column / row (overhang it, centred).
+    engine.register_fn("overhang", |n: ScriptNode| {
+        set_node(n, |r| r.overhang = true)
+    });
+    // Image: natural size = pixels / dpi inches (0: none, over the page's).
+    engine.register_fn("dpi", |n: ScriptNode, v: Dynamic| -> NodeResult {
+        if n.node.kind != NodeKind::Image {
+            return Err(err("`dpi` applies to an image (or a page)"));
+        }
+        let x = dyn_to_f32(&v)
+            .filter(|x| x.is_finite() && *x >= 0.0)
+            .ok_or_else(|| err("`dpi` expects pixels per inch (0 for no natural size)"))?;
+        Ok(set_node(n, |r| r.dpi = Some(x)))
     });
     // Containers: clip the children to the (rounded) box inside the border.
     engine.register_fn("clip", |n: ScriptNode| -> NodeResult {
@@ -1679,6 +1706,16 @@ fn build_engine(base_dir: Option<&Path>) -> Engine {
     engine.register_fn("font", |d: ScriptDoc, s: &str| {
         set_doc(d, |pg| pg.font_family = Some(s.to_string()))
     });
+    // Default pixel density of images without their own `dpi`.
+    engine.register_fn(
+        "image_dpi",
+        |d: ScriptDoc, v: Dynamic| -> Result<ScriptDoc, Box<EvalAltResult>> {
+            let x = dyn_to_f32(&v)
+                .filter(|x| x.is_finite() && *x >= 0.0)
+                .ok_or_else(|| err("`image_dpi` expects pixels per inch (0 for none)"))?;
+            Ok(set_doc(d, |pg| pg.image_dpi = Some(x)))
+        },
+    );
     // PNG: draw shape strokes at least this many device pixels wide.
     engine.register_fn(
         "min_stroke_px",

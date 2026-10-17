@@ -493,3 +493,75 @@ fn fractions_of_a_letterboxed_image_are_of_the_picture() {
     let (s, _) = first_last(paths(&l)[0]);
     approx_pt(s, 0.0, 10.0);
 }
+
+#[test]
+fn cone_fills_the_quad_from_the_region_to_the_copy() {
+    // Region (10, 5)..(20, 15) of a 40 x 20 box; copy 10 x 10 at x = 60.
+    let l = lay(r##"
+        let img = rect().width(40).height(20);
+        let copy = rect().width(10).height(10);
+        page(100, 40, row([img, copy,
+            connect(img, copy, #{ route: "cone", from_box: [0.25, 0.25, 0.5, 0.75], fill: "#ff000040" })])
+            .spacing(20).cross("start")).unit("pt")"##);
+    let p = paths(&l);
+    assert_eq!(p.len(), 1);
+    assert!(p[0].fill.is_some() && p[0].stroke.is_none());
+    let pts: Vec<Point> = p[0]
+        .segments
+        .iter()
+        .filter(|s| !matches!(s, PathSegment::Close))
+        .map(end_point)
+        .collect();
+    assert_eq!(pts.len(), 4);
+    approx_pt(pts[0], 20.0, 5.0);
+    approx_pt(pts[1], 60.0, 0.0);
+    approx_pt(pts[2], 60.0, 10.0);
+    approx_pt(pts[3], 20.0, 15.0);
+    assert!(matches!(p[0].segments.last(), Some(PathSegment::Close)));
+}
+
+#[test]
+fn ellipse_regions_attach_at_their_extremes_and_outline_round() {
+    let shaped = |shape: &str, extra: &str| {
+        format!(
+            r##"
+        let img = rect().width(40).height(20);
+        let copy = rect().width(10).height(10);
+        page(100, 40, row([img, copy,
+            connect(img, copy, #{{ from_box: [0.25, 0.25, 0.5, 0.75], from_shape: "{shape}", {extra} }})])
+            .spacing(20).cross("start")).unit("pt")"##
+        )
+    };
+    let src = |extra: &str| shaped("ellipse", extra);
+    // facing-1 on an ellipse whose copy is to the right: its top point.
+    let l = lay(&src(r#"from: "facing-1", to: "facing-1""#));
+    let (s, e) = first_last(paths(&l)[0]);
+    approx_pt(s, 15.0, 5.0);
+    approx_pt(e, 60.0, 0.0);
+    let l = lay(&src(r#"from: "facing-2", to: "facing-2""#));
+    let (s, _) = first_last(paths(&l)[0]);
+    approx_pt(s, 15.0, 15.0);
+    // The outline route: four cubics round the region, closed, stroked.
+    let l = lay(&src(r#"route: "outline""#));
+    let p = paths(&l)[0];
+    let cubics = p
+        .segments
+        .iter()
+        .filter(|s| matches!(s, PathSegment::CubicTo(..)))
+        .count();
+    assert_eq!(cubics, 4);
+    approx_pt(end_point(&p.segments[0]), 20.0, 10.0);
+    assert!(p.stroke.is_some() && p.fill.is_none());
+    // A box outline is the rectangle.
+    let l = lay(&shaped("box", r#"route: "outline""#));
+    let p = paths(&l)[0];
+    approx_pt(end_point(&p.segments[0]), 10.0, 5.0);
+    approx_pt(end_point(&p.segments[2]), 20.0, 15.0);
+    // Errors list the options.
+    let e = eval_script(&src(r#"route: "fan""#))
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("cone, outline"), "{e}");
+    let e = eval_script(&shaped("star", "")).unwrap_err().to_string();
+    assert!(e.contains("box, ellipse"), "{e}");
+}

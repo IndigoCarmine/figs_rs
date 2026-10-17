@@ -67,13 +67,15 @@ You provide: hierarchy, style, content, and constraints (`flex`, `aspect_ratio`,
   (`true` or `[fx, fy]`) marks the node's axis for a parent aligned by
   `"axis"`, and `name` labels it in diagnostics (see
   [Axes, equal-height rows & overflow](#axes-equal-height-rows--overflow)).
+  `overhang = true` makes a node take no room across its parent column / row
+  (see [Natural sizes & overhang](#natural-sizes--overhang)).
 - **Container** (`column`/`row`): `children`, `spacing`, `main_axis_alignment`
   (`start`/`center`/`end`/`space_between`/`space_around`/`space_evenly`),
   `cross_axis_alignment` (`start`/`center`/`end`/`stretch`/`baseline`/`cap_middle` —
   the last two rows only, see [Baselines](#baselines) — and `axis`), `baseline_pitch`
   (columns: first baselines exactly that far apart, see
   [Baseline pitch](#baseline-pitch)), `equal_height` (rows) and `overflow`
-  (`visible`/`clip`/`shrink`; see
+  (`visible`/`clip`/`shrink`/`fit`; see
   [Axes, equal-height rows & overflow](#axes-equal-height-rows--overflow)). `stretch` fills the cross axis only
   for children whose cross size is unconstrained: a child with its own
   `width` (in a column; `height` in a row) keeps it and sits at the start,
@@ -97,7 +99,9 @@ You provide: hierarchy, style, content, and constraints (`flex`, `aspect_ratio`,
   `synthetic_slant` (also on `[page]`, see
   [Fonts](#fonts-fallback-lists-per-script-families-weights-italic)).
 - **image**: `src`, `fit` (`contain`/`cover`/`fill`), `smooth` (`false`:
-  nearest-neighbour scaling, see [Pixelated images](#pixelated-images)).
+  nearest-neighbour scaling, see [Pixelated images](#pixelated-images)),
+  `dpi` (a natural size of pixels / dpi inches; `[page] image_dpi` sets it
+  for every image — see [Natural sizes & overhang](#natural-sizes--overhang)).
 - **rect**: `fill`, `stroke`, `stroke_width`, `stroke_align`, `corner_radius`.
   Every `fill` (rect, ellipse, path, containers) and `page.background` takes a
   colour *or a gradient* (see [Gradients & frames](#gradients--frames)).
@@ -107,8 +111,8 @@ You provide: hierarchy, style, content, and constraints (`flex`, `aspect_ratio`,
 - **ellipse**: `fill`, `stroke`, `stroke_width`, `stroke_align`, `dash`, `cap`,
   `join`.
 - **connector**: `from`, `to` (node ids), `from_at`, `to_at`, `from_box`,
-  `to_box`, `route`, `gap`,
-  `band`, plus `stroke`, `stroke_width`, `dash`, `cap`, `join`, `head`,
+  `to_box`, `route` (`straight`/`elbow`/`curve`/`cone`/`outline`), `gap`,
+  `band`, `from_shape` (`box`/`ellipse`), plus `stroke`, `stroke_width`, `dash`, `cap`, `join`, `head`,
   `head_size`, `head_width`, `head_style`, `corner_radius` (elbow corners) and
   `fill` (band) — a line between two laid-out nodes that takes no room (see
   [Connectors](#connectors)).
@@ -1078,9 +1082,34 @@ column section "Results" (content) (node37): content is 1.61 cm too tall (needs 
 on), `clip` (clipped to the box — only when they overflow, so a fitting
 container is unaffected) or `shrink` (laid out at the box's width and
 scaled down uniformly into it, centred across; nothing changes when they
-fit). A single child taller than its box is clamped to it (it is given a box
+fit) or `fit` (as `shrink` when they overflow; when they fit with room to
+spare both ways — natural-size images, a scheme, short text — scaled *up*
+uniformly until they fill the box on one axis, centred across, the main axis
+placed by the container's alignment). A single child taller than its box is clamped to it (it is given a box
 of that size), so the report comes from the level where the children add
 up.
+
+### Natural sizes & overhang
+
+**Image scale from pixel density.** `dpi = 150` on an image (script
+`image(..).dpi(150)`) gives it a natural size: its pixels / 150 inches. So
+pictures cut from one drawing (structures, an apparatus) keep one consistent
+scale with no per-image sizes; `[page] image_dpi` (script
+`.image_dpi(150)`) sets it for every image without its own (`dpi = 0`: none).
+An image with a natural size keeps it — a stretching column doesn't stretch
+it (nor an overlay / label stack whose base layer it is) — and shrinks
+(keeping its aspect) only when it doesn't fit; an explicit `width` / `height`
+still wins, and a parent that decides a side (a flex share, an
+`equal_height` row) still scales it. The pixel size comes from the file
+header (`LeafMeasure::image_pixels`).
+
+**Overhang.** `overhang = true` (script `.overhang()`) takes a node out of
+its parent's cross extent: it is laid out at its natural cross size (a
+caption in one line, whatever the column's width) and placed by the parent's
+cross alignment — centred unless `start` / `end`, on the axis line in an
+`"axis"` container — running past the parent's edges into the gaps instead
+of widening the column (or wrapping to it). A caption wider than its image
+then leaves the row of images where it was.
 
 ### Connectors
 
@@ -1124,6 +1153,15 @@ gap = [0, 0.1]          # keep the ends off the boxes ([start, end] or one numbe
   by `corner_radius`; `curve` — a cubic leaving and entering along the sides.
 - **Images**: on an image fitted with `contain`, fractions and sides are those
   of the visible picture, not of its (letterboxed) box.
+- **Areas**: `route = "cone"` fills the quadrilateral from `from`'s
+  `facing-1` / `facing-2` points to `to`'s — a light / projection cone from a
+  region to its magnified copy (`fill`, default the `stroke` colour; a
+  `stroke` outline too when both are given); `route = "outline"` draws no
+  line between the ends but the outline of `from`'s box / `from_box` (`to`
+  is only needed to name a node). `from_shape = "ellipse"` makes that region
+  the inscribed ellipse: the outline is round, and the facing points are the
+  ellipse's extreme points across the facing direction (its top and bottom
+  for a copy to the right).
 - **Band**: `band = w` fills an outline `w` wide around the route instead of
   stroking it (a block arrow; mitred corners), with triangular `head`s
   (`head_size` long and `head_width` across, default 1 × and 2 × the band),
@@ -1178,7 +1216,8 @@ setters:
   `.margin(e)`, `.pad(e)` — `e` a number, `[v, h]` / `[t, h, b]` /
   `[t, r, b, l]` (CSS order) or `#{ top, right, bottom, left, x, y }` (`x` / `y`
   set both horizontal / vertical sides; a named side wins), as in TOML —
-  `.rotate(deg)` (clockwise; see [Rotation](#rotation)).
+  `.rotate(deg)` (clockwise; see [Rotation](#rotation)), `.overhang()` (no
+  room across the parent; see [Natural sizes & overhang](#natural-sizes--overhang)).
 - **effects** (any node): `.shadow(dx, dy, blur[, [spread,] color])`,
   `.glow(blur[, color])`, `.opacity(a)` — see
   [Shadows, glows & opacity](#shadows-glows--opacity).
@@ -1207,7 +1246,8 @@ setters:
   [Rich text](#rich-text-spans)).
 - **container** (`col`/`row`): `.spacing(n)`, `.main("space_between"|…)`,
   `.cross("start"|"center"|"end"|"stretch"|"baseline"|"cap_middle")` / `.stretch()`,
-  `.baseline_pitch(d)` (columns; see [Baseline pitch](#baseline-pitch)).
+  `.baseline_pitch(d)` (columns; see [Baseline pitch](#baseline-pitch)),
+  `.overflow("visible"|"clip"|"shrink"|"fit")`.
 - **decoration** (`col`/`row`/`stack`): `.fill(hex | gradient)`, `.stroke(hex)`,
   `.stroke_width(n)`, `.stroke_align("inside"|"center"|"outside")`,
   `.radius(n)`, `.dash([on, off, …])`, `.clip()` — see
@@ -1229,8 +1269,10 @@ setters:
   `.quad(cx, cy, x, y)`, `.cubic(c1x, c1y, c2x, c2y, x, y)`, `.arc(r, x, y)` /
   `.arc(r, x, y, #{ sweep, large, rotation })` (`r` a number or `[rx, ry]`) —
   see [Curves](#curves).
-- **image**: `.fit("contain"|"cover"|"fill")`, `.smooth(false)`.
+- **image**: `.fit("contain"|"cover"|"fill")`, `.smooth(false)`, `.dpi(n)`
+  (natural size: pixels / n inches).
 - **page**: `.unit("cm"|…)`, `.background(hex | gradient)`, `.dpi(n)`,
+  `.image_dpi(n)` (every image's default pixel density),
   `.min_stroke_px(px)` (see [Output formats](#output-formats)),
   `.font(name | list | #{ latin, cjk, symbol, fallback })`, and the text
   defaults `.scripts(..)`, `.font_synthesis(..)`, `.synthetic_bold_width(em)`,

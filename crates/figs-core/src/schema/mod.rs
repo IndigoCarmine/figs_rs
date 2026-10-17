@@ -11,8 +11,8 @@ pub mod resolve;
 pub mod span;
 
 pub use parse::{
-    ArcRadius, ConnectorRoute, NodeKind, PageHeight, RawAttach, RawDocument, RawGap, RawGlow,
-    RawNode, RawPage, RawSegment, RawShadow,
+    ArcRadius, ConnectorRoute, EndShape, NodeKind, PageHeight, RawAttach, RawDocument, RawGap,
+    RawGlow, RawNode, RawPage, RawSegment, RawShadow,
 };
 pub use resolve::{
     Attach, Common, ConnectorProps, Decoration, Document, EllipseProps, ImageProps, Node, NodeType,

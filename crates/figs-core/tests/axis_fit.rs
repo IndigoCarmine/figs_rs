@@ -290,7 +290,7 @@ fn overflow_setter_and_resolve_errors() {
     let e = eval_script(r#"page(1, 1, col([]).overflow("hide"))"#).unwrap_err();
     assert!(
         e.message
-            .contains("unknown mode `hide` (visible, clip, shrink)"),
+            .contains("unknown mode `hide` (visible, clip, shrink, fit)"),
         "{}",
         e.message
     );

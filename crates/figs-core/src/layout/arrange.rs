@@ -16,7 +16,7 @@ use super::computed::{
     TextBox,
 };
 use super::measure::{
-    axis_line, cross_axis, cross_margin, equal_height_widths, has_cross_size, measure,
+    axis_line, cross_axis, cross_margin, equal_height_widths, keeps_cross_size, measure,
     measure_container, stack_child_avail, stack_child_constraints, stack_child_size, tighten,
 };
 use super::{cross_of, main_of, Constraints, Ctx, LeafMeasure};
@@ -431,7 +431,8 @@ fn layout_children<M: LeafMeasure>(
     out: &mut Vec<ComputedNode>,
 ) -> bool {
     let have = main_of(flex.axis, content.size());
-    if overflow == Overflow::Shrink && !flex.content_h {
+    let scales = matches!(overflow, Overflow::Shrink | Overflow::Fit) && !flex.content_h;
+    if scales {
         if let Some((s, need)) = shrink_scale(ctx, flex, content) {
             // Laid out as usual in a box as wide (tall, for a row) as the
             // content box and long enough along the main axis, then scaled
@@ -470,6 +471,28 @@ fn layout_children<M: LeafMeasure>(
                 have,
                 OverflowAction::Shrunk(s),
             );
+            arrange_in_order(ctx, flex.children, flex.overlays, slots, virt, cxf, out);
+            return false;
+        }
+    }
+    if overflow == Overflow::Fit && !flex.content_h {
+        if let Some((s, virt, shift)) = grow_scale(ctx, flex, content) {
+            // Laid out in a box `1 / s` of the content box (as wide across
+            // as the children are), then scaled up by `s` about the content
+            // box's top-left and centred across.
+            let scale = Affine {
+                a: s,
+                b: 0.0,
+                c: 0.0,
+                d: s,
+                e: content.x * (1.0 - s) + shift.0,
+                f: content.y * (1.0 - s) + shift.1,
+            };
+            let cxf = Some(match xf {
+                Some(p) => scale.then(p),
+                None => scale,
+            });
+            let slots = flex_slots(ctx, flex, virt);
             arrange_in_order(ctx, flex.children, flex.overlays, slots, virt, cxf, out);
             return false;
         }
@@ -533,6 +556,48 @@ fn shrink_scale<M: LeafMeasure>(ctx: &Ctx<M>, flex: &Flex, content: Rect) -> Opt
         return None;
     }
     Some(((have / need).max(0.01), need))
+}
+
+/// `overflow = "fit"` with room to spare: the scale `s` (> 1) at which the
+/// children's natural extent (measured loose in `content`) fills `content`
+/// on one axis, the box `1 / s` of it to lay them out in (as wide across as
+/// they are, so they don't stretch into the spare room), and the shift
+/// that centres them across; `None` when they fill an axis already.
+fn grow_scale<M: LeafMeasure>(
+    ctx: &Ctx<M>,
+    flex: &Flex,
+    content: Rect,
+) -> Option<(f32, Rect, (f32, f32))> {
+    let nat = measure_container(
+        ctx,
+        flex.axis,
+        flex.children,
+        (flex.spacing, flex.pitch),
+        (flex.cross_align, flex.equal_height),
+        &Common::default(),
+        Constraints::loose(content.w, content.h),
+    );
+    if !(nat.w > 0.01 && nat.h > 0.01 && nat.w.is_finite() && nat.h.is_finite()) {
+        return None;
+    }
+    let s = (content.w / nat.w).min(content.h / nat.h);
+    if !(s > 1.001 && s.is_finite()) {
+        return None;
+    }
+    // Along the main axis the box keeps the content's length (alignment
+    // places the children in it); across, the children's own extent.
+    Some(match flex.axis {
+        Axis::Vertical => (
+            s,
+            Rect::new(content.x, content.y, nat.w, content.h / s),
+            ((content.w - nat.w * s) / 2.0, 0.0),
+        ),
+        Axis::Horizontal => (
+            s,
+            Rect::new(content.x, content.y, content.w / s, nat.h),
+            (0.0, (content.h - nat.h * s) / 2.0),
+        ),
+    })
 }
 
 /// Record (once per node) that node `idx`'s children need `need` points
@@ -599,12 +664,27 @@ pub(super) fn flex_slots<M: LeafMeasure>(ctx: &Ctx<M>, flex: &Flex, content: Rec
     // aspect-ratio leaf's main size, a nested row's flex shares) is measured as
     // it will be arranged — matching the measure pass. A child with its own
     // cross size is not stretched.
+    // An overhanging child, or one with a natural size (an image with a
+    // `dpi`), isn't stretched either.
     let stretched = |child: usize| {
-        cross_align == CrossAxisAlign::Stretch
-            && !has_cross_size(&ctx.doc.nodes[child].common, axis)
+        cross_align == CrossAxisAlign::Stretch && !keeps_cross_size(ctx, child, axis)
     };
+    let overhang = |i: usize| ctx.doc.nodes[children[i]].common.overhang;
     let child_c = |child: usize, main: Option<f32>| {
         let mut cc = base_c;
+        if ctx.doc.nodes[child].common.overhang {
+            // Its natural cross size, whatever the room.
+            cc = match axis {
+                Axis::Vertical => Constraints {
+                    max_w: f32::INFINITY,
+                    ..cc
+                },
+                Axis::Horizontal => Constraints {
+                    max_h: f32::INFINITY,
+                    ..cc
+                },
+            };
+        }
         if stretched(child) {
             let m = ctx.doc.nodes[child].common.margin;
             cc = tighten(cc, cross_axis(axis), content_cross - cross_margin(axis, m));
@@ -717,7 +797,11 @@ pub(super) fn flex_slots<M: LeafMeasure>(ctx: &Ctx<M>, flex: &Flex, content: Rec
                     };
                 }
             }
-            bcross.min((content_cross - margin_cross(i)).max(0.0))
+            if overhang(i) {
+                bcross
+            } else {
+                bcross.min((content_cross - margin_cross(i)).max(0.0))
+            }
         })
         .collect();
 
@@ -747,8 +831,13 @@ pub(super) fn flex_slots<M: LeafMeasure>(ctx: &Ctx<M>, flex: &Flex, content: Rec
                 axis_line(ctx, axis, children[i], fp, margins[i])
             })
             .collect();
-        let before = b.iter().copied().fold(0.0, f32::max);
+        // Overhanging children sit on the line without widening the group.
+        let before = (0..n)
+            .filter(|&i| !overhang(i))
+            .map(|i| b[i])
+            .fold(0.0, f32::max);
         let after = (0..n)
+            .filter(|&i| !overhang(i))
             .map(|i| cross_size[i] + margin_cross(i) - b[i])
             .fold(0.0, f32::max);
         let line = ((content_cross - before - after) / 2.0).max(0.0) + before;
@@ -764,6 +853,15 @@ pub(super) fn flex_slots<M: LeafMeasure>(ctx: &Ctx<M>, flex: &Flex, content: Rec
         let cross_off = match (&baselines, &axes) {
             (Some(b), _) => shared_baseline - b[i],
             (None, Some((b, line))) => line - b[i],
+            (None, None) if overhang(i) => {
+                // Centred (unless aligned to an edge), past both edges.
+                let free = content_cross - bcross - margin_cross(i);
+                match cross_align {
+                    CrossAxisAlign::Start => 0.0,
+                    CrossAxisAlign::End => free,
+                    _ => free / 2.0,
+                }
+            }
             (None, None) => cross_axis_offset(cross_align, content_cross, bcross + margin_cross(i)),
         };
 

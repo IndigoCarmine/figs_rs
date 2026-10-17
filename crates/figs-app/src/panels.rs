@@ -1352,6 +1352,7 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
             "background",
             "root",
             "font_family",
+            "image_dpi",
         ],
         BlockCtx::Node(kind) => {
             let mut v = vec!["type"];
@@ -1396,7 +1397,7 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
                     "stroke_width",
                     "join",
                 ]),
-                Some(NodeKind::Image) => v.extend(["src", "fit", "smooth"]),
+                Some(NodeKind::Image) => v.extend(["src", "fit", "smooth", "dpi"]),
                 Some(NodeKind::Rect) => v.extend([
                     "fill",
                     "stroke",
@@ -1445,6 +1446,7 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
                     "route",
                     "gap",
                     "band",
+                    "from_shape",
                     "fill",
                     "stroke",
                     "stroke_width",
@@ -1509,6 +1511,7 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
                 "anchor",
                 "rotate",
                 "axis",
+                "overhang",
                 "name",
                 "shadow",
                 "glow",
@@ -1535,7 +1538,8 @@ fn enum_values(key: &str) -> Vec<&'static str> {
             "path",
             "connector",
         ],
-        "route" => vec!["straight", "elbow", "curve"],
+        "route" => vec!["straight", "elbow", "curve", "cone", "outline"],
+        "from_shape" => vec!["box", "ellipse"],
         "from_at" | "to_at" => vec![
             "auto",
             "facing-1",
@@ -1574,7 +1578,7 @@ fn enum_values(key: &str) -> Vec<&'static str> {
             "cap_middle",
             "axis",
         ],
-        "overflow" => vec!["visible", "clip", "shrink"],
+        "overflow" => vec!["visible", "clip", "shrink", "fit"],
         "stroke_align" => vec!["inside", "center", "outside"],
         _ => vec![],
     }

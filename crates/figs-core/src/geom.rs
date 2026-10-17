@@ -445,6 +445,11 @@ pub enum Overflow {
     /// The children are laid out in a box enlarged by `1 / s` and scaled by
     /// `s` (< 1) so they just fit; nothing changes when they fit already.
     Shrink,
+    /// As `shrink` when the children overflow; when they fit with room to
+    /// spare both ways, they are scaled *up* (uniformly, about the content
+    /// box's top-left; the container's alignment places them) until they
+    /// fill the box on one axis.
+    Fit,
 }
 
 /// How a node distributes its children. Determines the main/cross axes.

@@ -32,7 +32,7 @@
 use std::collections::HashMap;
 
 use crate::geom::{Affine, ArrowHead, PathSegment, Point, Rect};
-use crate::schema::{Attach, ConnectorProps, ConnectorRoute, Document, NodeType};
+use crate::schema::{Attach, ConnectorProps, ConnectorRoute, Document, EndShape, NodeType};
 
 use super::computed::{ComputedNode, PaintContent, PathPaint};
 
@@ -148,8 +148,15 @@ fn facing_side(a: Rect, b: Rect) -> [f32; 2] {
     }
 }
 
-/// Where one end attaches: a page point and the outward normal there.
-fn attach_end(at: Attach, me: &End, other: Rect) -> (Point, Option<Point>, Option<[f32; 2]>) {
+/// Where one end attaches: a page point and the outward normal there. On an
+/// `ellipse` end the facing corners are the ellipse's extreme points across
+/// the facing direction (top / bottom for a side facing left / right).
+fn attach_end(
+    at: Attach,
+    me: &End,
+    other: Rect,
+    shape: EndShape,
+) -> (Point, Option<Point>, Option<[f32; 2]>) {
     match at {
         Attach::Frac(f) => (me.point(f), me.normal(f), None),
         Attach::Auto | Attach::Facing(_) => {
@@ -157,6 +164,14 @@ fn attach_end(at: Attach, me: &End, other: Rect) -> (Point, Option<Point>, Optio
             let r = me.bounds();
             let side = facing_side(r, other);
             let f = match at {
+                Attach::Facing(k) if shape == EndShape::Ellipse => {
+                    let second = if k == 2 { 1.0 } else { 0.0 };
+                    if side[1] == 0.5 {
+                        [0.5, second]
+                    } else {
+                        [second, 0.5]
+                    }
+                }
                 Attach::Facing(k) => {
                     let second = if k == 2 { 1.0 } else { 0.0 };
                     if side[1] == 0.5 {
@@ -184,8 +199,8 @@ fn endpoints(c: &ConnectorProps, a: End, b: End) -> [(Point, Option<Point>); 2] 
         }
         _ => r,
     };
-    let (mut pa, na, sa) = attach_end(c.from_at, &a, toward(c.to_at, &b, bb));
-    let (mut pb, nb, sb) = attach_end(c.to_at, &b, toward(c.from_at, &a, ba));
+    let (mut pa, na, sa) = attach_end(c.from_at, &a, toward(c.to_at, &b, bb), c.from_shape);
+    let (mut pb, nb, sb) = attach_end(c.to_at, &b, toward(c.from_at, &a, ba), EndShape::Box);
     // Two auto ends on facing sides: meet in the middle of the overlap.
     if let (Attach::Auto, Attach::Auto, Some(fa), Some(fb)) = (c.from_at, c.to_at, sa, sb) {
         if fa[1] == 0.5 && fb[1] == 0.5 {
@@ -298,6 +313,10 @@ fn route(c: &ConnectorProps, a: End, b: End) -> Vec<PathSegment> {
             pts.push(p1);
             rounded_polyline(&simplify(&pts), c.radius)
         }
+        // Areas, not lines (see `area`): their straight chord as a fallback.
+        ConnectorRoute::Cone | ConnectorRoute::Outline => {
+            vec![PathSegment::MoveTo(p0), PathSegment::LineTo(p1)]
+        }
         ConnectorRoute::Curve => {
             let d = sub(p1, p0);
             let dist = len(d);
@@ -312,6 +331,56 @@ fn route(c: &ConnectorProps, a: End, b: End) -> Vec<PathSegment> {
                 PathSegment::CubicTo(add(p0, n0, k), add(p1, n1, k), p1),
             ]
         }
+    }
+}
+
+/// The closed outline of an area connector: a `cone` — the quadrilateral
+/// from `from`'s facing corners to `to`'s (on an ellipse region, its extreme
+/// points) — or an `outline` of `from`'s box / its inscribed ellipse.
+fn area(c: &ConnectorProps, a: End, b: End) -> Option<Vec<PathSegment>> {
+    match c.route {
+        ConnectorRoute::Cone => {
+            let (ba, bb) = (a.bounds(), b.bounds());
+            let at = |k, e: &End, other, shape| attach_end(Attach::Facing(k), e, other, shape).0;
+            let p1 = at(1, &a, bb, c.from_shape);
+            let p2 = at(2, &a, bb, c.from_shape);
+            let q1 = at(1, &b, ba, EndShape::Box);
+            let q2 = at(2, &b, ba, EndShape::Box);
+            Some(vec![
+                PathSegment::MoveTo(p1),
+                PathSegment::LineTo(q1),
+                PathSegment::LineTo(q2),
+                PathSegment::LineTo(p2),
+                PathSegment::Close,
+            ])
+        }
+        ConnectorRoute::Outline => Some(match c.from_shape {
+            EndShape::Box => {
+                let pts = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]].map(|f| a.point(f));
+                vec![
+                    PathSegment::MoveTo(pts[0]),
+                    PathSegment::LineTo(pts[1]),
+                    PathSegment::LineTo(pts[2]),
+                    PathSegment::LineTo(pts[3]),
+                    PathSegment::Close,
+                ]
+            }
+            EndShape::Ellipse => {
+                // Four cubics (the usual circle constant), in fractions of
+                // the box, mapped through its transform.
+                const K: f32 = 0.552_284_8 / 2.0;
+                let p = |x: f32, y: f32| a.point([x, y]);
+                vec![
+                    PathSegment::MoveTo(p(1.0, 0.5)),
+                    PathSegment::CubicTo(p(1.0, 0.5 + K), p(0.5 + K, 1.0), p(0.5, 1.0)),
+                    PathSegment::CubicTo(p(0.5 - K, 1.0), p(0.0, 0.5 + K), p(0.0, 0.5)),
+                    PathSegment::CubicTo(p(0.0, 0.5 - K), p(0.5 - K, 0.0), p(0.5, 0.0)),
+                    PathSegment::CubicTo(p(0.5 + K, 0.0), p(1.0, 0.5 - K), p(1.0, 0.5)),
+                    PathSegment::Close,
+                ]
+            }
+        }),
+        _ => None,
     }
 }
 
@@ -582,6 +651,23 @@ pub(crate) fn place_connectors(
             );
             continue;
         };
+        if let Some(outline) = area(c, a, b) {
+            let rect = bounds_of(&outline);
+            placed.push((
+                me,
+                PathPaint {
+                    fill: c.fill.as_ref().map(|p| p.place(rect)),
+                    segments: outline,
+                    stroke: c.stroke.clone(),
+                    head: ArrowHead::None,
+                    head_size: 0.0,
+                    head_width: 0.0,
+                    head_style: c.head_style,
+                    stroke_align: Default::default(),
+                },
+            ));
+            continue;
+        }
         let line = route(c, a, b);
         let paint = match c.band {
             Some(w) => {

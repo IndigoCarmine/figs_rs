@@ -176,6 +176,12 @@ pub trait LeafMeasure {
     fn image_aspect(&self, _image: &ImageProps) -> Option<f32> {
         None
     }
+    /// Pixel size of an image, if known (from the file header): with the
+    /// image's `dpi` it gives its natural size. `None` (the default): an
+    /// image with a `dpi` has no natural size and lays out as without one.
+    fn image_pixels(&self, _image: &ImageProps) -> Option<(u32, u32)> {
+        None
+    }
 }
 
 /// A measurer that reports zero size for all leaf content. Useful for

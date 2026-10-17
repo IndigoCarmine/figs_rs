@@ -15,7 +15,7 @@
 //! tighter limit), so it is never silently drawn at 0×0.
 
 use crate::geom::{Axis, CrossAxisAlign, Edges, Size};
-use crate::schema::{Common, NodeType};
+use crate::schema::{Common, ImageProps, NodeType};
 
 use super::axis::axis_offset;
 use super::baseline::{anchor_shift, pitch_gaps, row_baseline, row_line};
@@ -98,6 +98,9 @@ fn measure_own<M: LeafMeasure>(ctx: &Ctx<M>, idx: usize, c: Constraints) -> Size
             )
         }
         NodeType::Image(props) => {
+            if let Some(nat) = natural_size(ctx, props) {
+                return measure_natural(&node.common, nat, c);
+            }
             let intrinsic = ctx.measurer.measure_image(props);
             if intrinsic.w > 0.0 || intrinsic.h > 0.0 {
                 intrinsic
@@ -210,7 +213,19 @@ pub(super) fn measure_container<M: LeafMeasure>(
     let child_c = |child: usize, main: Option<f32>| {
         let common = &ctx.doc.nodes[child].common;
         let mut cc = base;
-        if stretch && !has_cross_size(common, axis) {
+        if common.overhang {
+            // Laid out at its natural cross size, whatever the room.
+            cc = match axis {
+                Axis::Vertical => Constraints {
+                    max_w: f32::INFINITY,
+                    ..cc
+                },
+                Axis::Horizontal => Constraints {
+                    max_h: f32::INFINITY,
+                    ..cc
+                },
+            };
+        } else if stretch && !keeps_cross_size(ctx, child, axis) {
             cc = tighten(
                 cc,
                 cross_axis(axis),
@@ -300,6 +315,9 @@ pub(super) fn measure_container<M: LeafMeasure>(
         let margin = ctx.doc.nodes[child].common.margin;
         let outer = Size::new(sz.w + margin.horizontal(), sz.h + margin.vertical());
         main_sum += main_of(axis, outer);
+        if ctx.doc.nodes[child].common.overhang {
+            continue; // takes no room across
+        }
         cross_max = cross_max.max(cross_of(axis, outer));
         if let Some(kind) = row_kind {
             let b = row_baseline(ctx, child, sz, margin, kind);
@@ -653,6 +671,74 @@ fn contain(ar: f32, max_w: f32, max_h: f32) -> Size {
         (Some(s), None) | (None, Some(s)) => s,
         (None, None) => Size::default(),
     }
+}
+
+/// An image's natural size (points): its pixels / `dpi` inches, when it has
+/// a `dpi` and the measurer knows its pixel size.
+pub(super) fn natural_size<M: LeafMeasure>(ctx: &Ctx<M>, props: &ImageProps) -> Option<Size> {
+    let dpi = props.dpi.filter(|d| *d > 0.0)?;
+    let (w, h) = ctx.measurer.image_pixels(props)?;
+    Some(Size::new(w as f32 / dpi * 72.0, h as f32 / dpi * 72.0))
+}
+
+/// The size of an image with natural size `nat`: an explicit side or a side
+/// its parent decides (tight) wins, the other following the aspect;
+/// otherwise the natural size, shrunk (keeping the aspect) to fit `c`.
+fn measure_natural(common: &Common, nat: Size, c: Constraints) -> Size {
+    let ar = common
+        .aspect_ratio
+        .filter(|a| a.is_finite() && *a > 0.0)
+        .unwrap_or(nat.w / nat.h.max(1e-6));
+    let nat = Size::new(nat.w, nat.w / ar);
+    let common = Common {
+        aspect_ratio: Some(ar),
+        ..common.clone()
+    };
+    let known =
+        common.width.is_some() || common.height.is_some() || c.is_tight_w() || c.is_tight_h();
+    if known {
+        return resolve_box_size(&common, nat, c);
+    }
+    let fit = contain(ar, c.max_w, c.max_h);
+    let s = if fit.w > 0.0 && fit.w < nat.w {
+        fit
+    } else {
+        nat
+    };
+    c.clamp(s)
+}
+
+/// Whether node `idx` keeps a natural size of its own — an image with one
+/// (see [`natural_size`]), or a stack without an explicit size whose base
+/// layer (first child) does (an overlay, a label over such an image) — so
+/// a stretching parent leaves it at that size.
+pub(super) fn keeps_natural<M: LeafMeasure>(ctx: &Ctx<M>, idx: usize) -> bool {
+    let node = &ctx.doc.nodes[idx];
+    match &node.kind {
+        NodeType::Image(props) => {
+            node.common.width.is_none()
+                && node.common.height.is_none()
+                && natural_size(ctx, props).is_some()
+        }
+        NodeType::Stack { children, .. } => {
+            node.common.width.is_none()
+                && node.common.height.is_none()
+                && node.common.aspect_ratio.is_none()
+                && children.first().is_some_and(|&c| {
+                    let cc = &ctx.doc.nodes[c].common;
+                    cc.x.is_none() && cc.y.is_none() && keeps_natural(ctx, c)
+                })
+        }
+        _ => false,
+    }
+}
+
+/// Whether a stretching parent laid out along `axis` leaves `child` at its
+/// own cross size: an explicit one ([`has_cross_size`]), a natural one
+/// ([`keeps_natural`]), or an overhanging child.
+pub(super) fn keeps_cross_size<M: LeafMeasure>(ctx: &Ctx<M>, child: usize, axis: Axis) -> bool {
+    let common = &ctx.doc.nodes[child].common;
+    common.overhang || has_cross_size(common, axis) || keeps_natural(ctx, child)
 }
 
 /// Whether a child of a container laid out along `axis` has an explicit size

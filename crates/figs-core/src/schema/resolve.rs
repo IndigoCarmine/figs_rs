@@ -20,7 +20,9 @@ use crate::geom::{
 use crate::path::arc_to_cubics;
 
 use super::parse::RawPage;
-use super::parse::{ConnectorRoute, NodeKind, RawAttach, RawDocument, RawNode, RawSegment};
+use super::parse::{
+    ConnectorRoute, EndShape, NodeKind, RawAttach, RawDocument, RawNode, RawSegment,
+};
 use super::span::{FitWidth, FontSpec, FontStyle, TextSpan, TextTypography};
 
 /// Default raster resolution for PNG output when `page.dpi` is unset.
@@ -176,6 +178,9 @@ pub struct Common {
     /// The node's axis for a parent aligning children by `"axis"` (see
     /// [`AxisMark`]).
     pub axis: Option<AxisMark>,
+    /// Takes no room across its parent column / row (see
+    /// `RawNode::overhang`).
+    pub overhang: bool,
 }
 
 impl Common {
@@ -329,6 +334,8 @@ pub struct ConnectorProps {
     pub from_box: Option<[f32; 4]>,
     pub to_box: Option<[f32; 4]>,
     pub route: ConnectorRoute,
+    /// The shape of `from`'s region (see `RawNode::from_shape`).
+    pub from_shape: EndShape,
     /// How far each end stays off its attachment point `[start, end]`.
     pub gap: [f32; 2],
     /// Elbow corner radius.
@@ -367,6 +374,9 @@ pub struct Decoration {
 #[derive(Debug, Clone)]
 pub struct ImageProps {
     pub src: String,
+    /// Pixel density giving the image a natural size (pixels / dpi inches;
+    /// its own `dpi`, else `[page] image_dpi`); `None`: no natural size.
+    pub dpi: Option<f32>,
     pub fit: ImageFit,
     /// Smooth (bilinear) scaling; `false` = nearest neighbour (blocky pixels).
     pub smooth: bool,
@@ -610,6 +620,24 @@ pub fn resolve(raw: RawDocument) -> Result<Document, ResolveError> {
         if let NodeType::Text(t) = &mut nodes[i].kind {
             let r = &raw.nodes[id.as_str()];
             t.typography = typography(id, Some(r), &raw.page, &page_typo)?;
+        }
+    }
+
+    // Images without a `dpi` of their own take the page's.
+    match raw.page.image_dpi {
+        Some(d) if !(d.is_finite() && d >= 0.0) => {
+            return Err(ResolveError::InvalidField {
+                node: "page".to_string(),
+                field: "image_dpi",
+                reason: "pixels per inch: a positive number (0 for none)".into(),
+            });
+        }
+        page_dpi => {
+            for n in &mut nodes {
+                if let NodeType::Image(img) = &mut n.kind {
+                    img.dpi = img.dpi.or(page_dpi).filter(|d| *d > 0.0);
+                }
+            }
         }
     }
 
@@ -879,7 +907,22 @@ fn convert_node(
         anchor: raw.anchor,
         rotate: raw.rotate.unwrap_or(0.0),
         axis: raw.axis,
+        overhang: raw.overhang,
     };
+    if raw.dpi.is_some() && raw.kind != NodeKind::Image {
+        return Err(ResolveError::InvalidField {
+            node: id.to_string(),
+            field: "dpi",
+            reason: "only an image has a pixel density".into(),
+        });
+    }
+    if raw.dpi.is_some_and(|d| !(d.is_finite() && d >= 0.0)) {
+        return Err(ResolveError::InvalidField {
+            node: id.to_string(),
+            field: "dpi",
+            reason: "pixels per inch: a positive number (0 for no natural size)".into(),
+        });
+    }
     if let Some(AxisMark::At(f)) = raw.axis {
         if !f.iter().all(|v| v.is_finite()) {
             return Err(ResolveError::InvalidField {
@@ -900,7 +943,7 @@ fn convert_node(
         return Err(ResolveError::InvalidField {
             node: id.to_string(),
             field: "overflow",
-            reason: "only a column/row handles an overflow (visible, clip, shrink)".into(),
+            reason: "only a column/row handles an overflow (visible, clip, shrink, fit)".into(),
         });
     }
     if !common.rotate.is_finite() {
@@ -1046,6 +1089,8 @@ fn convert_node(
             })?;
             NodeType::Image(ImageProps {
                 src,
+                // `[page] image_dpi` is filled in by `resolve`.
+                dpi: raw.dpi,
                 fit: raw.fit.unwrap_or_default(),
                 smooth: raw.smooth.unwrap_or(true),
             })
@@ -1223,6 +1268,7 @@ fn check_connector_fields(id: &str, raw: &RawNode) -> Result<(), ResolveError> {
         ("route", raw.route.is_some()),
         ("gap", raw.gap.is_some()),
         ("band", raw.band.is_some()),
+        ("from_shape", raw.from_shape.is_some()),
     ];
     match given.iter().find(|(_, g)| *g) {
         Some((field, _)) => Err(ResolveError::InvalidField {
@@ -1308,10 +1354,12 @@ fn connector(
         }
         None => None,
     };
+    let route = raw.route.unwrap_or_default();
+    let filled = band.is_some() || route == ConnectorRoute::Cone;
     let (fill, stroke) = match band {
-        // A band is filled (with `fill`, else the stroke colour); a stroke
-        // as well only when both are given.
-        Some(_) => {
+        // A band / cone is filled (with `fill`, else the stroke colour); a
+        // stroke as well only when both are given.
+        _ if filled => {
             let fill = fill.or_else(|| Some(raw.stroke.unwrap_or(Color::BLACK).into()));
             let stroke = if raw.fill.is_some() {
                 shape_stroke(id, raw, factor, false)?
@@ -1320,7 +1368,12 @@ fn connector(
             };
             (fill, stroke)
         }
-        None => (None, shape_stroke(id, raw, factor, true)?),
+        // An outline: `fill` inside it, and a stroke unless only a fill
+        // is given.
+        None if route == ConnectorRoute::Outline => {
+            (fill, shape_stroke(id, raw, factor, raw.fill.is_none())?)
+        }
+        _ => (None, shape_stroke(id, raw, factor, true)?),
     };
     let stroke_w = stroke.as_ref().map_or(0.0, |s| s.width);
     let head_size = match (raw.head_size, band) {
@@ -1348,7 +1401,8 @@ fn connector(
         to_at,
         from_box,
         to_box,
-        route: raw.route.unwrap_or_default(),
+        route,
+        from_shape: raw.from_shape.unwrap_or_default(),
         gap: [gap[0] * factor, gap[1] * factor],
         radius,
         band,

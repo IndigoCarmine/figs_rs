@@ -159,6 +159,11 @@ pub struct RawPage {
     /// and SVG are unaffected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_stroke_px: Option<f32>,
+    /// Default pixel density of images that set no `dpi` of their own: an
+    /// image's natural size is its pixels / dpi inches (see
+    /// [`RawNode::dpi`]). Unset: images have no natural size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_dpi: Option<f32>,
 }
 
 /// The discriminant of a node, from its `type` field.
@@ -325,6 +330,13 @@ pub struct RawNode {
     /// [`Overflow`]). Every overflow is reported either way.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub overflow: Option<Overflow>,
+    /// Take no room across the parent column / row: the node is laid out at
+    /// its natural cross size (a caption in one line) and aligned as the
+    /// parent's cross alignment says — centred unless `start` / `end` —
+    /// overhanging the parent's box instead of widening it (or wrapping to
+    /// it).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub overhang: bool,
 
     // ---- text ----
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -407,6 +419,14 @@ pub struct RawNode {
     /// low-resolution image keeps its blocky pixels (default `true`: smooth).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub smooth: Option<bool>,
+    /// Pixel density: the image's natural size is its pixels / `dpi` inches
+    /// (overrides `[page] image_dpi`; `0` = none). An image with a natural
+    /// size keeps it — it isn't stretched across its parent — unless it has
+    /// an explicit `width` / `height` or a parent decides a side (a flex
+    /// share, an equal-height row); a natural size bigger than the room
+    /// shrinks to fit, keeping the aspect.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dpi: Option<f32>,
 
     // ---- rect (`stroke` / `stroke_width` are shared with shapes and text) ----
     /// Fill paint: a colour (`"#rrggbb"`) or a gradient table (see
@@ -516,6 +536,31 @@ pub struct RawNode {
     /// band). Filled with `fill` (default: the `stroke` colour, else black).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub band: Option<f32>,
+    /// Connector: the shape of `from`'s box (or `from_box`) — `box`
+    /// (default) or `ellipse`: the region is the inscribed ellipse, so the
+    /// `facing-1` / `facing-2` points lie on it (its extreme points across
+    /// the facing direction) and the `outline` route draws it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_shape: Option<EndShape>,
+}
+
+/// The shape of a connector end's region (see [`RawNode::from_shape`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EndShape {
+    #[default]
+    Box,
+    Ellipse,
+}
+
+impl EndShape {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "box" => EndShape::Box,
+            "ellipse" => EndShape::Ellipse,
+            _ => return None,
+        })
+    }
 }
 
 /// Where a connector attaches to a node's box: a named point or fractions.
@@ -537,6 +582,14 @@ pub enum ConnectorRoute {
     Straight,
     Elbow,
     Curve,
+    /// A filled quadrilateral from the `facing-1` / `facing-2` points of
+    /// `from` to those of `to` — a light / projection cone joining a region
+    /// to its magnified copy (`fill`, optional `stroke` outline).
+    Cone,
+    /// No line between the ends: the outline of `from`'s box (or
+    /// `from_box`) — its inscribed ellipse with `from_shape = "ellipse"`,
+    /// else the rectangle (`fill` inside, `stroke` round it).
+    Outline,
 }
 
 impl ConnectorRoute {
@@ -545,6 +598,8 @@ impl ConnectorRoute {
             "straight" => ConnectorRoute::Straight,
             "elbow" => ConnectorRoute::Elbow,
             "curve" => ConnectorRoute::Curve,
+            "cone" => ConnectorRoute::Cone,
+            "outline" => ConnectorRoute::Outline,
             _ => return None,
         })
     }

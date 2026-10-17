@@ -43,7 +43,7 @@ pub struct FontStore {
     /// image's natural aspect ratio. `None` disables image lookups.
     image_base_dir: Option<PathBuf>,
     /// Natural aspect (w / h) per resolved image path; `None` = unreadable.
-    image_aspects: RefCell<HashMap<PathBuf, Option<f32>>>,
+    image_pixels: RefCell<HashMap<PathBuf, Option<(u32, u32)>>>,
 }
 
 impl FontStore {
@@ -54,7 +54,7 @@ impl FontStore {
             cache: RefCell::new(fonts::FontCache::default()),
             default_family: None,
             image_base_dir: None,
-            image_aspects: RefCell::new(HashMap::new()),
+            image_pixels: RefCell::new(HashMap::new()),
         }
     }
 
@@ -64,7 +64,7 @@ impl FontStore {
     /// [`crate::layout::FALLBACK_IMAGE_ASPECT`] wherever an aspect is needed.
     pub fn set_image_base_dir(&mut self, dir: Option<PathBuf>) {
         self.image_base_dir = dir;
-        self.image_aspects.borrow_mut().clear();
+        self.image_pixels.borrow_mut().clear();
     }
 
     /// Set the family (or comma-separated family list, e.g. `"Arial, Yu
@@ -161,9 +161,14 @@ impl LeafMeasure for FontStore {
         Size::default()
     }
 
-    /// Natural aspect from the image file header (cached per path), when an
-    /// image base dir is set. Missing/unreadable files yield `None`.
+    /// Natural aspect from the image file header (see [`Self::image_pixels`]).
     fn image_aspect(&self, image: &ImageProps) -> Option<f32> {
+        self.image_pixels(image).map(|(w, h)| w as f32 / h as f32)
+    }
+
+    /// Pixel size from the image file header (cached per path), when an
+    /// image base dir is set. Missing/unreadable files yield `None`.
+    fn image_pixels(&self, image: &ImageProps) -> Option<(u32, u32)> {
         let base = self.image_base_dir.as_deref()?;
         let src = Path::new(&image.src);
         let path = if src.is_absolute() {
@@ -171,13 +176,11 @@ impl LeafMeasure for FontStore {
         } else {
             base.join(src)
         };
-        if let Some(cached) = self.image_aspects.borrow().get(&path) {
+        if let Some(cached) = self.image_pixels.borrow().get(&path) {
             return *cached;
         }
-        let aspect = crate::render::image_size(&path)
-            .filter(|(w, h)| *w > 0 && *h > 0)
-            .map(|(w, h)| w as f32 / h as f32);
-        self.image_aspects.borrow_mut().insert(path, aspect);
-        aspect
+        let px = crate::render::image_size(&path).filter(|(w, h)| *w > 0 && *h > 0);
+        self.image_pixels.borrow_mut().insert(path, px);
+        px
     }
 }

@@ -83,6 +83,9 @@ fn blank(kind: NodeKind) -> RawNode {
         route: None,
         gap: None,
         band: None,
+        from_shape: None,
+        dpi: None,
+        overhang: false,
     }
 }
 
@@ -169,6 +172,7 @@ pub fn default_document() -> RawDocument {
             synthetic_bold_width: None,
             synthetic_slant: None,
             min_stroke_px: None,
+            image_dpi: None,
         },
         nodes,
     }
