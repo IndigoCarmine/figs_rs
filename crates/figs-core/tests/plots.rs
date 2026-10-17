@@ -2018,3 +2018,180 @@ fn plot_frame_example_puts_frames_on_the_guides() {
         assert_rect(*p, g.x, g.y, g.w, g.h);
     }
 }
+
+// ---- insets ---------------------------------------------------------------------
+
+/// `inset_pad()` at the default 8 pt, in pt.
+const INSET_PAD: f32 = 8.0 * 0.03 * 72.0 / 2.54;
+const CM: f32 = 72.0 / 2.54;
+
+#[test]
+fn inset_sits_in_a_named_corner_of_the_data_frame() {
+    let p = Plotted::new(
+        r#"page(12, 9, plot(#{ x: [0, 10], y: [0, 1], legend: "" }, [
+            line_plot([0, 10], [0, 1]),
+            inset(text("I"), #{ corner: "top-right", width: 2, height: 1 }),
+        ]).flex(1)).unit("cm")"#,
+    );
+    let area = p.area();
+    let r = p.text("I");
+    approx(r.w, 2.0 * CM);
+    approx(r.h, 1.0 * CM);
+    approx(r.x + r.w, area.x + area.w - INSET_PAD);
+    approx(r.y, area.y + INSET_PAD);
+}
+
+#[test]
+fn inset_at_a_data_point_hangs_from_it() {
+    let p = Plotted::new(
+        r#"page(12, 9, plot(#{ x: [0, 10], y: [0, 1],
+            marks: [inset(text("I"), #{ at: [2, 0.8], width: 2, height: 1 })] },
+            [line_plot([0, 10], [0, 1])]).flex(1)).unit("cm")"#,
+    );
+    let area = p.area();
+    let r = p.text("I");
+    approx(r.x, area.x + area.w * 0.2);
+    approx(r.y, area.y + area.h * 0.2);
+    // `anchor` picks the point of the inset that sits there.
+    let p = Plotted::new(
+        r#"page(12, 9, plot(#{ x: [0, 10], y: [0, 1] }, [line_plot([0, 10], [0, 1]),
+            inset(text("I"), #{ at: [5, 0.5], anchor: [0.5, 0.5], width: 2, height: 1 })]).flex(1)).unit("cm")"#,
+    );
+    let area = p.area();
+    let r = p.text("I");
+    approx(r.x + r.w / 2.0, area.x + area.w * 0.5);
+    approx(r.y + r.h / 2.0, area.y + area.h * 0.5);
+    // Without a width it is `size` of the frame wide, still hanging from the
+    // point (and kept inside the frame sideways).
+    for (at, want_x) in [("[2, 0.8]", 0.2), ("[9, 0.8]", 0.6)] {
+        let p = Plotted::new(&format!(
+            r#"page(12, 9, plot(#{{ x: [0, 10], y: [0, 1] }}, [line_plot([0, 10], [0, 1]),
+                inset(text("I").aspect(2), #{{ at: {at} }})]).flex(1)).unit("cm")"#
+        ));
+        let area = p.area();
+        let r = p.text("I");
+        approx(r.w, area.w * 0.4);
+        approx(r.h, r.w / 2.0);
+        approx(r.x, area.x + area.w * want_x);
+        approx(r.y, area.y + area.h * 0.2);
+    }
+}
+
+#[test]
+fn auto_inset_takes_the_emptiest_corner_the_legend_left() {
+    // Data on the diagonal: top-left and bottom-right are empty. The legend
+    // takes the first (top-left), the inset the other.
+    let p = Plotted::new(
+        r#"page(12, 9, plot(#{ x: [0, 10], y: [0, 1] }, [
+            line_plot([0, 10], [0, 1], "a"),
+            inset(text("I"), #{ width: 2, height: 1 }),
+        ]).flex(1)).unit("cm")"#,
+    );
+    let area = p.area();
+    let legend = p.text("a");
+    assert!(legend.x < area.x + area.w / 2.0 && legend.y < area.y + area.h / 2.0);
+    let r = p.text("I");
+    approx(r.x + r.w, area.x + area.w - INSET_PAD);
+    approx(r.y + r.h, area.y + area.h - INSET_PAD);
+}
+
+#[test]
+fn inset_on_any_panel_pins_to_its_corner() {
+    let p = Plotted::new(
+        r#"page(10, 8, inset(rect(), text("I"), #{ corner: "bottom-left", width: 2, height: 1 })).unit("cm")"#,
+    );
+    let page = rect_of(&p.l, "root");
+    let r = p.text("I");
+    approx(r.x, page.x + INSET_PAD);
+    approx(r.y + r.h, page.y + page.h - INSET_PAD);
+    // "auto" (the default) means top-right off a plot.
+    let p = Plotted::new(
+        r#"page(10, 8, inset(rect(), text("I"), #{ width: 2, height: 1 })).unit("cm")"#,
+    );
+    let page = rect_of(&p.l, "root");
+    let r = p.text("I");
+    approx(r.x + r.w, page.x + page.w - INSET_PAD);
+    approx(r.y, page.y + INSET_PAD);
+}
+
+#[test]
+fn inset_hooks_and_bad_options() {
+    // inset_size() is its share of the frame width (less the pads); the
+    // height follows the node's aspect.
+    let p = Plotted::new(
+        r#"style(#{ inset_size: 0.5, inset_corner: "bottom-left" });
+        page(12, 9, plot(#{ x: [0, 10], y: [0, 1], legend: "" }, [
+            inset(text("I").aspect(2)),
+        ]).flex(1)).unit("cm")"#,
+    );
+    let area = p.area();
+    let r = p.text("I");
+    approx(r.w, (area.w - 2.0 * INSET_PAD) * 0.5);
+    approx(r.h, r.w / 2.0);
+    approx(r.x, area.x + INSET_PAD);
+    approx(r.y + r.h, area.y + area.h - INSET_PAD);
+    // inset_plot: a plot whose labels are inset_text_size() (6 pt here).
+    let raw = eval_script(
+        r#"page("single", plot([line_plot([0, 1], [0, 1]), inset(inset_plot(#{ x: [0, 1], y: [0, 4] },
+            [line_plot([0, 1], [0, 4])]))]))"#,
+    )
+    .unwrap();
+    let four: Vec<_> = raw
+        .nodes
+        .values()
+        .filter(|n| n.content.as_deref() == Some("4"))
+        .collect();
+    assert_eq!(four.len(), 1);
+    approx(four[0].font_size.unwrap(), 6.0);
+    for (src, want) in [
+        (r#"inset(text("x"), #{ big: 2 })"#, "unknown option \"big\""),
+        (
+            r#"inset(text("x"), #{ corner: "middle" })"#,
+            "unknown corner \"middle\"",
+        ),
+        (r#"inset(text("x"), #{ at: [1] })"#, "`at` must be [x, y]"),
+        (
+            r#"inset(text("x"), #{ size: 0 })"#,
+            "size must be a fraction",
+        ),
+        (
+            r#"inset(rect(), text("x"), #{ at: [1, 2] })"#,
+            "data coordinates",
+        ),
+        (r#"inset_plot(#{ style: 1 }, [])"#, "style must be a map"),
+    ] {
+        let e = eval_script(&format!("page(\"single\", plot([{src}]))"))
+            .err()
+            .or_else(|| eval_script(&format!("page(\"single\", {src})")).err())
+            .unwrap_or_else(|| panic!("{src} should fail"))
+            .to_string();
+        assert!(e.contains(want), "{src}: {e}");
+    }
+}
+
+#[test]
+fn an_explicitly_sized_stack_measures_its_children_at_that_size() {
+    // A filling base layer with an aspect ratio (an image under an overlay)
+    // reports the height it gets at the stack's width, so the stack wraps it.
+    let raw = eval_script(
+        r#"page(20, 10, row([stack([rect().aspect(2), text("o").at(0, 0)]).width(8)]).cross("start")).unit("cm")"#,
+    )
+    .unwrap();
+    let doc = figs_core::schema::resolve::resolve(raw.clone()).unwrap();
+    let l = layout(&doc, &PerChar);
+    let id = find_raw(&raw, |n| n.kind == NodeKind::Stack);
+    let r = rect_of(&l, id);
+    approx(r.w, 8.0 * CM);
+    approx(r.h, 4.0 * CM);
+}
+
+#[test]
+fn inset_example_lays_out() {
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    let src = std::fs::read_to_string(examples.join("inset.figs")).unwrap();
+    let doc = Document::from_script_in(&src, Some(&examples)).unwrap();
+    let l = layout(&doc, &FontStore::new());
+    // Three insets, each inside its panel.
+    let page_w = l.page.width_pt;
+    assert!(l.nodes.iter().all(|n| n.rect.x + n.rect.w <= page_w + 0.5));
+}

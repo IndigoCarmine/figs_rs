@@ -61,7 +61,14 @@ fn measure_own<M: LeafMeasure>(ctx: &Ctx<M>, idx: usize, c: Constraints) -> Size
             viewbox,
             contain,
             ..
-        } => measure_stack(ctx, children, viewbox.is_some(), *contain, &node.common, c),
+        } => measure_stack(
+            ctx,
+            children,
+            viewbox.is_some(),
+            *contain,
+            &node.common,
+            explicit_tight(&node.common, c),
+        ),
         NodeType::Rect(_) | NodeType::Ellipse(_) => Size::default(),
         // Coordinates live in the content box, so the intrinsic size is the
         // outline's extent from its origin (exact curve bounds, not control
@@ -305,6 +312,21 @@ fn measure_stack<M: LeafMeasure>(
         w - left + common.padding.horizontal(),
         h - top + common.padding.vertical(),
     )
+}
+
+/// `c` made tight on each axis the node sizes explicitly (`width` / `height`,
+/// clamped to `c`), so its children are measured against the box it will have:
+/// a filling base layer with an aspect ratio (an image under an overlay) then
+/// reports the height it gets at that width, and the stack wraps it exactly.
+fn explicit_tight(common: &Common, c: Constraints) -> Constraints {
+    let mut c = c;
+    if let Some(w) = common.width {
+        c = c.with_tight_w(c.clamp_w(w));
+    }
+    if let Some(h) = common.height {
+        c = c.with_tight_h(c.clamp_h(h));
+    }
+    c
 }
 
 /// Space available to a stack child's border box inside a content box of size

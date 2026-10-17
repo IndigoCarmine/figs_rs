@@ -1,0 +1,17 @@
+// Insets without coordinates: `inset(sub)` goes into a plot's series (or
+// `marks`) and takes the emptiest corner the legend left free; `inset_plot`
+// is a plot dressed for it (small labels, short ticks, a background so the
+// host's data stays out). `#{ at: [x, y] }` pins it to a data point instead,
+// and `inset(main, sub)` puts one on any panel — here a photo.
+style("nature");
+let h = csv("data/heating.csv");        // T, a10, a100 (synthetic)
+let zoom = inset_plot(#{ x: [40, 60], y: [0, 1], frame: "box" }, [scatter(h.T, h.a10)]);
+
+let curves = [scatter(h.T, h.a10, "10 μM"), scatter(h.T, h.a100, "100 μM")];
+let axes = #{ x: [20, 100], y: [0, 1.1], xlabel: "T [°C]", ylabel: "α" };
+
+page("double", grid(3, panels([
+    plot(axes, curves + [inset(zoom)]),
+    plot(axes + #{ legend: "" }, curves + [inset(zoom, #{ at: [62, 1.0] })]),
+    inset(image("img/sunlit.png"), zoom, #{ corner: "bottom-left" }),
+])))

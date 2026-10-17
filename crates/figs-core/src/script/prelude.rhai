@@ -198,6 +198,8 @@ fn style_keys() {
         "axis_label_size", "axis_label_font", "axis_label_pad", "legend_size", "legend_font",
         "plot_title_font", "xtick_label_pad", "ytick_label_pad", "tick_label_pad_mode",
         "xlabel_pad", "ylabel_pad", "xlabel_offset", "ylabel_offset",
+        "inset_size", "inset_corner", "inset_pad", "inset_text_size", "inset_bg",
+        "inset_max_ticks",
         // colours (theme)
         "fg", "plot_fg", "plot_bg", "page_bg",
         // posters
@@ -339,6 +341,31 @@ fn plot_label_room() {
 // Clear space between a plot's outermost marks (tick labels, axis labels)
 // and its box (cm), so labels never touch the panel edge.
 fn plot_pad() { style_get("plot_pad", base_size() * 0.01) }
+
+// Width of an `inset(..)` as a fraction of the space it sits in (the data
+// frame, or the panel, less `inset_pad()`); its height follows the node's
+// aspect (a plot's `plot_aspect()`, an image's pixels). A `width` option (cm)
+// overrides it.
+fn inset_size() { style_get("inset_size", 0.4) }
+
+// Where `inset(sub)` sits in a plot: "auto" (the emptiest corner the legend
+// left free) or a corner name.
+fn inset_corner() { style_get("inset_corner", "auto") }
+
+// Gap between a corner inset and the data frame (cm), as for the legend.
+fn inset_pad() { style_get("inset_pad", base_size() * 0.03) }
+
+// Text size inside `inset_plot(..)` (pt): ticks, axis labels, legend, title.
+fn inset_text_size() { style_get("inset_text_size", base_size() * 0.75) }
+
+// At most this many labelled ticks per axis of an `inset_plot(..)`.
+fn inset_max_ticks() { style_get("inset_max_ticks", 4) }
+
+// Fill under a whole `inset_plot(..)` (labels included), so the host's data
+// doesn't show through: the plot / page background, else white.
+fn inset_bg() {
+    style_get("inset_bg", if plot_bg() != "" { plot_bg() } else if page_bg() != "" { page_bg() } else { "#ffffff" })
+}
 
 // The y axis label turned 90° (reading upwards) left of the y tick labels and
 // centred on the axis (true), or horizontal above the axis (false).
@@ -1747,6 +1774,96 @@ fn plot_arrow(x1, y1, x2, y2, opts) {
     plot_annotation("plot_arrow", "arrow", [x1, y1, x2, y2], "", opts, ["color", "width", "head", "dash"])
 }
 
+// --- insets ---
+
+// `inset(sub)` / `inset(sub, opts)`: `sub` (any node — a zoomed
+// `inset_plot`, an image, a schematic) inside the plot it is given to, in
+// its series or `marks`. Options:
+//   corner  "auto" (the emptiest corner the legend left free) or a corner
+//           name, `pad` in from the data frame (default `inset_corner()`)
+//   at      [x, y]: instead, place it at that data point (data values; the
+//           plot applies log axes) — its top-left there unless `anchor`
+//   anchor  [ax, ay] with `at`: which point of the inset sits there,
+//           fractions of its box (default [0, 0])
+//   size    width as a fraction of the frame / panel (default `inset_size()`)
+//   width   cm instead of `size`
+//   height  cm (default: from the node's aspect, else its natural height)
+//   pad     cm between a corner inset and the frame (default `inset_pad()`)
+// `inset(main, sub)` / `inset(main, sub, opts)`: the same on any panel that
+// is not a plot (no data coordinates; "auto" means "top-right"):
+// `stack([main, pin(sub, corner, pad)])`.
+fn inset(sub) { inset_spec(sub, #{}) }
+fn inset(a, b) {
+    if type_of(b) == "map" { return inset_spec(a, b); }
+    inset(a, b, #{})
+}
+fn inset(main, sub, opts) {
+    let s = inset_spec(sub, opts);
+    if type_of(s.at) != "()" {
+        throw "inset(main, sub, opts): `at` is in data coordinates — put inset(sub, #{ at: [x, y] }) in a plot's series or marks";
+    }
+    let c = if s.corner == "auto" { "top-right" } else { s.corner };
+    stack([as_node(main), inset_in_corner(s, c)])
+}
+
+// Inset `a` in `corner` of the stack it goes into, `a.pad` in: a filling row
+// whose flex spacer leaves the inset `a.size` of the width (or a plain `pin`
+// when it has a `width` in cm).
+fn inset_in_corner(a, corner) {
+    if type_of(a.width) != "()" { return pin_in("inset", a.node, corner, a.pad); }
+    let gap = rect().flex(1.0 - a.size);
+    let n = a.node.flex(a.size);
+    let r = if corner.ends_with("right") { row([gap, n]) } else { row([n, gap]) };
+    r.cross(if corner.starts_with("top") { "start" } else { "end" }).pad(a.pad)
+}
+
+// The descriptor of `inset(sub, opts)`: an annotation (`mark: "inset"`) the
+// plot places once its axes exist, holding the sized node.
+fn inset_spec(sub, opts) {
+    if type_of(opts) != "map" { throw `inset(): options must be a map (got ${type_of(opts)})`; }
+    let known = ["corner", "at", "anchor", "size", "width", "height", "pad"];
+    for k in opts.keys() {
+        if !known.contains(k) { throw `inset(): unknown option "${k}" (${list_names(known)})`; }
+    }
+    let n = as_node(sub);
+    let width = plot_opt(opts, "width", ());
+    if type_of(width) != "()" { n = n.width(width); }
+    if opts.contains("height") { n = n.height(opts.height); }
+    let size = plot_opt(opts, "size", inset_size()).to_float();
+    if !(size > 0.0 && size <= 1.0) { throw `inset(): size must be a fraction in (0, 1] (got ${size})`; }
+    let a = #{ mark: "inset", node: n, at: (), anchor: [0, 0], size: size, width: width,
+               corner: plot_opt(opts, "corner", inset_corner()), pad: plot_opt(opts, "pad", inset_pad()) };
+    if opts.contains("at") {
+        a.at = plot_numbers("inset", "`at`", opts.at);
+        if a.at.len() != 2 { throw "inset(): `at` must be [x, y]"; }
+    }
+    a.anchor = plot_numbers("inset", "`anchor`", plot_opt(opts, "anchor", a.anchor));
+    if a.anchor.len() != 2 { throw "inset(): `anchor` must be [ax, ay]"; }
+    let corners = ["auto", "top-right", "top-left", "bottom-right", "bottom-left"];
+    if !corners.contains(a.corner) {
+        throw `inset(): unknown corner "${a.corner}" (${list_names(corners)})`;
+    }
+    a
+}
+
+// `inset_plot(series)` / `inset_plot(opts, series)`: a `plot` dressed for an
+// inset — every label at `inset_text_size()`, at most `inset_max_ticks()`
+// ticks per axis, shorter ticks, a tighter pad, and `inset_bg()` under the whole box so the host's data stays out. `opts`
+// are plot options; its `style` map overrides these defaults.
+fn inset_plot(series) { inset_plot(#{}, series) }
+fn inset_plot(opts, series) {
+    if type_of(opts) != "map" { throw `inset_plot(): options must be a map (got ${type_of(opts)})`; }
+    let ts = inset_text_size();
+    let st = #{ tick_label_size: ts, axis_label_size: ts, legend_size: ts, plot_title_size: ts,
+                tick_length: tick_length() * 0.75, plot_pad: plot_pad() * 0.5, plot_bg: inset_bg(),
+                max_ticks: inset_max_ticks() };
+    let own = plot_opt(opts, "style", #{});
+    if type_of(own) != "map" { throw `inset_plot(): style must be a map of style keys (got ${type_of(own)})`; }
+    for k in own.keys() { st[k] = own[k]; }
+    opts.style = st;
+    plot(opts, series)
+}
+
 // An annotation descriptor (`plot` turns it into nodes once the axes exist).
 fn plot_annotation(name, kind, pts, s, opts, known) {
     if type_of(opts) != "map" { throw `${name}(): options must be a map (got ${type_of(opts)})`; }
@@ -1785,6 +1902,20 @@ fn plot_is_annotation(x) { type_of(x) == "map" && x.contains("mark") }
 // The node of annotation `a` in a data area spanning [x0, x1] x [y0, y1]
 // (viewbox coordinates; `xlog`/`ylog` take log10 of the values).
 fn plot_annotation_node(a, xlog, ylog, x0, x1, y0, y1) {
+    if a.mark == "inset" {
+        let px = plot_tf(a.at[0], xlog);
+        let py = plot_tf(a.at[1], ylog);
+        if type_of(px) == "()" || type_of(py) == "()" { return (); }
+        if type_of(a.width) != "()" { return a.node.at(px, py).anchor(a.anchor[0], a.anchor[1]); }
+        // `size` of the frame width: a full-width row at height `py` whose
+        // spacers put the inset's left edge where `anchor` asks.
+        let u = ((px - x0) / (x1 - x0) - a.anchor[0] * a.size).max(0.0).min(1.0 - a.size);
+        let parts = [];
+        if u > 0.0 { parts.push(rect().flex(u)); }
+        parts.push(a.node.flex(a.size));
+        if 1.0 - u - a.size > 1e-9 { parts.push(rect().flex(1.0 - u - a.size)); }
+        return row(parts).y(py).anchor(0, a.anchor[1]);
+    }
     let p = [];
     for i in 0..a.pts.len() {
         let v = plot_tf(a.pts[i], if i % 2 == 0 { xlog } else { ylog });
@@ -1910,11 +2041,16 @@ fn plot_only_series(series) {
 
 // The corner of the [0, 1]² data area with the fewest `samples` ([u, v],
 // v up) in it, preferring top-right, top-left, bottom-right, bottom-left.
-fn legend_auto_corner(samples) {
+fn legend_auto_corner(samples) { plot_auto_corner(samples, []) }
+
+// `legend_auto_corner`, skipping the corners in `taken` (the legend's, an
+// earlier inset's); the first free corner if all hold data alike.
+fn plot_auto_corner(samples, taken) {
     let corners = ["top-right", "top-left", "bottom-right", "bottom-left"];
     let best = corners[0];
     let best_n = -1;
     for c in corners {
+        if taken.contains(c) { continue; }
         let n = 0;
         let right = c.ends_with("right");
         let top = c.starts_with("top");
@@ -2212,7 +2348,9 @@ fn plot_build(opts, series) {
     }
     for t in ya.ticks { marks.push(line(0, 0, tl, 0).stroke(fg).stroke_width(lw).at(x0, t).anchor(yan, 0)); }
     for t in yminor { marks.push(line(0, 0, tl * 0.6, 0).stroke(fg).stroke_width(lw * 0.8).at(x0, t).anchor(yan, 0)); }
+    let corner_insets = [];
     for a in notes {
+        if a.mark == "inset" && type_of(a.at) == "()" { corner_insets.push(a); continue; }
         let n = plot_annotation_node(a, xlog, ylog, x0, x1, y0, y1);
         if type_of(n) != "()" { extra.push(n); }
     }
@@ -2240,6 +2378,7 @@ fn plot_build(opts, series) {
     }
     let labelled = false;
     for s in series { if s.label != "" { labelled = true; } }
+    let taken = [];      // corners holding the legend / an inset
     if labelled && type_of(lat) != "()" {
         let p = plot_numbers("plot", "legend `at`", lat);
         let la = plot_numbers("plot", "legend `anchor`", lanchor);
@@ -2252,6 +2391,14 @@ fn plot_build(opts, series) {
     } else if where != "" && labelled {
         if where == "auto" { where = legend_auto_corner(samples); }
         area.push(pin(legend_box(series, lstyle), where, base_size() * 0.03));
+        taken.push(where);
+    }
+
+    // Corner insets, over the legend's corner only if asked for by name.
+    for a in corner_insets {
+        let c = if a.corner == "auto" { plot_auto_corner(samples, taken) } else { a.corner };
+        taken.push(c);
+        area.push(inset_in_corner(a, c));
     }
 
     let parts = [stack(area)];

@@ -1137,6 +1137,9 @@ Components (lengths in cm, font sizes in pt):
 | `scalebar(len, field, s)` | The same bar in image/physical units: `len` out of a field `field` wide (same unit), so exactly `len / field` of the panel width whatever the layout — `scalebar(5, 50, "5 μm")` for a 50 μm field, `scalebar(80, 1024, "1 μm")` for 80 px of a 1024 px image. |
 | `callout(tx, ty, x, y, s)` | The core `arrow(tx, ty, x, y)` in `accent()` with label `s` at its tail, beside it on the side away from the target and vertically centered on `ty`. |
 | `highlight(x, y, w, h)` / `spot(cx, cy, r)` | Dashed box with its top-left at (`x`, `y`) / dashed circle centered on (`cx`, `cy`), in `accent()` (a closed `path` / an `ellipse`; `.dash([])` makes them solid). |
+| `inset(sub)` / `inset(sub, opts)` | `sub` (an `inset_plot`, an image, any node) inside the plot whose series or `marks` it is in: in the emptiest corner the legend left free (`inset_corner()` `"auto"`), `inset_size()` of the frame width (height from its aspect), `inset_pad()` in. Options `corner`, `at: [x, y]` (a data point, top-left there unless `anchor`), `anchor`, `size` (fraction), `width`/`height` (cm), `pad`. See *Insets*. |
+| `inset(main, sub)` / `inset(main, sub, opts)` | The same on any panel that is not a plot (a photo, a schematic): `stack([main, …])` with `sub` in a corner (`"auto"` = top-right). |
+| `inset_plot(series)` / `inset_plot(opts, series)` | A `plot` dressed for an inset: labels at `inset_text_size()`, ≤ `inset_max_ticks()` ticks, shorter ticks, tight pad, `inset_bg()` under the whole box. Its `style` option overrides these. |
 | `pin(node, corner)` / `pin(node, corner, inset)` | Any node pinned `inset` (default `label_inset()`) in from a corner of the enclosing stack — what `labeled` and `scalebar` use. |
 | `captioned(item, c)` | `item` above caption `c` (a string becomes `caption(c)`, a node is used as is), `caption_gap()` apart; the item takes the spare height and the caption spans the item's width, so its centered text sits under the middle of the panel whatever the parent's cross alignment. |
 | `nodes(items)` / `as_node(x)` | Bare-string sugar: a string becomes `body(s)`. Use `col(nodes([...]))` to get it in core containers. |
@@ -1438,6 +1441,29 @@ over the current style while the plot is built, then the registry is restored
 exactly, so nothing leaks into later plots (defaults the series builders left
 open, such as `marker_open()`, are read inside that scope too). `xlabel`,
 `ylabel` and `title` also take markup spans: `xlabel: markup("*T* [K]")`.
+
+**Insets.** A zoom, a schematic or a photo inside a plot needs no
+coordinates: build it with `inset_plot` (a plot with small labels, few ticks
+and a background) and add `inset(..)` to the host's series
+([`examples/inset.figs`](examples/inset.figs)):
+
+```rhai
+let zoom = inset_plot(#{ x: [40, 60], y: [0, 1], frame: "box" }, [scatter(h.T, h.a10)]);
+plot(axes, curves + [inset(zoom)])                      // emptiest free corner
+plot(axes, curves + [inset(zoom, #{ at: [62, 1.0] })])  // top-left at a data point
+inset(image("photo.png"), zoom, #{ corner: "bottom-left" })   // on any panel
+```
+
+`inset(sub)` is a descriptor like `plot_text`: the plot places it once its
+axes exist. In a corner it is `inset_size()` (0.4) of the frame width — a
+flex share, so it scales with the panel — with its height from its aspect
+(a plot's `plot_aspect()`), `inset_pad()` in from the frame. `"auto"` takes
+the corner with the least data that the legend did not take. `at` places it
+at a data point instead (log axes applied, kept inside the frame sideways);
+`width` / `height` in cm replace the fraction. The hooks: `inset_size()`,
+`inset_corner()`, `inset_pad()`, `inset_text_size()` (0.75 × base),
+`inset_max_ticks()` (4), `inset_bg()` (the plot / page background, else
+white).
 
 **Placing a plot by its axes.** By default a plot's box holds everything — the
 data area shrinks until tick labels, axis labels and title fit — which suits
