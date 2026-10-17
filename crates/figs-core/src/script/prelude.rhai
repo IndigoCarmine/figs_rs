@@ -300,6 +300,7 @@ fn style_keys() {
         "table_pad_y", "subheading_mark_bold", "subheading_mark_size", "bullet_mark_size",
         "table_font", "table_header_font", "separator_offset", "section_title_baseline",
         "poster_symbol_font", "block_gap", "block_title_gap", "bullet_pitch", "table_rule_mode",
+        "section_overflow",
     ]
 }
 
@@ -591,10 +592,11 @@ fn label(s) { fg_text(s).size(label_size()).bold() }
 // Rich text from inline markup: `*italic*`, `**bold**`, `__underline__`,
 // `~~strike~~`, `H_2O` / `ΔG_{300K}` (subscript), `Debye^†` / `x^{2}`
 // (superscript), `{#f0a030 bold|10 μM}` (style group), `\*` (literal). The
-// result is an ordinary core text node of spans (`text(markup(s))`), so every
-// text setter chains: `rich("ΔG_{300K}").size(base_size())`. The semantic
-// helpers take markup through it too: `body(markup("H_2O"))`.
-fn rich(s) { text(markup(s)) }
+// result is running text in the theme (`body(markup(s))`: `base_size()`,
+// `fg()`), an ordinary core text node of spans, so every text setter chains:
+// `rich("ΔG_{300K}").size(12)`. The other semantic helpers take markup the
+// same way: `caption(markup("H_2O"))`.
+fn rich(s) { body(markup(s)) }
 
 // `t` (a text node) with a halo: the core text outline (`stroke`) in `color`,
 // reaching `r` (cm) past the glyph edges with round joins. The outline is
@@ -1582,11 +1584,12 @@ fn spot(cx, cy, r) {
 
 // `step(node, #{ above, below, left, right })`: `node` with captions (a
 // string, spans or a node each; strings at `scheme_label_size()`, centred),
-// `scheme_label_gap()` from it; `step(node, "caption")` puts one below. The
-// node stays centred in the step, so in a scheme it sits on the axis.
+// `scheme_label_gap()` from it; `step(node, caption)` puts one below (a
+// string, spans or a node). The node stays centred in the step, so in a
+// scheme it sits on the axis.
 fn step(node) { as_node(node) }
 fn step(node, opts) {
-    if type_of(opts) == "string" || poster_is_rich(opts) { opts = #{ below: opts }; }
+    if type_of(opts) != "map" { opts = #{ below: opts }; }
     shape_opts("step", opts, ["above", "below", "left", "right"]);
     scheme_dress("step", as_node(node), opts, false)
 }
@@ -3700,6 +3703,13 @@ fn note_font() { style_get("note_font", "") }
 fn ref_size() { style_get("ref_size", base_size() * 0.835) }
 fn ref_color() { style_get("ref_color", fg()) }
 
+// What a section does when its content doesn't fit the height it gets (a
+// share of a fixed poster): "visible" (default: it runs on, with a warning
+// naming the section), "clip" or "shrink" (scaled down to fit; the core
+// `overflow`). A section with a footer clips by default, so the footer is
+// never overlapped. `section(.., #{ overflow })` sets it for one section.
+fn section_overflow() { style_get("section_overflow", "visible") }
+
 // `bullets`: mark, text size (pt), hanging indent (cm; 1.58 cm at 36 pt) and
 // gap between items (cm).
 fn bullet_mark() { style_get("bullet_mark", "•") }
@@ -4114,7 +4124,7 @@ fn section(number, title, content, opts) {
 }
 
 fn section_make(n, title, content, opts) {
-    poster_check_opts("section", opts, ["footer"]);
+    poster_check_opts("section", opts, ["footer", "overflow"]);
     let node = type_of(title) == "Node";
     if type_of(title) != "string" && !node && !poster_is_rich(title) {
         throw `section(): the title must be a string, spans or a text node (got ${type_of(title)})`;
@@ -4129,17 +4139,30 @@ fn section_make(n, title, content, opts) {
         row([section_title(label), title]).cross("cap_middle")
             .spacing(section_title_size() * 0.28 * 2.54 / 72.0)
     } else { poster_prefix(`${label} `, title) };
+    // The name overflow warnings give the section (and its parts).
+    let tag = if type_of(title) == "string" { `section "${title}"` }
+              else if label != "" { `section ${label}` } else { "section" };
+    let ov = plot_opt(opts, "overflow", section_overflow());
+    if !["visible", "clip", "shrink"].contains(ov) {
+        throw `section(): unknown overflow "${ov}" (visible, clip, shrink)`;
+    }
     let items = if type_of(content) == "array" { nodes(content) } else { [as_node(content)] };
     let footer = plot_opt(opts, "footer", ());
+    let body_ov = ov;
     if type_of(footer) != "()" {
-        // The content takes the spare height, so the footer ends the section.
+        // The content takes the spare height, so the footer ends the section;
+        // content that doesn't fit is clipped above it (or shrunk), never
+        // drawn over it — unless `overflow: "visible"` is asked for.
         let fs = if type_of(footer) == "array" && !poster_is_rich(footer) { nodes(footer) }
                  else { [scheme_text("section", footer, base_size(), "start")] };
-        items = [col(items).spacing(section_gap()).stretch().flex(1),
-                 col(fs).spacing(section_gap()).stretch()];
+        let cov = if ov == "visible" && !opts.contains("overflow") { "clip" } else { ov };
+        items = [col(items).spacing(section_gap()).stretch().flex(1).name(`${tag} (content)`).overflow(cov),
+                 col(fs).spacing(section_gap()).stretch().name(`${tag} (footer)`)];
+        body_ov = "visible";
     }
-    let body = col(items).spacing(section_gap()).stretch().pad(section_pad()).flex(1);
-    col([section_bar(s), body]).stretch()
+    let body = col(items).spacing(section_gap()).stretch().pad(section_pad()).flex(1)
+        .name(`${tag} (body)`).overflow(body_ov);
+    col([section_bar(s), body]).stretch().name(tag)
 }
 
 // `block(title, items)` / `block(title, items, opts)`: a `subheading(title)`
