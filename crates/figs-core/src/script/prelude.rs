@@ -2,8 +2,9 @@
 //! `page("a4", root)`, …) written in Rhai on top of the core builders.
 //!
 //! The core builders registered in [`super`] stay explicit (1px-level freedom);
-//! the prelude is the concise, paternalistic layer above them. Its source
-//! (`prelude.rhai`) is compiled once and *merged in front of* every user script,
+//! the prelude is the concise, paternalistic layer above them. Its source —
+//! the files of `prelude/`, concatenated in file-name order ([`PARTS`]) — is
+//! compiled once and *merged in front of* every user script,
 //! so its functions are callable without an `import`, and a user `fn` with the
 //! same name and arity replaces the prelude's — which is how the default hooks
 //! (`base_size()`, `gap()`, `label_style()`) are customised.
@@ -29,8 +30,103 @@ use rhai::{Dynamic, Engine, EvalAltResult, Map, Position, AST};
 
 use super::ScriptError;
 
-/// The framework source, embedded at build time.
-const PRELUDE_SRC: &str = include_str!("prelude.rhai");
+/// The framework source files, embedded at build time, in load order (their
+/// file-name order). Rhai hoists script functions, so the order only decides
+/// which line of the concatenated [`source`] a function lands on.
+pub(crate) const PARTS: &[(&str, &str)] = &[
+    ("00_base.rhai", include_str!("prelude/00_base.rhai")),
+    ("10_text.rhai", include_str!("prelude/10_text.rhai")),
+    ("15_layout.rhai", include_str!("prelude/15_layout.rhai")),
+    ("20_panels.rhai", include_str!("prelude/20_panels.rhai")),
+    (
+        "30_annotations.rhai",
+        include_str!("prelude/30_annotations.rhai"),
+    ),
+    ("35_shapes.rhai", include_str!("prelude/35_shapes.rhai")),
+    ("40_schemes.rhai", include_str!("prelude/40_schemes.rhai")),
+    (
+        "45_figure_kit.rhai",
+        include_str!("prelude/45_figure_kit.rhai"),
+    ),
+    ("50_links.rhai", include_str!("prelude/50_links.rhai")),
+    (
+        "60_plot_hooks.rhai",
+        include_str!("prelude/60_plot_hooks.rhai"),
+    ),
+    (
+        "61_plot_axes.rhai",
+        include_str!("prelude/61_plot_axes.rhai"),
+    ),
+    (
+        "62_plot_series.rhai",
+        include_str!("prelude/62_plot_series.rhai"),
+    ),
+    (
+        "63_plot_annotations.rhai",
+        include_str!("prelude/63_plot_annotations.rhai"),
+    ),
+    (
+        "64_plot_insets.rhai",
+        include_str!("prelude/64_plot_insets.rhai"),
+    ),
+    (
+        "65_plot_legend.rhai",
+        include_str!("prelude/65_plot_legend.rhai"),
+    ),
+    (
+        "66_plot_build.rhai",
+        include_str!("prelude/66_plot_build.rhai"),
+    ),
+    (
+        "70_poster_hooks.rhai",
+        include_str!("prelude/70_poster_hooks.rhai"),
+    ),
+    (
+        "71_poster_grid.rhai",
+        include_str!("prelude/71_poster_grid.rhai"),
+    ),
+    (
+        "72_poster_sections.rhai",
+        include_str!("prelude/72_poster_sections.rhai"),
+    ),
+    (
+        "73_poster_content.rhai",
+        include_str!("prelude/73_poster_content.rhai"),
+    ),
+    (
+        "74_poster_header.rhai",
+        include_str!("prelude/74_poster_header.rhai"),
+    ),
+    (
+        "75_poster_page.rhai",
+        include_str!("prelude/75_poster_page.rhai"),
+    ),
+];
+
+/// The concatenated prelude and the first line (1-based) of each part in it.
+struct Source {
+    text: String,
+    starts: Vec<usize>,
+}
+
+static SOURCE: OnceLock<Source> = OnceLock::new();
+
+fn combined() -> &'static Source {
+    SOURCE.get_or_init(|| {
+        let mut text = String::new();
+        let mut starts = Vec::with_capacity(PARTS.len());
+        let mut line = 1;
+        for (_, part) in PARTS {
+            starts.push(line);
+            text.push_str(part);
+            if !part.ends_with('\n') {
+                text.push('\n');
+            }
+            line = text.lines().count() + 1;
+        }
+        Source { text, starts }
+    })
+}
 
 /// Script-function name -> the arities defined under that name.
 type FnTable = HashMap<String, Vec<usize>>;
@@ -42,9 +138,21 @@ struct Prelude {
 
 static PRELUDE: OnceLock<Prelude> = OnceLock::new();
 
-/// The prelude's source text (call sites inside it refer to its lines).
-pub(super) fn source() -> &'static str {
-    PRELUDE_SRC
+/// The prelude's source text: all [`PARTS`] concatenated (call sites inside
+/// it refer to its lines; see [`location`] for the file a line belongs to).
+pub(crate) fn source() -> &'static str {
+    &combined().text
+}
+
+/// The prelude file and the line in it (both 1-based) of `line` of the
+/// concatenated [`source`]; `None` past its end.
+pub fn location(line: usize) -> Option<(&'static str, usize)> {
+    let src = combined();
+    if line == 0 || line > src.text.lines().count() {
+        return None;
+    }
+    let i = src.starts.iter().rposition(|&s| s <= line)?;
+    Some((PARTS[i].0, line - src.starts[i] + 1))
 }
 
 fn fn_table(ast: &AST) -> FnTable {
@@ -80,8 +188,8 @@ pub(super) fn compile_with_prelude(
 ) -> Result<(AST, FnOrigins), Box<EvalAltResult>> {
     let prelude = PRELUDE.get_or_init(|| {
         let ast = engine
-            .compile(PRELUDE_SRC)
-            .expect("the bundled prelude.rhai must compile");
+            .compile(source())
+            .expect("the bundled prelude must compile");
         let fns = fn_table(&ast);
         Prelude { ast, fns }
     });
@@ -369,4 +477,42 @@ fn leaf_text(leaf: &EvalAltResult, origin: Origin) -> String {
     }
     let suffix = format!(" ({pos})");
     s.strip_suffix(&suffix).map_or(s.clone(), str::to_string)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parts_list_every_prelude_file_in_order() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/script/prelude");
+        let mut files: Vec<String> = std::fs::read_dir(dir)
+            .expect("prelude dir")
+            .filter_map(|e| e.ok()?.file_name().into_string().ok())
+            .filter(|f| f.ends_with(".rhai"))
+            .collect();
+        files.sort();
+        let listed: Vec<&str> = PARTS.iter().map(|(f, _)| *f).collect();
+        assert_eq!(
+            listed, files,
+            "add new prelude files to PARTS (in file-name order)"
+        );
+    }
+
+    #[test]
+    fn locations_map_back_to_their_files() {
+        let src = source();
+        let lines: Vec<&str> = src.lines().collect();
+        for (name, text) in PARTS {
+            for (i, l) in text.lines().enumerate().step_by(37) {
+                // Find this part's lines in the combined text via `location`.
+                let hit = (1..=lines.len())
+                    .find(|&n| location(n) == Some((name, i + 1)))
+                    .expect("line is mapped");
+                assert_eq!(lines[hit - 1], l, "{name}:{}", i + 1);
+            }
+        }
+        assert_eq!(location(0), None);
+        assert_eq!(location(lines.len() + 1), None);
+    }
 }

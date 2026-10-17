@@ -1365,7 +1365,7 @@ Scripting has **two layers**:
   1px-precise: nothing is implied, every size and gap is yours.
 - **Framework** — a prelude of standard components with opinionated defaults for
   ordinary paper figures, so the common case is a few lines. It is plain Rhai
-  ([`prelude.rhai`](crates/figs-core/src/script/prelude.rhai)) built *from* the
+  ([`prelude/*.rhai`](crates/figs-core/src/script/prelude/)) built *from* the
   core builders and merged into every script automatically (no `import`).
 
 All syntactic sugar lives in the framework; the core stays strict. Every
@@ -1830,7 +1830,7 @@ hugging their item.
 
 **Errors point at your script.** An error raised inside the framework is
 reported at *your* call into it, named after the function you called — never at
-a line of `prelude.rhai`:
+a line of the prelude:
 
 ```text
 line 3, col 5: grid: ncols must be a positive integer (got 0)

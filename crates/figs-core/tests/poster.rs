@@ -1,4 +1,4 @@
-//! Poster components of the framework prelude (`prelude.rhai`, "Poster"):
+//! Poster components of the framework prelude (`prelude/7x_poster_*.rhai`):
 //! `poster` / `poster_header` / `author_line`, auto-numbered `section`s,
 //! `columns` / `rows` with dashed separators in the gutters, `frame`, `note`,
 //! `ref`, `subheading`, `bullets`, `table`, and the `"poster"` /

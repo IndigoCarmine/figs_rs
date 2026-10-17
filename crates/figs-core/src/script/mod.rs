@@ -1820,6 +1820,7 @@ mod prelude;
 mod rich;
 pub mod sites;
 
+pub use prelude::location as prelude_location;
 pub use sites::{OffsetSite, OffsetSites, SiteOrigin, SourceMap};
 
 /// Evaluate a Rhai script into a [`RawDocument`]. The script's last expression

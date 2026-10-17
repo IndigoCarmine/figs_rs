@@ -1,4 +1,4 @@
-//! The framework's figure kit (`prelude.rhai`, "Figure kit"): `labware`
+//! The framework's figure kit (`prelude/45_figure_kit.rhai`): `labware`
 //! glassware icons, `vector_note` arrows across a panel, `colorbar` scales
 //! and `cycle_arrows`. Structure is checked on the raw document, geometry on
 //! the layout (fixed text metrics, page units in pt for exact numbers).

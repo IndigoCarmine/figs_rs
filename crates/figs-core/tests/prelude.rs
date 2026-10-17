@@ -1,4 +1,4 @@
-//! Tests for the framework prelude (`prelude.rhai`): the concise, opinionated
+//! Tests for the framework prelude (`script/prelude/*.rhai`): the concise, opinionated
 //! layer over the explicit core builders. Covers semantic text and its base-size
 //! hook, bare-string sugar, `vbox`/`hbox`, `grid`, panel labels, page presets,
 //! and that core setters still chain on everything the framework returns.
@@ -658,7 +658,7 @@ fn fail(src: &str) -> (Option<usize>, Option<usize>, String) {
 
 #[test]
 fn prelude_error_reports_user_call_site() {
-    // `grid` throws deep inside prelude.rhai; the error points at the user's call.
+    // `grid` throws deep inside the prelude; the error points at the user's call.
     let (line, col, msg) = fail("let xs = [rect()];\npage(\"single\",\n    grid(0, xs))");
     assert_eq!((line, col), (Some(3), Some(5)), "{msg}");
     assert_eq!(
