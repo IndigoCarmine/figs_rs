@@ -1014,6 +1014,77 @@ pub fn image_size(path: &Path) -> Option<(u32, u32)> {
     image::image_dimensions(path).ok()
 }
 
+/// The pixel density (pixels per inch, the horizontal one) an image file
+/// records: a PNG's `pHYs` chunk in pixels per metre, or a JPEG's JFIF
+/// density in dots per inch / cm. `None` when the file records none (a
+/// `pHYs` / JFIF without a unit only gives an aspect), or can't be read.
+pub fn image_density(path: &Path) -> Option<f32> {
+    use std::io::Read;
+    let mut head = Vec::with_capacity(64 * 1024);
+    std::fs::File::open(path)
+        .ok()?
+        .take(64 * 1024)
+        .read_to_end(&mut head)
+        .ok()?;
+    density_of(&head)
+}
+
+/// [`image_density`] from the first bytes of a file.
+pub(crate) fn density_of(b: &[u8]) -> Option<f32> {
+    let be32 =
+        |i: usize| -> Option<u32> { Some(u32::from_be_bytes(b.get(i..i + 4)?.try_into().ok()?)) };
+    let be16 =
+        |i: usize| -> Option<u16> { Some(u16::from_be_bytes(b.get(i..i + 2)?.try_into().ok()?)) };
+    let ok = |d: f32| (d.is_finite() && d > 0.0).then_some(d);
+    if b.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+        // Chunks: length, type, data, crc — pHYs comes before IDAT.
+        let mut i = 8;
+        while i + 8 <= b.len() {
+            let len = be32(i)? as usize;
+            let kind = b.get(i + 4..i + 8)?;
+            if kind == b"pHYs" {
+                let x = be32(i + 8)?;
+                let unit = *b.get(i + 16)?;
+                return if unit == 1 {
+                    ok(x as f32 * 0.0254)
+                } else {
+                    None
+                };
+            }
+            if kind == b"IDAT" || kind == b"IEND" {
+                return None;
+            }
+            i += 12 + len;
+        }
+        return None;
+    }
+    if b.starts_with(&[0xFF, 0xD8]) {
+        // Segments up to the first APP0 "JFIF": units, x density.
+        let mut i = 2;
+        while i + 4 <= b.len() {
+            if b[i] != 0xFF {
+                return None;
+            }
+            let marker = b[i + 1];
+            let len = be16(i + 2)? as usize;
+            if marker == 0xE0 && b.get(i + 4..i + 9) == Some(b"JFIF\0") {
+                let unit = *b.get(i + 11)?;
+                let x = be16(i + 12)? as f32;
+                return match unit {
+                    1 => ok(x),
+                    2 => ok(x * 2.54),
+                    _ => None,
+                };
+            }
+            if marker == 0xDA {
+                return None; // image data: no JFIF header before it
+            }
+            i += 2 + len;
+        }
+    }
+    None
+}
+
 /// Render a computed layout to PNG bytes.
 ///
 /// With [`PageGeom::min_stroke_px`] set, every shape stroke thinner than that

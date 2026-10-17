@@ -430,6 +430,89 @@ impl<'de> Deserialize<'de> for AxisMark {
     }
 }
 
+/// Whether a node takes room across its parent column / row (see
+/// `RawNode::overhang`): `Off` (`false`, the default) it does; `On`
+/// (`true`) it is laid out at its natural cross size and overhangs the
+/// parent's edges; `Auto` (`"auto"`) it overhangs only into free room —
+/// the gaps beside its parent in a row up to whatever its neighbours draw
+/// at its height — and wraps to that otherwise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Overhang {
+    #[default]
+    Off,
+    On,
+    Auto,
+}
+
+impl Overhang {
+    pub fn is_off(&self) -> bool {
+        *self == Overhang::Off
+    }
+}
+
+impl Serialize for Overhang {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Overhang::Off => s.serialize_bool(false),
+            Overhang::On => s.serialize_bool(true),
+            Overhang::Auto => s.serialize_str("auto"),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Overhang {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Flag(bool),
+            Mode(String),
+        }
+        match Raw::deserialize(d)? {
+            Raw::Flag(b) => Ok(if b { Overhang::On } else { Overhang::Off }),
+            Raw::Mode(m) if m == "auto" => Ok(Overhang::Auto),
+            Raw::Mode(m) => Err(serde::de::Error::custom(format!(
+                "overhang = \"{m}\": true, false or \"auto\""
+            ))),
+        }
+    }
+}
+
+/// An image's pixel density: a number (pixels per inch) or `"file"` — the
+/// density recorded in the file (PNG `pHYs`, JPEG JFIF), when it has one.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Dpi {
+    Value(f32),
+    File,
+}
+
+impl Serialize for Dpi {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Dpi::Value(v) => s.serialize_f32(*v),
+            Dpi::File => s.serialize_str("file"),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Dpi {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Num(f32),
+            Mode(String),
+        }
+        match Raw::deserialize(d)? {
+            Raw::Num(v) => Ok(Dpi::Value(v)),
+            Raw::Mode(m) if m == "file" => Ok(Dpi::File),
+            Raw::Mode(m) => Err(serde::de::Error::custom(format!(
+                "dpi = \"{m}\": pixels per inch or \"file\""
+            ))),
+        }
+    }
+}
+
 /// What a `column` / `row` does when its children don't fit its box along
 /// the main axis. Every overflow is reported (see
 /// [`crate::layout::OverflowReport`]); this says what happens on the page.

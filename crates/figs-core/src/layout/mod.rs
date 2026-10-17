@@ -182,6 +182,12 @@ pub trait LeafMeasure {
     fn image_pixels(&self, _image: &ImageProps) -> Option<(u32, u32)> {
         None
     }
+    /// The pixel density (pixels per inch) the image file records (PNG
+    /// `pHYs`, JPEG JFIF), for `dpi = "file"`. `None` (the default): the
+    /// file records none, or the measurer can't read files.
+    fn image_density(&self, _image: &ImageProps) -> Option<f32> {
+        None
+    }
 }
 
 /// A measurer that reports zero size for all leaf content. Useful for
@@ -212,6 +218,15 @@ pub(crate) struct Ctx<'a, M: LeafMeasure> {
     /// there the row decides every item's size, so natural sizes (images
     /// with a `dpi`) yield to it (see `measure::keeps_natural`).
     pub scaling: std::cell::Cell<u32>,
+    /// Whether the current measure sizes a node to its content across: a
+    /// row measuring a child without `flex` (an "auto" cell) hands it the
+    /// room it has only as a limit, so a row inside doesn't take all of it
+    /// (Flutter's `MainAxisSize.min` there). A tight width clears it.
+    pub content_w: std::cell::Cell<bool>,
+    /// `overhang = "auto"` nodes: the room (left, right; points) their
+    /// row found free beside their parent (see
+    /// `measure::settle_auto_overhangs`).
+    pub overhang_room: std::cell::RefCell<std::collections::HashMap<usize, (f32, f32)>>,
 }
 
 impl<M: LeafMeasure> Ctx<'_, M> {
@@ -224,6 +239,14 @@ impl<M: LeafMeasure> Ctx<'_, M> {
         self.scaling.set(self.scaling.get() + 1);
         let r = f();
         self.scaling.set(self.scaling.get() - 1);
+        r
+    }
+
+    /// Run `f` with [`Ctx::content_w`] set to `on`, restoring it after.
+    pub fn content_width<R>(&self, on: bool, f: impl FnOnce() -> R) -> R {
+        let was = self.content_w.replace(on);
+        let r = f();
+        self.content_w.set(was);
         r
     }
 
@@ -323,6 +346,8 @@ pub fn layout<M: LeafMeasure>(doc: &Document, measurer: &M) -> ComputedLayout {
         parents,
         overflows: Default::default(),
         scaling: Default::default(),
+        content_w: Default::default(),
+        overhang_room: Default::default(),
     };
     let height_pt = match doc.page.height_pt {
         Some(h) => h,

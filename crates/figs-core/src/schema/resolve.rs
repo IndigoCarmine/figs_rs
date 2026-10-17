@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 
 use crate::geom::{
-    AnchorValue, ArcSweep, ArrowHead, Axis, AxisMark, Color, CrossAxisAlign, Edges, Effects,
+    AnchorValue, ArcSweep, ArrowHead, Axis, AxisMark, Color, CrossAxisAlign, Dpi, Edges, Effects,
     HeadStyle, HeadWidth, ImageFit, LineJoin, MainAxisAlign, Overflow, Paint, PathSegment, Point,
     Shadow, StrokeAlign, StrokeStyle, TextAlign, ViewBox,
 };
@@ -179,8 +179,18 @@ pub struct Common {
     /// [`AxisMark`]).
     pub axis: Option<AxisMark>,
     /// Takes no room across its parent column / row (see
-    /// `RawNode::overhang`).
+    /// `RawNode::overhang`; `true` for `"auto"` too).
     pub overhang: bool,
+    /// `overhang = "auto"`: overhangs only into the free room its row finds
+    /// beside it (see `layout::measure::settle_auto_overhangs`), wrapping
+    /// to it otherwise.
+    pub overhang_auto: bool,
+    /// Its own cross-axis alignment in a column / row (see
+    /// `RawNode::align_self`): start, center, end or stretch.
+    pub align_self: Option<CrossAxisAlign>,
+    /// Smallest border-box width / height (points).
+    pub min_width: Option<f32>,
+    pub min_height: Option<f32>,
 }
 
 impl Common {
@@ -293,11 +303,14 @@ pub enum Attach {
     Frac([f32; 2]),
     /// Corner 1 or 2 (top or left first) of the side facing the other end.
     Facing(u8),
+    /// The end of bridge 1 or 2 of the convex hull around both ends'
+    /// outlines (the outer tangents): right for ends placed diagonally.
+    Hull(u8),
 }
 
 impl Attach {
     /// The names `parse` accepts.
-    pub const NAMES: &'static str = "auto, facing-1, facing-2, center, left, right, top, bottom, top-left, top-right, bottom-left, bottom-right, or [fx, fy]";
+    pub const NAMES: &'static str = "auto, facing-1, facing-2, hull-1, hull-2, center, left, right, top, bottom, top-left, top-right, bottom-left, bottom-right, or [fx, fy]";
 
     /// A named point: `auto`, `center`, a side or a corner (`top-left`;
     /// `_` works as well as `-`).
@@ -307,6 +320,8 @@ impl Attach {
             "auto" => Some(Attach::Auto),
             "facing-1" => Some(Attach::Facing(1)),
             "facing-2" => Some(Attach::Facing(2)),
+            "hull-1" => Some(Attach::Hull(1)),
+            "hull-2" => Some(Attach::Hull(2)),
             "center" | "centre" | "middle" => f(0.5, 0.5),
             "left" => f(0.0, 0.5),
             "right" => f(1.0, 0.5),
@@ -376,7 +391,11 @@ pub struct ImageProps {
     pub src: String,
     /// Pixel density giving the image a natural size (pixels / dpi inches;
     /// its own `dpi`, else `[page] image_dpi`); `None`: no natural size.
+    /// With `dpi_file` it is the fallback for a file that records none.
     pub dpi: Option<f32>,
+    /// `dpi = "file"`: the density recorded in the file comes first (see
+    /// [`crate::layout::LeafMeasure::image_density`]).
+    pub dpi_file: bool,
     pub fit: ImageFit,
     /// Smooth (bilinear) scaling; `false` = nearest neighbour (blocky pixels).
     pub smooth: bool,
@@ -624,18 +643,30 @@ pub fn resolve(raw: RawDocument) -> Result<Document, ResolveError> {
     }
 
     // Images without a `dpi` of their own take the page's.
+    // `"file"` reads the density from the file, falling back to the
+    // page's number (or none).
     match raw.page.image_dpi {
-        Some(d) if !(d.is_finite() && d >= 0.0) => {
+        Some(Dpi::Value(d)) if !(d.is_finite() && d >= 0.0) => {
             return Err(ResolveError::InvalidField {
                 node: "page".to_string(),
                 field: "image_dpi",
-                reason: "pixels per inch: a positive number (0 for none)".into(),
+                reason: "pixels per inch: a positive number (0 for none), or \"file\"".into(),
             });
         }
         page_dpi => {
+            let page_num = match page_dpi {
+                Some(Dpi::Value(d)) => Some(d),
+                _ => None,
+            };
             for n in &mut nodes {
                 if let NodeType::Image(img) = &mut n.kind {
-                    img.dpi = img.dpi.or(page_dpi).filter(|d| *d > 0.0);
+                    if img.dpi.is_none() && !img.dpi_file {
+                        img.dpi_file = page_dpi == Some(Dpi::File);
+                        img.dpi = page_num;
+                    } else if img.dpi_file {
+                        img.dpi = page_num;
+                    }
+                    img.dpi = img.dpi.filter(|d| *d > 0.0);
                 }
             }
         }
@@ -907,8 +938,36 @@ fn convert_node(
         anchor: raw.anchor,
         rotate: raw.rotate.unwrap_or(0.0),
         axis: raw.axis,
-        overhang: raw.overhang,
+        overhang: !raw.overhang.is_off(),
+        overhang_auto: raw.overhang == crate::geom::Overhang::Auto,
+        align_self: raw.align_self,
+        min_width: raw.min_width.map(|w| w * factor),
+        min_height: raw.min_height.map(|h| h * factor),
     };
+    if let Some(a) = raw.align_self {
+        if !matches!(
+            a,
+            CrossAxisAlign::Start
+                | CrossAxisAlign::Center
+                | CrossAxisAlign::End
+                | CrossAxisAlign::Stretch
+        ) {
+            return Err(ResolveError::InvalidField {
+                node: id.to_string(),
+                field: "align_self",
+                reason: "start, center, end or stretch".into(),
+            });
+        }
+    }
+    for (field, v) in [("min_width", raw.min_width), ("min_height", raw.min_height)] {
+        if v.is_some_and(|v| !(v.is_finite() && v >= 0.0)) {
+            return Err(ResolveError::InvalidField {
+                node: id.to_string(),
+                field,
+                reason: "a length >= 0".into(),
+            });
+        }
+    }
     if raw.dpi.is_some() && raw.kind != NodeKind::Image {
         return Err(ResolveError::InvalidField {
             node: id.to_string(),
@@ -916,7 +975,10 @@ fn convert_node(
             reason: "only an image has a pixel density".into(),
         });
     }
-    if raw.dpi.is_some_and(|d| !(d.is_finite() && d >= 0.0)) {
+    if raw
+        .dpi
+        .is_some_and(|d| matches!(d, Dpi::Value(d) if !(d.is_finite() && d >= 0.0)))
+    {
         return Err(ResolveError::InvalidField {
             node: id.to_string(),
             field: "dpi",
@@ -1090,7 +1152,11 @@ fn convert_node(
             NodeType::Image(ImageProps {
                 src,
                 // `[page] image_dpi` is filled in by `resolve`.
-                dpi: raw.dpi,
+                dpi: match raw.dpi {
+                    Some(Dpi::Value(d)) => Some(d),
+                    _ => None,
+                },
+                dpi_file: raw.dpi == Some(Dpi::File),
                 fit: raw.fit.unwrap_or_default(),
                 smooth: raw.smooth.unwrap_or(true),
             })

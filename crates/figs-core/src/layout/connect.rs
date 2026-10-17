@@ -159,7 +159,7 @@ fn attach_end(
 ) -> (Point, Option<Point>, Option<[f32; 2]>) {
     match at {
         Attach::Frac(f) => (me.point(f), me.normal(f), None),
-        Attach::Auto | Attach::Facing(_) => {
+        Attach::Auto | Attach::Facing(_) | Attach::Hull(_) => {
             // Chosen on the page box, so the point lies on it.
             let r = me.bounds();
             let side = facing_side(r, other);
@@ -190,6 +190,16 @@ fn attach_end(
 
 /// Where both ends of a connector lie and their outward normals.
 fn endpoints(c: &ConnectorProps, a: End, b: End) -> [(Point, Option<Point>); 2] {
+    // Hull ends: the ends of one outer tangent of both outlines.
+    if let Some(k) = [c.from_at, c.to_at].iter().find_map(|at| match at {
+        Attach::Hull(k) => Some(*k),
+        _ => None,
+    }) {
+        if let Some(h) = Hull::of(&a, c.from_shape, &b, EndShape::Box) {
+            let (p, q) = h.bridge(k);
+            return [(p, None), (q, None)];
+        }
+    }
     let (ba, bb) = (a.bounds(), b.bounds());
     // An end that is not chosen by side faces the other end's point.
     let toward = |at: Attach, e: &End, r: Rect| match at {
@@ -340,6 +350,13 @@ fn route(c: &ConnectorProps, a: End, b: End) -> Vec<PathSegment> {
 fn area(c: &ConnectorProps, a: End, b: End) -> Option<Vec<PathSegment>> {
     match c.route {
         ConnectorRoute::Cone => {
+            let hull = matches!(c.from_at, Attach::Hull(_)) || matches!(c.to_at, Attach::Hull(_));
+            if let Some(h) = hull
+                .then(|| Hull::of(&a, c.from_shape, &b, EndShape::Box))
+                .flatten()
+            {
+                return Some(h.cone());
+            }
             let (ba, bb) = (a.bounds(), b.bounds());
             let at = |k, e: &End, other, shape| attach_end(Attach::Facing(k), e, other, shape).0;
             let p1 = at(1, &a, bb, c.from_shape);
@@ -382,6 +399,156 @@ fn area(c: &ConnectorProps, a: End, b: End) -> Option<Vec<PathSegment>> {
         }),
         _ => None,
     }
+}
+
+/// The convex hull around two ends' outlines (their boxes' corners, or
+/// points round an ellipse end), with its two **bridges** — the hull edges
+/// from one end to the other, the outer tangents of the pair.
+struct Hull {
+    /// Each end's outline, in hull order.
+    a: Vec<Point>,
+    b: Vec<Point>,
+    /// Bridge 1 runs from `a[i]` to `b[j]`, bridge 2 from `b[k]` to `a[l]`.
+    i: usize,
+    j: usize,
+    k: usize,
+    l: usize,
+}
+
+impl Hull {
+    /// The hull of ends `a` and `b`; `None` when one outline holds the
+    /// other (no bridges).
+    fn of(a: &End, sa: EndShape, b: &End, sb: EndShape) -> Option<Hull> {
+        let pa = convex(outline_points(a, sa));
+        let pb = convex(outline_points(b, sb));
+        if pa.len() < 2 || pb.len() < 2 {
+            return None;
+        }
+        let tagged: Vec<(Point, bool)> = pa
+            .iter()
+            .map(|&p| (p, true))
+            .chain(pb.iter().map(|&p| (p, false)))
+            .collect();
+        let hull = convex_tagged(tagged);
+        let n = hull.len();
+        let (mut ab, mut ba) = (None, None);
+        for m in 0..n {
+            let (p, from_a) = hull[m];
+            let (q, to_a) = hull[(m + 1) % n];
+            if from_a && !to_a {
+                ab = Some((p, q));
+            } else if !from_a && to_a {
+                ba = Some((p, q));
+            }
+        }
+        let ((p1, q1), (q2, p2)) = (ab?, ba?);
+        let find = |v: &[Point], p: Point| v.iter().position(|&x| x == p);
+        Some(Hull {
+            i: find(&pa, p1)?,
+            j: find(&pb, q1)?,
+            k: find(&pb, q2)?,
+            l: find(&pa, p2)?,
+            a: pa,
+            b: pb,
+        })
+    }
+
+    /// Bridge `k` (1 or 2) as (point on `a`, point on `b`).
+    fn bridge(&self, k: u8) -> (Point, Point) {
+        if k == 2 {
+            (self.a[self.l], self.b[self.k])
+        } else {
+            (self.a[self.i], self.b[self.j])
+        }
+    }
+
+    /// The area between the two outlines: bridge 1, `b`'s near side (the
+    /// part off the hull) back to bridge 2, and `a`'s near side.
+    fn cone(&self) -> Vec<PathSegment> {
+        let back = |v: &[Point], from: usize, to: usize| {
+            let n = v.len();
+            let mut out = vec![v[from]];
+            let mut m = from;
+            while m != to {
+                m = (m + n - 1) % n;
+                out.push(v[m]);
+            }
+            out
+        };
+        let mut pts = back(&self.a, self.l, self.i);
+        pts.extend(back(&self.b, self.j, self.k));
+        let mut segs = vec![PathSegment::MoveTo(pts[0])];
+        segs.extend(pts[1..].iter().map(|&p| PathSegment::LineTo(p)));
+        segs.push(PathSegment::Close);
+        segs
+    }
+}
+
+/// An end's outline in page space: its box's corners, or 32 points round
+/// its inscribed ellipse.
+fn outline_points(e: &End, shape: EndShape) -> Vec<Point> {
+    match shape {
+        EndShape::Box => [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+            .map(|f| e.point(f))
+            .to_vec(),
+        EndShape::Ellipse => (0..32)
+            .map(|m| {
+                let t = m as f32 / 32.0 * std::f32::consts::TAU;
+                e.point([0.5 + 0.5 * t.cos(), 0.5 + 0.5 * t.sin()])
+            })
+            .collect(),
+    }
+}
+
+/// The convex hull of `pts` (monotone chain), without repeats.
+fn convex(pts: Vec<Point>) -> Vec<Point> {
+    convex_tagged(pts.into_iter().map(|p| (p, false)).collect())
+        .into_iter()
+        .map(|(p, _)| p)
+        .collect()
+}
+
+/// The convex hull of tagged points (monotone chain; collinear points
+/// dropped), in one fixed turning order.
+fn convex_tagged(mut pts: Vec<(Point, bool)>) -> Vec<(Point, bool)> {
+    pts.sort_by(|a, b| {
+        a.0.x
+            .partial_cmp(&b.0.x)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(
+                a.0.y
+                    .partial_cmp(&b.0.y)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+    });
+    pts.dedup_by(|a, b| (a.0.x - b.0.x).abs() < 1e-4 && (a.0.y - b.0.y).abs() < 1e-4);
+    if pts.len() < 3 {
+        return pts;
+    }
+    let cross =
+        |o: Point, a: Point, b: Point| (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+    let mut lower: Vec<(Point, bool)> = Vec::new();
+    for &p in &pts {
+        while lower.len() >= 2
+            && cross(lower[lower.len() - 2].0, lower[lower.len() - 1].0, p.0) <= 1e-6
+        {
+            lower.pop();
+        }
+        lower.push(p);
+    }
+    let mut upper: Vec<(Point, bool)> = Vec::new();
+    for &p in pts.iter().rev() {
+        while upper.len() >= 2
+            && cross(upper[upper.len() - 2].0, upper[upper.len() - 1].0, p.0) <= 1e-6
+        {
+            upper.pop();
+        }
+        upper.push(p);
+    }
+    lower.pop();
+    upper.pop();
+    lower.extend(upper);
+    lower
 }
 
 /// Drop repeated points and middle points of straight runs.

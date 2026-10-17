@@ -42,12 +42,12 @@ fn answer(src: &str) -> String {
 #[test]
 fn image_dpi_style_sets_the_page_default() {
     let d = raw(r#"style(#{ image_dpi: 150 }); page("double", col([image("a.png")]))"#);
-    assert_eq!(d.page.image_dpi, Some(150.0));
+    assert_eq!(d.page.image_dpi, Some(figs_core::geom::Dpi::Value(150.0)));
     let d = raw(r#"page("double", col([image("a.png")]))"#);
     assert_eq!(d.page.image_dpi, None);
     // Posters go through page(preset, ..) too.
     let d = raw(r#"style(#{ image_dpi: 300 }); poster("a4", (), [image("a.png")])"#);
-    assert_eq!(d.page.image_dpi, Some(300.0));
+    assert_eq!(d.page.image_dpi, Some(figs_core::geom::Dpi::Value(300.0)));
 }
 
 #[test]
@@ -56,28 +56,28 @@ fn captions_overhang_on_request() {
     let d = raw(
         r#"page(10, 10, step(rect().width(1).height(1), "a long caption", #{ overhang: true }))"#,
     );
-    assert!(text(&d, "a long caption").overhang);
+    assert!(!text(&d, "a long caption").overhang.is_off());
     let d = raw(r#"page(10, 10, step(rect().width(1).height(1), "plain"))"#);
-    assert!(!text(&d, "plain").overhang);
+    assert!(text(&d, "plain").overhang.is_off());
     // The hook turns it on everywhere; captioned takes the option too.
     let d = raw(r#"style(#{ caption_overhang: true });
         page(10, 10, col([step(rect(), #{ above: "up", below: "down" }), captioned(rect(), "cap")]))"#);
     for s in ["up", "down", "cap"] {
-        assert!(text(&d, s).overhang, "{s}");
+        assert!(!text(&d, s).overhang.is_off(), "{s}");
     }
     let d = raw(r#"page(10, 10, captioned(rect(), "cap", #{ overhang: true }))"#);
-    assert!(text(&d, "cap").overhang);
+    assert!(!text(&d, "cap").overhang.is_off());
     // fill_row rebuilds captioned / step / panels items either way.
     let d = raw(
         r#"page(10, 10, fill_row([captioned(image("a.png"), "one"), step(image("b.png"), "two"),
             image("c.png")] + panels([image("d.png")], ["three"]), #{ captions: "overhang" }))"#,
     );
     for s in ["one", "two", "three"] {
-        assert!(text(&d, s).overhang, "{s}");
+        assert!(!text(&d, s).overhang.is_off(), "{s}");
     }
     let d = raw(r#"style(#{ caption_overhang: true });
         page(10, 10, fill_row([captioned(image("a.png"), "one")], #{ captions: "wrap" }))"#);
-    assert!(!text(&d, "one").overhang);
+    assert!(text(&d, "one").overhang.is_off());
     let e = fail(r#"page(10, 10, fill_row([image("a.png")], #{ captions: "float" }))"#);
     assert!(
         e.contains("unknown captions \"float\" (overhang, wrap)"),
@@ -270,5 +270,5 @@ fn the_image_scale_example_evaluates() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
     let src = std::fs::read_to_string(dir.join("image_scale.figs")).unwrap();
     let d = figs_core::eval_script_in(&src, Some(&dir)).unwrap_or_else(|e| panic!("{e}"));
-    assert_eq!(d.page.image_dpi, Some(300.0));
+    assert_eq!(d.page.image_dpi, Some(figs_core::geom::Dpi::Value(300.0)));
 }

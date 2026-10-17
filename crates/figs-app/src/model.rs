@@ -85,7 +85,10 @@ fn blank(kind: NodeKind) -> RawNode {
         band: None,
         from_shape: None,
         dpi: None,
-        overhang: false,
+        overhang: Default::default(),
+        align_self: None,
+        min_width: None,
+        min_height: None,
     }
 }
 

@@ -196,6 +196,24 @@ fn parse_cross_axis(s: &str) -> Option<CrossAxisAlign> {
         _ => return None,
     })
 }
+fn parse_self_align(s: &str) -> Option<CrossAxisAlign> {
+    Some(match s {
+        "start" => CrossAxisAlign::Start,
+        "center" => CrossAxisAlign::Center,
+        "end" => CrossAxisAlign::End,
+        "stretch" => CrossAxisAlign::Stretch,
+        _ => return None,
+    })
+}
+/// A pixel density: a number >= 0 or `"file"`.
+fn dyn_to_dpi(v: &Dynamic) -> Option<crate::geom::Dpi> {
+    if v.clone().into_string().is_ok_and(|s| s == "file") {
+        return Some(crate::geom::Dpi::File);
+    }
+    dyn_to_f32(v)
+        .filter(|x| x.is_finite() && *x >= 0.0)
+        .map(crate::geom::Dpi::Value)
+}
 fn parse_text_align(s: &str) -> Option<TextAlign> {
     Some(match s {
         "left" => TextAlign::Left,
@@ -338,7 +356,10 @@ fn blank_node(kind: NodeKind) -> RawNode {
         band: None,
         from_shape: None,
         dpi: None,
-        overhang: false,
+        overhang: Default::default(),
+        align_self: None,
+        min_width: None,
+        min_height: None,
     }
 }
 
@@ -1460,17 +1481,56 @@ fn build_engine(base_dir: Option<&Path>) -> Engine {
     });
     // Take no room across the parent column / row (overhang it, centred).
     engine.register_fn("overhang", |n: ScriptNode| {
-        set_node(n, |r| r.overhang = true)
+        set_node(n, |r| r.overhang = crate::geom::Overhang::On)
+    });
+    // `.overhang(true | false | "auto")`: "auto" overhangs only into free
+    // room beside its parent in a row, wrapping otherwise.
+    engine.register_fn("overhang", |n: ScriptNode, v: Dynamic| -> NodeResult {
+        use crate::geom::Overhang;
+        let o = if let Ok(b) = v.as_bool() {
+            if b {
+                Overhang::On
+            } else {
+                Overhang::Off
+            }
+        } else if v.clone().into_string().is_ok_and(|s| s == "auto") {
+            Overhang::Auto
+        } else {
+            return Err(err("`overhang` expects true, false or \"auto\""));
+        };
+        Ok(set_node(n, |r| r.overhang = o))
     });
     // Image: natural size = pixels / dpi inches (0: none, over the page's).
     engine.register_fn("dpi", |n: ScriptNode, v: Dynamic| -> NodeResult {
         if n.node.kind != NodeKind::Image {
             return Err(err("`dpi` applies to an image (or a page)"));
         }
+        let x = dyn_to_dpi(&v).ok_or_else(|| {
+            err("`dpi` expects pixels per inch (0 for no natural size) or \"file\"")
+        })?;
+        Ok(set_node(n, |r| r.dpi = Some(x)))
+    });
+    // At least this wide / tall (a flex share or wrap-content size grows).
+    engine.register_fn("min_width", |n: ScriptNode, v: Dynamic| -> NodeResult {
         let x = dyn_to_f32(&v)
             .filter(|x| x.is_finite() && *x >= 0.0)
-            .ok_or_else(|| err("`dpi` expects pixels per inch (0 for no natural size)"))?;
-        Ok(set_node(n, |r| r.dpi = Some(x)))
+            .ok_or_else(|| err("`min_width` expects a length >= 0"))?;
+        Ok(set_node(n, |r| r.min_width = Some(x)))
+    });
+    engine.register_fn("min_height", |n: ScriptNode, v: Dynamic| -> NodeResult {
+        let x = dyn_to_f32(&v)
+            .filter(|x| x.is_finite() && *x >= 0.0)
+            .ok_or_else(|| err("`min_height` expects a length >= 0"))?;
+        Ok(set_node(n, |r| r.min_height = Some(x)))
+    });
+    // Its own cross alignment in a column / row (CSS `align-self`).
+    engine.register_fn("align_self", |n: ScriptNode, s: &str| -> NodeResult {
+        let v = parse_self_align(s).ok_or_else(|| {
+            err(format!(
+                "`align_self`: unknown value `{s}` (start, center, end, stretch)"
+            ))
+        })?;
+        Ok(set_node(n, |r| r.align_self = Some(v)))
     });
     // Containers: clip the children to the (rounded) box inside the border.
     engine.register_fn("clip", |n: ScriptNode| -> NodeResult {
@@ -1484,8 +1544,26 @@ fn build_engine(base_dir: Option<&Path>) -> Engine {
     });
 
     // Enum chainable setters.
-    reg_enum(&mut engine, "align", parse_text_align, |r, v| {
-        r.align = Some(v)
+    // `align`: a text's line alignment (left, center, right, justify); on
+    // any other node — and "start" / "end" / "stretch" on a text — the
+    // node's own cross alignment in its column / row (`align_self`).
+    engine.register_fn("align", |n: ScriptNode, s: &str| -> NodeResult {
+        if n.node.kind == NodeKind::Text {
+            if let Some(v) = parse_text_align(s) {
+                return Ok(set_node(n, move |r| r.align = Some(v)));
+            }
+        }
+        let v = match s {
+            "left" => Some(CrossAxisAlign::Start),
+            "right" => Some(CrossAxisAlign::End),
+            _ => parse_self_align(s),
+        }
+        .ok_or_else(|| {
+            err(format!(
+                "`align`: invalid value `{s}` (text: left, center, right, justify;                  any node: start, center, end, stretch)"
+            ))
+        })?;
+        Ok(set_node(n, move |r| r.align_self = Some(v)))
     });
     reg_enum(&mut engine, "main", parse_main_axis, |r, v| {
         r.main_axis_alignment = Some(v)
@@ -1710,9 +1788,9 @@ fn build_engine(base_dir: Option<&Path>) -> Engine {
     engine.register_fn(
         "image_dpi",
         |d: ScriptDoc, v: Dynamic| -> Result<ScriptDoc, Box<EvalAltResult>> {
-            let x = dyn_to_f32(&v)
-                .filter(|x| x.is_finite() && *x >= 0.0)
-                .ok_or_else(|| err("`image_dpi` expects pixels per inch (0 for none)"))?;
+            let x = dyn_to_dpi(&v).ok_or_else(|| {
+                err("`image_dpi` expects pixels per inch (0 for none) or \"file\"")
+            })?;
             Ok(set_doc(d, |pg| pg.image_dpi = Some(x)))
         },
     );

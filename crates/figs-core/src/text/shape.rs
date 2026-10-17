@@ -465,6 +465,9 @@ fn apply_tracking(line: &mut ShapeLine, runs: &[StyledRun], default_size: f32) {
     }
 }
 
+/// Rounding slack (points) on the width a text wraps at.
+const TEXT_WIDTH_SLACK: f32 = 0.01;
+
 /// Shape `text` under `max_width` (points). A non-finite or non-positive width
 /// means unconstrained (no wrapping), as does `text.wrap == false`.
 ///
@@ -488,8 +491,11 @@ pub(crate) fn shape(
     // A line's width leaves its last character's trailing tracking out (see
     // `ShapedLine::width`), but cosmic-text breaks on the advance *with* it:
     // allow the largest trailing tracking past the box, so a text shaped at
-    // its own natural width (the layout's measure) keeps its lines.
-    let trailing_room = runs.iter().map(|r| r.style.tracking).fold(0.0f32, f32::max);
+    // its own natural width (the layout's measure) keeps its lines — and a
+    // hundredth of a point, so a width that went through a sum and a split
+    // (a flex share equal to the text's own width) doesn't break a line.
+    let trailing_room =
+        runs.iter().map(|r| r.style.tracking).fold(0.0f32, f32::max) + TEXT_WIDTH_SLACK;
     let width =
         (text.wrap && text.fit_width.is_none() && bounded).then_some(max_width + trailing_room);
     let node_line = (text.font_size * text.line_height).max(1.0);

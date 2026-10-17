@@ -61,7 +61,9 @@ pub mod svg;
 
 #[cfg(feature = "pdf")]
 pub use pdf::{render_pdf, PdfError, PdfRenderer};
-pub use png::{image_size, render_png, render_rgba, PngError, RenderedImage, TinySkiaRenderer};
+pub use png::{
+    image_density, image_size, render_png, render_rgba, PngError, RenderedImage, TinySkiaRenderer,
+};
 pub use svg::{render_svg, SvgRenderer};
 
 use std::path::Path;

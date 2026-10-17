@@ -10,8 +10,9 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::geom::{
-    AnchorValue, ArcSweep, ArrowHead, AxisMark, Color, CrossAxisAlign, Edges, HeadStyle, HeadWidth,
-    ImageFit, LineCap, LineJoin, MainAxisAlign, Overflow, Paint, StrokeAlign, TextAlign,
+    AnchorValue, ArcSweep, ArrowHead, AxisMark, Color, CrossAxisAlign, Dpi, Edges, HeadStyle,
+    HeadWidth, ImageFit, LineCap, LineJoin, MainAxisAlign, Overflow, Overhang, Paint, StrokeAlign,
+    TextAlign,
 };
 use crate::units::Unit;
 
@@ -161,9 +162,10 @@ pub struct RawPage {
     pub min_stroke_px: Option<f32>,
     /// Default pixel density of images that set no `dpi` of their own: an
     /// image's natural size is its pixels / dpi inches (see
-    /// [`RawNode::dpi`]). Unset: images have no natural size.
+    /// [`RawNode::dpi`]). Unset: images have no natural size. `"file"`:
+    /// the density each file records (PNG `pHYs`, JPEG JFIF), if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub image_dpi: Option<f32>,
+    pub image_dpi: Option<Dpi>,
 }
 
 /// The discriminant of a node, from its `type` field.
@@ -334,9 +336,23 @@ pub struct RawNode {
     /// its natural cross size (a caption in one line) and aligned as the
     /// parent's cross alignment says — centred unless `start` / `end` —
     /// overhanging the parent's box instead of widening it (or wrapping to
-    /// it).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub overhang: bool,
+    /// it). `"auto"`: overhang only into free room — in a row, the gaps
+    /// beside the parent up to whatever its neighbours draw at the node's
+    /// height (half a gap when a neighbour's caption reaches into it too),
+    /// within the row's box — and wrap to that room otherwise.
+    #[serde(default, skip_serializing_if = "Overhang::is_off")]
+    pub overhang: Overhang,
+    /// In a column / row: this child's own cross-axis alignment — `start`,
+    /// `center`, `end` or `stretch` — over the parent's (CSS `align-self`).
+    /// A self-aligned child is left out of a baseline / axis line.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub align_self: Option<CrossAxisAlign>,
+    /// The smallest width / height of the border box (page unit): a flex
+    /// share or a wrap-content size below it grows to it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_width: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_height: Option<f32>,
 
     // ---- text ----
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -424,9 +440,11 @@ pub struct RawNode {
     /// size keeps it — it isn't stretched across its parent — unless it has
     /// an explicit `width` / `height` or a parent decides a side (a flex
     /// share, an equal-height row); a natural size bigger than the room
-    /// shrinks to fit, keeping the aspect.
+    /// shrinks to fit, keeping the aspect. `"file"`: the density the file
+    /// records (PNG `pHYs`, JPEG JFIF density), else the page's
+    /// `image_dpi` when it is a number, else none.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub dpi: Option<f32>,
+    pub dpi: Option<Dpi>,
 
     // ---- rect (`stroke` / `stroke_width` are shared with shapes and text) ----
     /// Fill paint: a colour (`"#rrggbb"`) or a gradient table (see

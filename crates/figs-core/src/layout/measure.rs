@@ -14,9 +14,10 @@
 //! loose constraints (full available width, or full height if that is the
 //! tighter limit), so it is never silently drawn at 0×0.
 
-use crate::geom::{Axis, CrossAxisAlign, Edges, Size};
+use crate::geom::{Axis, CrossAxisAlign, Edges, Rect, Size};
 use crate::schema::{Common, ImageProps, NodeType};
 
+use super::arrange::{flex_slots, stack_slots, Flex};
 use super::axis::axis_offset;
 use super::baseline::{anchor_shift, pitch_gaps, row_baseline, row_line};
 use super::{cross_of, main_of, Constraints, Ctx, LeafMeasure, FALLBACK_IMAGE_ASPECT};
@@ -30,8 +31,13 @@ use super::{cross_of, main_of, Constraints, Ctx, LeafMeasure, FALLBACK_IMAGE_ASP
 /// `RotatedBox`). Any other rotation is paint-only and doesn't affect size.
 pub(crate) fn measure<M: LeafMeasure>(ctx: &Ctx<M>, idx: usize, c: Constraints) -> Size {
     if ctx.doc.nodes[idx].common.swaps_axes() {
-        let s = measure_own(ctx, idx, swap_constraints(c));
+        // Its own width is the parent's height: not sized to content.
+        let s = ctx.content_width(false, || measure_own(ctx, idx, swap_constraints(c)));
         return Size::new(s.h, s.w);
+    }
+    if c.is_tight_w() && ctx.content_w.get() {
+        // A width decided for it: what is inside may fill it.
+        return ctx.content_width(false, || measure_own(ctx, idx, c));
     }
     measure_own(ctx, idx, c)
 }
@@ -65,7 +71,8 @@ fn measure_own<M: LeafMeasure>(ctx: &Ctx<M>, idx: usize, c: Constraints) -> Size
             (*spacing, baseline_pitch.filter(|_| *axis == Axis::Vertical)),
             (*cross_axis, *equal_height && *axis == Axis::Horizontal),
             &node.common,
-            c,
+            // Its children are measured in the box it will have.
+            explicit_tight(&node.common, c),
         ),
         NodeType::Stack {
             children,
@@ -253,23 +260,21 @@ fn measure_container_in<M: LeafMeasure>(
         Axis::Vertical => (c.is_tight_h(), c.is_tight_w()),
         Axis::Horizontal => (c.is_tight_w(), c.is_tight_h()),
     };
-    let stretch = cross_tight && cross_align == CrossAxisAlign::Stretch;
+    // How wide the column is, for its "auto" overhanging children: the
+    // room it has when that is decided, else as wide as the rest.
+    let auto_cross = std::cell::Cell::new(cross_of(axis, inner));
     let child_c = |child: usize, main: Option<f32>| {
         let common = &ctx.doc.nodes[child].common;
         let mut cc = base;
         if common.overhang {
-            // Laid out at its natural cross size, whatever the room.
+            // Laid out at its natural cross size, whatever the room (an
+            // "auto" one: the room its row found beside the parent).
+            let room = overhang_limit(ctx, child, axis, auto_cross.get());
             cc = match axis {
-                Axis::Vertical => Constraints {
-                    max_w: f32::INFINITY,
-                    ..cc
-                },
-                Axis::Horizontal => Constraints {
-                    max_h: f32::INFINITY,
-                    ..cc
-                },
+                Axis::Vertical => Constraints { max_w: room, ..cc },
+                Axis::Horizontal => Constraints { max_h: room, ..cc },
             };
-        } else if stretch && !keeps_cross_size(ctx, child, axis) {
+        } else if cross_tight && stretches(ctx, child, axis, cross_align) {
             cc = tighten(
                 cc,
                 cross_axis(axis),
@@ -296,44 +301,113 @@ fn measure_container_in<M: LeafMeasure>(
     // flex children takes all the width it may (Flutter's
     // `MainAxisSize.max`), so they are measured at the width they get, not
     // at their intrinsic one (an aspect-ratio panel would claim it all).
-    let main_bounded = main_tight || (axis == Axis::Horizontal && inner_max_w.is_finite());
+    //
+    // Not when the row is itself sized to its content (an "auto" cell, a
+    // child of a row without flex): there its flex children are measured
+    // at their own size, at most their share (`capped`), so the row is as
+    // wide as what it holds.
+    let row_bounded = axis == Axis::Horizontal && inner_max_w.is_finite();
+    let capped = row_bounded && !main_tight && ctx.content_w.get();
+    let main_bounded = main_tight || (row_bounded && !capped);
     let flex_of = |child: usize| {
         ctx.doc.nodes[child]
             .common
             .flex
-            .filter(|w| *w > 0.0 && main_bounded && shared.is_none())
+            .filter(|w| *w > 0.0 && (main_bounded || capped) && shared.is_none())
+    };
+    // A row's children without flex are sized to their content.
+    let in_row = |f: &dyn Fn() -> Size| {
+        if axis == Axis::Horizontal {
+            ctx.content_width(true, f)
+        } else {
+            f()
+        }
     };
 
-    // Non-flex children (all of them when the main axis isn't tight) first.
-    let mut sizes: Vec<Option<Size>> = children
-        .iter()
-        .enumerate()
-        .map(|(i, &child)| match flex_of(child) {
-            Some(_) => None,
-            None => {
-                let w = shared.as_ref().and_then(|ws| ws[i]);
-                Some(measure(ctx, child, child_c(child, w)))
-            }
-        })
-        .collect();
-
-    // Flex children take their share of what's left, exactly as in arrange.
-    let total_flex: f32 = children.iter().filter_map(|&ch| flex_of(ch)).sum();
-    if total_flex > 0.0 {
-        let fixed: f32 = children
+    let measure_all = || {
+        // Non-flex children (all of them when the main axis isn't tight) first.
+        let mut sizes: Vec<Option<Size>> = children
             .iter()
-            .zip(&sizes)
-            .filter_map(|(&ch, s)| {
-                s.map(|s| main_of(axis, s) + main_margin(axis, ctx.doc.nodes[ch].common.margin))
+            .enumerate()
+            .map(|(i, &child)| match flex_of(child) {
+                Some(_) => None,
+                None => {
+                    let w = shared.as_ref().and_then(|ws| ws[i]);
+                    Some(in_row(&|| measure(ctx, child, child_c(child, w))))
+                }
             })
-            .sum();
-        let free = (main_of(axis, inner) - fixed - gaps).max(0.0);
-        for (i, &child) in children.iter().enumerate() {
-            if let Some(w) = flex_of(child) {
-                let margin = ctx.doc.nodes[child].common.margin;
-                let share = (free * w / total_flex - main_margin(axis, margin)).max(0.0);
-                sizes[i] = Some(measure(ctx, child, child_c(child, Some(share))));
+            .collect();
+
+        // Flex children take their share of what's left, exactly as in arrange.
+        let total_flex: f32 = children.iter().filter_map(|&ch| flex_of(ch)).sum();
+        if total_flex > 0.0 {
+            let fixed: f32 = children
+                .iter()
+                .zip(&sizes)
+                .filter_map(|(&ch, s)| {
+                    s.map(|s| main_of(axis, s) + main_margin(axis, ctx.doc.nodes[ch].common.margin))
+                })
+                .sum();
+            let free = (main_of(axis, inner) - fixed - gaps).max(0.0);
+            for (i, &child) in children.iter().enumerate() {
+                if let Some(w) = flex_of(child) {
+                    let common = &ctx.doc.nodes[child].common;
+                    let share = (free * w / total_flex - main_margin(axis, common.margin)).max(0.0);
+                    let share = share.max(min_main(common, axis));
+                    sizes[i] = Some(if capped {
+                        // At its own width, at most its share.
+                        let cc = child_c(child, None);
+                        let cc = Constraints {
+                            max_w: share.max(cc.min_w),
+                            ..cc
+                        };
+                        measure(ctx, child, cc)
+                    } else {
+                        measure(ctx, child, child_c(child, Some(share)))
+                    });
+                }
             }
+        }
+        // "auto" overhanging children wrap to the column's own width.
+        let auto = |c: usize| ctx.doc.nodes[c].common.overhang_auto;
+        if axis == Axis::Vertical && children.iter().any(|&c| auto(c)) {
+            if !cross_tight {
+                let w = children
+                    .iter()
+                    .zip(&sizes)
+                    .filter(|(&c, _)| !ctx.doc.nodes[c].common.overhang)
+                    .map(|(&c, s)| {
+                        s.map_or(0.0, |s| s.w) + ctx.doc.nodes[c].common.margin.horizontal()
+                    })
+                    .fold(0.0, f32::max);
+                auto_cross.set(w.min(cross_of(axis, inner)));
+            }
+            for (i, &c) in children.iter().enumerate() {
+                if auto(c) && flex_of(c).is_none() {
+                    sizes[i] = Some(measure(ctx, c, child_c(c, None)));
+                }
+            }
+        }
+        sizes
+    };
+    let mut sizes = measure_all();
+    // "auto" overhanging captions take the room their neighbours leave:
+    // settle it, then measure again with it (they may wrap).
+    if axis == Axis::Horizontal {
+        for _ in 0..2 {
+            let szs: Vec<Size> = sizes.iter().map(|s| s.unwrap_or_default()).collect();
+            let w = szs
+                .iter()
+                .zip(children)
+                .map(|(s, &c)| s.w + ctx.doc.nodes[c].common.margin.horizontal())
+                .sum::<f32>()
+                + gaps;
+            let h = szs.iter().map(|s| s.h).fold(0.0, f32::max);
+            let content = Rect::new(0.0, 0.0, w, h);
+            if !settle_auto_overhangs(ctx, children, &szs, spacing, cross_align, content) {
+                break;
+            }
+            sizes = measure_all();
         }
     }
 
@@ -363,6 +437,9 @@ fn measure_container_in<M: LeafMeasure>(
             continue; // takes no room across
         }
         cross_max = cross_max.max(cross_of(axis, outer));
+        if ctx.doc.nodes[child].common.align_self.is_some() {
+            continue; // aligned on its own, off the shared line
+        }
         if let Some(kind) = row_kind {
             let b = row_baseline(ctx, child, sz, margin, kind);
             above = above.max(b);
@@ -377,6 +454,27 @@ fn measure_container_in<M: LeafMeasure>(
         cross_max = cross_max.max(above + below);
     }
     main_sum += gaps;
+    // Sized to its content, a row with flex children is wide enough that
+    // each gets its own width from its share (a table's columns then don't
+    // wrap), within the room it has.
+    let total_flex: f32 = children.iter().filter_map(|&c| flex_of(c)).sum();
+    if capped && total_flex > 0.0 {
+        let outer_main = |c: usize, s: &Option<Size>| {
+            s.map_or(0.0, |s| s.w) + ctx.doc.nodes[c].common.margin.horizontal()
+        };
+        let fixed: f32 = children
+            .iter()
+            .zip(&sizes)
+            .filter(|(&c, _)| flex_of(c).is_none())
+            .map(|(&c, s)| outer_main(c, s))
+            .sum();
+        let flexed = children
+            .iter()
+            .zip(&sizes)
+            .filter_map(|(&c, s)| flex_of(c).map(|w| outer_main(c, s) * total_flex / w))
+            .fold(0.0, f32::max);
+        main_sum = main_sum.max((fixed + flexed + gaps).min(inner_max_w));
+    }
 
     let (w, h) = match axis {
         Axis::Vertical => (cross_max, main_sum),
@@ -417,7 +515,8 @@ pub(super) fn overhang_reach<M: LeafMeasure>(ctx: &Ctx<M>, idx: usize, w: f32) -
             let (mut l, mut r) = (0.0f32, 0.0f32);
             for &ch in children {
                 let cc = &ctx.doc.nodes[ch].common;
-                if !cc.overhang {
+                // An "auto" one stays inside the row by construction.
+                if !cc.overhang || cc.overhang_auto {
                     continue;
                 }
                 let nat = measure(ctx, ch, Constraints::loose(f32::INFINITY, f32::INFINITY)).w
@@ -711,6 +810,27 @@ pub(super) fn stack_child_size(common: &Common, measured: Size, avail: Size) -> 
 /// derived from it via the ratio when only one is fixed. A tight constraint on
 /// a non-explicit side counts as known too (the parent decides that side).
 pub(super) fn resolve_box_size(common: &Common, intrinsic: Size, c: Constraints) -> Size {
+    let s = resolve_box_size_in(common, intrinsic, c);
+    match (common.min_width, common.min_height) {
+        (None, None) => s,
+        (mw, mh) => c.clamp(Size::new(
+            s.w.max(mw.unwrap_or(0.0)),
+            s.h.max(mh.unwrap_or(0.0)),
+        )),
+    }
+}
+
+/// The smallest size of a node along `axis` (`min_width` / `min_height`).
+pub(super) fn min_main(common: &Common, axis: Axis) -> f32 {
+    match axis {
+        Axis::Horizontal => common.min_width,
+        Axis::Vertical => common.min_height,
+    }
+    .unwrap_or(0.0)
+}
+
+/// [`resolve_box_size`] before the minimum sizes.
+fn resolve_box_size_in(common: &Common, intrinsic: Size, c: Constraints) -> Size {
     let tight_w = common.width.is_none() && c.is_tight_w();
     let tight_h = common.height.is_none() && c.is_tight_h();
     let mut w = if tight_w {
@@ -775,7 +895,11 @@ fn contain(ar: f32, max_w: f32, max_h: f32) -> Size {
 /// An image's natural size (points): its pixels / `dpi` inches, when it has
 /// a `dpi` and the measurer knows its pixel size.
 pub(super) fn natural_size<M: LeafMeasure>(ctx: &Ctx<M>, props: &ImageProps) -> Option<Size> {
-    let dpi = props.dpi.filter(|d| *d > 0.0)?;
+    let file = props
+        .dpi_file
+        .then(|| ctx.measurer.image_density(props))
+        .flatten();
+    let dpi = file.or(props.dpi).filter(|d| d.is_finite() && *d > 0.0)?;
     let (w, h) = ctx.measurer.image_pixels(props)?;
     Some(Size::new(w as f32 / dpi * 72.0, h as f32 / dpi * 72.0))
 }
@@ -862,6 +986,8 @@ pub(super) fn min_content_width<M: LeafMeasure>(ctx: &Ctx<M>, idx: usize) -> f32
             match (common.height, common.aspect_ratio, natural_size(ctx, props)) {
                 (Some(h), Some(ar), _) if ar > 0.0 => h * ar,
                 (Some(h), None, Some(n)) => h * n.w / n.h.max(1e-6),
+                // A height and the file's aspect (a scheme's structures).
+                (Some(h), None, None) => h * ctx.measurer.image_aspect(props).unwrap_or(0.0),
                 (None, _, Some(n)) => n.w,
                 _ => 0.0,
             }
@@ -876,21 +1002,293 @@ pub(super) fn min_content_width<M: LeafMeasure>(ctx: &Ctx<M>, idx: usize) -> f32
         NodeType::Container {
             equal_height: true, ..
         } => pad,
+        // A row: its fixed children side by side, and room enough for the
+        // flex ones that every one gets its own minimum from its share.
         NodeType::Container {
             axis: Axis::Horizontal,
             children,
             spacing,
             ..
         } => {
-            children.iter().map(|&c| of(c)).sum::<f32>()
-                + spacing * children.len().saturating_sub(1) as f32
-                + pad
+            let flex = |c: usize| ctx.doc.nodes[c].common.flex.filter(|w| *w > 0.0);
+            let total: f32 = children.iter().filter_map(|&c| flex(c)).sum();
+            let fixed: f32 = children
+                .iter()
+                .filter(|&&c| flex(c).is_none())
+                .map(|&c| of(c))
+                .sum();
+            let flexed = children
+                .iter()
+                .filter_map(|&c| flex(c).map(|w| of(c) * total / w))
+                .fold(0.0, f32::max);
+            fixed + flexed + spacing * children.len().saturating_sub(1) as f32 + pad
         }
         NodeType::Container { children, .. } | NodeType::Stack { children, .. } => {
             children.iter().map(|&c| of(c)).fold(0.0, f32::max) + pad
         }
         _ => 0.0,
     }
+}
+
+/// Whether a column / row laid out along `axis` with cross alignment
+/// `align` stretches `child` across (when its cross size is known): by the
+/// child's own `align_self` — "stretch" stretches anything without an
+/// explicit cross size, even a natural-size image — else when `align` is
+/// `stretch` and the child doesn't keep a size of its own.
+pub(super) fn stretches<M: LeafMeasure>(
+    ctx: &Ctx<M>,
+    child: usize,
+    axis: Axis,
+    align: CrossAxisAlign,
+) -> bool {
+    let common = &ctx.doc.nodes[child].common;
+    match common.align_self {
+        Some(CrossAxisAlign::Stretch) => !common.overhang && !has_cross_size(common, axis),
+        Some(_) => false,
+        None => align == CrossAxisAlign::Stretch && !keeps_cross_size(ctx, child, axis),
+    }
+}
+
+/// The cross size an overhanging child of a column / row laid out along
+/// `axis` may take, the parent's content being `inner` across: unbounded,
+/// or for an "auto" one the parent's width plus the room its row found
+/// free beside it (none known: the parent's width — it wraps).
+pub(super) fn overhang_limit<M: LeafMeasure>(
+    ctx: &Ctx<M>,
+    child: usize,
+    axis: Axis,
+    inner: f32,
+) -> f32 {
+    let common = &ctx.doc.nodes[child].common;
+    if !common.overhang_auto || axis != Axis::Vertical {
+        return f32::INFINITY;
+    }
+    let (l, r) = auto_room(ctx, child);
+    (inner + l + r).max(0.0)
+}
+
+/// The room (left, right) an "auto" overhanging node's row found free
+/// beside its parent; none known: `(0, 0)`.
+pub(super) fn auto_room<M: LeafMeasure>(ctx: &Ctx<M>, child: usize) -> (f32, f32) {
+    ctx.overhang_room
+        .borrow()
+        .get(&child)
+        .copied()
+        .unwrap_or((0.0, 0.0))
+}
+
+/// The "auto" overhanging captions of row child `idx` laid out in `rect`
+/// (its border box, in the row's frame): each caption's node index, its
+/// box, and the content box of the column it sits in. A column's direct
+/// children, or those of a stack's base layer (a labelled panel).
+fn auto_captions<M: LeafMeasure>(ctx: &Ctx<M>, idx: usize, rect: Rect) -> Vec<(usize, Rect, Rect)> {
+    let node = &ctx.doc.nodes[idx];
+    let content = rect.inset(node.common.padding);
+    match &node.kind {
+        NodeType::Container {
+            axis: Axis::Vertical,
+            children,
+            ..
+        } => {
+            if !children
+                .iter()
+                .any(|&c| ctx.doc.nodes[c].common.overhang_auto)
+            {
+                return Vec::new();
+            }
+            let Some(flex) = Flex::of(ctx, idx) else {
+                return Vec::new();
+            };
+            let slots = flex_slots(ctx, &flex, content);
+            children
+                .iter()
+                .zip(slots)
+                .filter(|(&c, _)| ctx.doc.nodes[c].common.overhang_auto)
+                .map(|(&c, s)| (c, s, content))
+                .collect()
+        }
+        NodeType::Stack {
+            children, viewbox, ..
+        } => match children.first() {
+            Some(&base) if has_auto_captions(ctx, base) => {
+                let slot = stack_slots(ctx, &children[..1], *viewbox, content)[0];
+                auto_captions(ctx, base, slot)
+            }
+            _ => Vec::new(),
+        },
+        _ => Vec::new(),
+    }
+}
+
+/// Whether row child `idx` holds "auto" overhanging captions (see
+/// [`auto_captions`]).
+fn has_auto_captions<M: LeafMeasure>(ctx: &Ctx<M>, idx: usize) -> bool {
+    match &ctx.doc.nodes[idx].kind {
+        NodeType::Container {
+            axis: Axis::Vertical,
+            children,
+            ..
+        } => children
+            .iter()
+            .any(|&c| ctx.doc.nodes[c].common.overhang_auto),
+        NodeType::Stack { children, .. } => {
+            children.first().is_some_and(|&b| has_auto_captions(ctx, b))
+        }
+        _ => false,
+    }
+}
+
+/// What row child `idx`, laid out in `rect`, draws: one level down for a
+/// column (its children's boxes; an "auto" caption as its column's width,
+/// flagged, so two captions reaching into one gap split it) or a stack's
+/// layers (its base layer likewise), else its box.
+fn ink_boxes<M: LeafMeasure>(ctx: &Ctx<M>, idx: usize, rect: Rect, out: &mut Vec<(Rect, bool)>) {
+    let node = &ctx.doc.nodes[idx];
+    let content = rect.inset(node.common.padding);
+    match &node.kind {
+        NodeType::Container {
+            axis: Axis::Vertical,
+            children,
+            ..
+        } if !children.is_empty() => {
+            let Some(flex) = Flex::of(ctx, idx) else {
+                out.push((rect, false));
+                return;
+            };
+            for (&c, s) in children.iter().zip(flex_slots(ctx, &flex, content)) {
+                if ctx.doc.nodes[c].common.overhang_auto {
+                    out.push((Rect::new(content.x, s.y, content.w, s.h), true));
+                } else {
+                    out.push((s, false));
+                }
+            }
+        }
+        NodeType::Stack {
+            children, viewbox, ..
+        } if !children.is_empty() => {
+            let slots = stack_slots(ctx, children, *viewbox, content);
+            for (k, (&c, s)) in children.iter().zip(slots).enumerate() {
+                if k == 0 {
+                    ink_boxes(ctx, c, s, out);
+                } else {
+                    out.push((s, false));
+                }
+            }
+        }
+        _ => out.push((rect, false)),
+    }
+}
+
+/// Settle the room of the "auto" overhanging captions among a row's
+/// `children` (border-box `sizes`, `spacing` apart, aligned across by
+/// `align`, in a content box `content`): each may reach left and right of
+/// its column as far as nothing else the row draws at its height — the
+/// row's other children, one level down (see [`ink_boxes`]) — half way to
+/// another such caption, and never past the row's box. Recorded in
+/// [`Ctx::overhang_room`]; returns whether anything changed (the caller
+/// measures again).
+pub(super) fn settle_auto_overhangs<M: LeafMeasure>(
+    ctx: &Ctx<M>,
+    children: &[usize],
+    sizes: &[Size],
+    spacing: f32,
+    align: CrossAxisAlign,
+    content: Rect,
+) -> bool {
+    if !children.iter().any(|&c| has_auto_captions(ctx, c)) {
+        return false;
+    }
+    let slots = row_slots_of(ctx, children, sizes, spacing, align, content);
+    settle_auto_overhangs_at(ctx, children, &slots, content)
+}
+
+/// [`settle_auto_overhangs`] with the children's slots known.
+pub(super) fn settle_auto_overhangs_at<M: LeafMeasure>(
+    ctx: &Ctx<M>,
+    children: &[usize],
+    slots: &[Rect],
+    content: Rect,
+) -> bool {
+    if !children.iter().any(|&c| has_auto_captions(ctx, c)) {
+        return false;
+    }
+    let mut inks: Vec<Vec<(Rect, bool)>> = Vec::with_capacity(children.len());
+    for (&c, &s) in children.iter().zip(slots) {
+        let mut v = Vec::new();
+        ink_boxes(ctx, c, s, &mut v);
+        inks.push(v);
+    }
+    let mut changed = false;
+    for (i, (&c, &s)) in children.iter().zip(slots).enumerate() {
+        for (cap, cap_box, col) in auto_captions(ctx, c, s) {
+            let (lo, hi) = (cap_box.y, cap_box.y + cap_box.h);
+            let mut left = col.x - content.x;
+            let mut right = content.x + content.w - (col.x + col.w);
+            for (j, boxes) in inks.iter().enumerate() {
+                if j == i {
+                    continue;
+                }
+                for &(b, shared) in boxes {
+                    // Only what lies at the caption's height.
+                    if b.y >= hi - 0.01 || b.y + b.h <= lo + 0.01 || b.w <= 0.0 {
+                        continue;
+                    }
+                    let k = if shared { 0.5 } else { 1.0 };
+                    if b.x >= col.x + col.w - 0.01 {
+                        right = right.min((b.x - (col.x + col.w)) * k);
+                    } else if b.x + b.w <= col.x + 0.01 {
+                        left = left.min((col.x - (b.x + b.w)) * k);
+                    }
+                }
+            }
+            let room = (left.max(0.0), right.max(0.0));
+            let old = ctx.overhang_room.borrow_mut().insert(cap, room);
+            if old.is_none_or(|(l, r)| (l - room.0).abs() > 0.01 || (r - room.1).abs() > 0.01) {
+                changed = true;
+            }
+        }
+    }
+    changed
+}
+
+/// Where a row lays out `children` of border-box `sizes` (with their
+/// margins), `spacing` apart from the start of `content`, aligned across
+/// by `align` (an axis line, centre, end, else the top) — a quick
+/// arrangement for [`settle_auto_overhangs`] while measuring.
+fn row_slots_of<M: LeafMeasure>(
+    ctx: &Ctx<M>,
+    children: &[usize],
+    sizes: &[Size],
+    spacing: f32,
+    align: CrossAxisAlign,
+    content: Rect,
+) -> Vec<Rect> {
+    let margins: Vec<Edges> = children
+        .iter()
+        .map(|&c| ctx.doc.nodes[c].common.margin)
+        .collect();
+    let axes: Vec<f32> = children
+        .iter()
+        .zip(sizes)
+        .zip(&margins)
+        .map(|((&c, &s), &m)| axis_line(ctx, Axis::Horizontal, c, s, m))
+        .collect();
+    let line = axes.iter().copied().fold(0.0, f32::max);
+    let mut x = content.x;
+    let mut out = Vec::with_capacity(children.len());
+    for (i, &s) in sizes.iter().enumerate() {
+        let m = margins[i];
+        let outer_h = s.h + m.vertical();
+        let dy = match align {
+            CrossAxisAlign::Axis => line - axes[i],
+            CrossAxisAlign::Center => (content.h - outer_h) / 2.0,
+            CrossAxisAlign::End => content.h - outer_h,
+            _ => 0.0,
+        };
+        out.push(Rect::new(x + m.left, content.y + dy + m.top, s.w, s.h));
+        x += s.w + m.horizontal() + spacing;
+    }
+    out
 }
 
 /// Whether a stretching parent laid out along `axis` leaves `child` at its

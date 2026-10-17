@@ -16,9 +16,9 @@ use super::computed::{
     TextBox,
 };
 use super::measure::{
-    axis_line, cross_axis, cross_margin, equal_height_widths, keeps_cross_size, measure,
-    measure_container, min_content_width, overhang_reach, stack_child_avail,
-    stack_child_constraints, stack_child_size, tighten,
+    auto_room, axis_line, cross_axis, cross_margin, equal_height_widths, measure,
+    measure_container, min_content_width, min_main, overhang_limit, overhang_reach,
+    stack_child_avail, stack_child_constraints, stack_child_size, stretches, tighten,
 };
 use super::{cross_of, main_of, Constraints, Ctx, LeafMeasure};
 
@@ -724,6 +724,14 @@ fn flex_slots_edges<M: LeafMeasure>(ctx: &Ctx<M>, flex: &Flex, content: Rect) ->
 
 /// [`flex_slots`] without the room for overhanging captions.
 fn flex_slots_in<M: LeafMeasure>(ctx: &Ctx<M>, flex: &Flex, content: Rect) -> Vec<Rect> {
+    // A row's "auto" overhanging captions keep the room measuring settled
+    // (see `measure::settle_auto_overhangs`), so they are as tall as the
+    // row was measured with.
+    flex_slots_once(ctx, flex, content)
+}
+
+/// [`flex_slots_in`] with the "auto" overhangs' room as it is.
+fn flex_slots_once<M: LeafMeasure>(ctx: &Ctx<M>, flex: &Flex, content: Rect) -> Vec<Rect> {
     let Flex {
         axis,
         children,
@@ -749,23 +757,19 @@ fn flex_slots_in<M: LeafMeasure>(ctx: &Ctx<M>, flex: &Flex, content: Rect) -> Ve
     // cross size is not stretched.
     // An overhanging child, or one with a natural size (an image with a
     // `dpi`), isn't stretched either.
-    let stretched = |child: usize| {
-        cross_align == CrossAxisAlign::Stretch && !keeps_cross_size(ctx, child, axis)
-    };
+    // A child's own `align_self` decides for it.
+    let stretched = |child: usize| stretches(ctx, child, axis, cross_align);
     let overhang = |i: usize| ctx.doc.nodes[children[i]].common.overhang;
+    let self_align = |i: usize| ctx.doc.nodes[children[i]].common.align_self;
     let child_c = |child: usize, main: Option<f32>| {
         let mut cc = base_c;
         if ctx.doc.nodes[child].common.overhang {
-            // Its natural cross size, whatever the room.
+            // Its natural cross size, whatever the room (an "auto" one:
+            // the room its row found beside this container).
+            let room = overhang_limit(ctx, child, axis, content_cross);
             cc = match axis {
-                Axis::Vertical => Constraints {
-                    max_w: f32::INFINITY,
-                    ..cc
-                },
-                Axis::Horizontal => Constraints {
-                    max_h: f32::INFINITY,
-                    ..cc
-                },
+                Axis::Vertical => Constraints { max_w: room, ..cc },
+                Axis::Horizontal => Constraints { max_h: room, ..cc },
             };
         }
         if stretched(child) {
@@ -791,7 +795,13 @@ fn flex_slots_in<M: LeafMeasure>(ctx: &Ctx<M>, flex: &Flex, content: Rect) -> Ve
     for (i, &child) in children.iter().enumerate() {
         let common = &ctx.doc.nodes[child].common;
         let w = shared.as_ref().and_then(|ws| ws[i]);
-        measured.push(measure(ctx, child, child_c(child, w)));
+        // A row's children are sized to their content (a tight width
+        // clears it again).
+        measured.push(
+            ctx.content_width(axis == Axis::Horizontal || ctx.content_w.get(), || {
+                measure(ctx, child, child_c(child, w))
+            }),
+        );
         margins.push(common.margin);
         // No free space to share along an unbounded axis (or in an
         // equal-height row): flex is ignored.
@@ -831,7 +841,9 @@ fn flex_slots_in<M: LeafMeasure>(ctx: &Ctx<M>, flex: &Flex, content: Rect) -> Ve
     let mut main_size: Vec<f32> = Vec::with_capacity(n);
     for i in 0..n {
         let m = match flex[i] {
-            Some(w) if total_flex > 0.0 => (free * w / total_flex - margin_main(i)).max(0.0),
+            Some(w) if total_flex > 0.0 => (free * w / total_flex - margin_main(i))
+                .max(0.0)
+                .max(min_main(&ctx.doc.nodes[children[i]].common, axis)),
             _ => main_of(axis, measured[i]),
         };
         main_size.push(m);
@@ -899,9 +911,13 @@ fn flex_slots_in<M: LeafMeasure>(ctx: &Ctx<M>, flex: &Flex, content: Rect) -> Ve
             })
             .collect()
     });
-    let shared_baseline = baselines
-        .as_ref()
-        .map_or(0.0, |b| b.iter().copied().fold(0.0, f32::max));
+    // Self-aligned children are off the line.
+    let shared_baseline = baselines.as_ref().map_or(0.0, |b| {
+        (0..n)
+            .filter(|&i| self_align(i).is_none())
+            .map(|i| b[i])
+            .fold(0.0, f32::max)
+    });
     // An axis-aligned container puts every child's axis on one line, and
     // centres the group (tallest part before the line + after it) across.
     let axes: Option<(Vec<f32>, f32)> = (cross_align == CrossAxisAlign::Axis).then(|| {
@@ -915,12 +931,10 @@ fn flex_slots_in<M: LeafMeasure>(ctx: &Ctx<M>, flex: &Flex, content: Rect) -> Ve
             })
             .collect();
         // Overhanging children sit on the line without widening the group.
-        let before = (0..n)
-            .filter(|&i| !overhang(i))
-            .map(|i| b[i])
-            .fold(0.0, f32::max);
+        let on_line = |i: &usize| !overhang(*i) && self_align(*i).is_none();
+        let before = (0..n).filter(on_line).map(|i| b[i]).fold(0.0, f32::max);
         let after = (0..n)
-            .filter(|&i| !overhang(i))
+            .filter(on_line)
             .map(|i| cross_size[i] + margin_cross(i) - b[i])
             .fold(0.0, f32::max);
         let line = ((content_cross - before - after) / 2.0).max(0.0) + before;
@@ -933,7 +947,29 @@ fn flex_slots_in<M: LeafMeasure>(ctx: &Ctx<M>, flex: &Flex, content: Rect) -> Ve
         let bmain = main_size[i];
         let bcross = cross_size[i];
 
+        let auto = ctx.doc.nodes[children[i]].common.overhang_auto;
         let cross_off = match (&baselines, &axes) {
+            _ if auto && axis == Axis::Vertical => {
+                // Centred, kept within the room its row found beside us.
+                let (l, r) = auto_room(ctx, children[i]);
+                let fp = bcross + margin_cross(i);
+                let mid = (content_cross - fp) / 2.0;
+                let hi = content_cross + r - fp;
+                mid.min(hi).max(-l)
+            }
+            _ if overhang(i) && self_align(i).is_some() => {
+                let free = content_cross - bcross - margin_cross(i);
+                match self_align(i) {
+                    Some(CrossAxisAlign::Start) => 0.0,
+                    Some(CrossAxisAlign::End) => free,
+                    _ => free / 2.0,
+                }
+            }
+            _ if self_align(i).is_some() => cross_axis_offset(
+                self_align(i).unwrap_or(cross_align),
+                content_cross,
+                bcross + margin_cross(i),
+            ),
             (Some(b), _) => shared_baseline - b[i],
             (None, Some((b, line))) => line - b[i],
             (None, None) if overhang(i) => {

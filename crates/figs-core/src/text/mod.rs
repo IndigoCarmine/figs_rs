@@ -44,6 +44,8 @@ pub struct FontStore {
     image_base_dir: Option<PathBuf>,
     /// Natural aspect (w / h) per resolved image path; `None` = unreadable.
     image_pixels: RefCell<HashMap<PathBuf, Option<(u32, u32)>>>,
+    /// Recorded pixel density per resolved image path (`dpi = "file"`).
+    image_density: RefCell<HashMap<PathBuf, Option<f32>>>,
 }
 
 impl FontStore {
@@ -55,6 +57,7 @@ impl FontStore {
             default_family: None,
             image_base_dir: None,
             image_pixels: RefCell::new(HashMap::new()),
+            image_density: RefCell::new(HashMap::new()),
         }
     }
 
@@ -65,6 +68,7 @@ impl FontStore {
     pub fn set_image_base_dir(&mut self, dir: Option<PathBuf>) {
         self.image_base_dir = dir;
         self.image_pixels.borrow_mut().clear();
+        self.image_density.borrow_mut().clear();
     }
 
     /// Set the family (or comma-separated family list, e.g. `"Arial, Yu
@@ -138,6 +142,20 @@ impl Default for FontStore {
     }
 }
 
+impl FontStore {
+    /// Where image `src` lives (relative paths against the image base
+    /// dir); `None` without a base dir.
+    fn image_path(&self, image: &ImageProps) -> Option<PathBuf> {
+        let base = self.image_base_dir.as_deref()?;
+        let src = Path::new(&image.src);
+        Some(if src.is_absolute() {
+            src.to_path_buf()
+        } else {
+            base.join(src)
+        })
+    }
+}
+
 impl LeafMeasure for FontStore {
     fn measure_text(&self, text: &TextProps, max_width: f32) -> Size {
         self.shape(text, max_width).size
@@ -169,18 +187,24 @@ impl LeafMeasure for FontStore {
     /// Pixel size from the image file header (cached per path), when an
     /// image base dir is set. Missing/unreadable files yield `None`.
     fn image_pixels(&self, image: &ImageProps) -> Option<(u32, u32)> {
-        let base = self.image_base_dir.as_deref()?;
-        let src = Path::new(&image.src);
-        let path = if src.is_absolute() {
-            src.to_path_buf()
-        } else {
-            base.join(src)
-        };
+        let path = self.image_path(image)?;
         if let Some(cached) = self.image_pixels.borrow().get(&path) {
             return *cached;
         }
         let px = crate::render::image_size(&path).filter(|(w, h)| *w > 0 && *h > 0);
         self.image_pixels.borrow_mut().insert(path, px);
         px
+    }
+
+    /// The density the file records (cached per path; see
+    /// [`crate::render::image_density`]).
+    fn image_density(&self, image: &ImageProps) -> Option<f32> {
+        let path = self.image_path(image)?;
+        if let Some(cached) = self.image_density.borrow().get(&path) {
+            return *cached;
+        }
+        let d = crate::render::image_density(&path);
+        self.image_density.borrow_mut().insert(path, d);
+        d
     }
 }
