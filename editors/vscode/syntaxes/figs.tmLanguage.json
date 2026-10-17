@@ -1,0 +1,108 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "figs",
+  "scopeName": "source.figs",
+  "patterns": [{ "include": "#code" }],
+  "repository": {
+    "code": {
+      "patterns": [
+        { "include": "#comments" },
+        { "include": "#strings" },
+        { "include": "#numbers" },
+        { "include": "#fn-declaration" },
+        { "include": "#keywords" },
+        { "include": "#method-call" },
+        { "include": "#function-call" },
+        { "include": "#map-key" },
+        { "include": "#operators" }
+      ]
+    },
+    "comments": {
+      "patterns": [
+        { "name": "comment.line.documentation.figs", "match": "///.*$" },
+        { "name": "comment.line.double-slash.figs", "match": "//.*$" },
+        { "include": "#block-comment" }
+      ]
+    },
+    "block-comment": {
+      "name": "comment.block.figs",
+      "begin": "/\\*",
+      "end": "\\*/",
+      "patterns": [{ "include": "#block-comment" }]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.figs",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [{ "name": "constant.character.escape.figs", "match": "\\\\." }]
+        },
+        {
+          "name": "string.quoted.single.figs",
+          "match": "'(\\\\.|[^'\\\\])'"
+        },
+        {
+          "name": "string.interpolated.figs",
+          "begin": "`",
+          "end": "`",
+          "patterns": [
+            { "name": "constant.character.escape.figs", "match": "\\\\." },
+            {
+              "name": "meta.interpolation.figs",
+              "begin": "\\$\\{",
+              "end": "\\}",
+              "beginCaptures": { "0": { "name": "punctuation.section.interpolation.begin.figs" } },
+              "endCaptures": { "0": { "name": "punctuation.section.interpolation.end.figs" } },
+              "contentName": "source.figs",
+              "patterns": [{ "include": "#code" }]
+            }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        { "name": "constant.numeric.hex.figs", "match": "\\b0x[0-9a-fA-F_]+\\b" },
+        { "name": "constant.numeric.figs", "match": "\\b[0-9][0-9_]*(\\.[0-9][0-9_]*)?([eE][+-]?[0-9]+)?\\b" }
+      ]
+    },
+    "fn-declaration": {
+      "match": "\\b(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "storage.type.function.figs" },
+        "2": { "name": "entity.name.function.figs" }
+      }
+    },
+    "keywords": {
+      "patterns": [
+        { "name": "keyword.control.figs", "match": "\\b(if|else|switch|while|loop|for|in|do|until|break|continue|return|throw|try|catch)\\b" },
+        { "name": "storage.type.figs", "match": "\\b(let|const|fn)\\b" },
+        { "name": "storage.modifier.figs", "match": "\\b(private|import|export|as|global)\\b" },
+        { "name": "constant.language.boolean.figs", "match": "\\b(true|false)\\b" },
+        { "name": "variable.language.this.figs", "match": "\\bthis\\b" }
+      ]
+    },
+    "method-call": {
+      "match": "(\\??\\.)\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+      "captures": {
+        "1": { "name": "punctuation.accessor.figs" },
+        "2": { "name": "entity.name.function.method.figs" }
+      }
+    },
+    "function-call": {
+      "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+      "captures": { "1": { "name": "entity.name.function.call.figs" } }
+    },
+    "map-key": {
+      "match": "(?<=[{,])\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(?=:(?!:))",
+      "captures": { "1": { "name": "variable.other.property.figs" } }
+    },
+    "operators": {
+      "patterns": [
+        { "name": "punctuation.definition.map.figs", "match": "#\\{" },
+        { "name": "keyword.operator.figs", "match": "=>|==|!=|<=|>=|&&|\\|\\||\\+=|-=|\\*=|/=|\\*\\*|[-+*/%<>=!&|^]" }
+      ]
+    }
+  }
+}

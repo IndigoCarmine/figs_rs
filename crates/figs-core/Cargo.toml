@@ -34,6 +34,9 @@ pdf = ["dep:krilla"]
 # `watch::FileWatcher`: debounced watching of a document and its dependencies
 # (used by `figs watch` and the editor's live reload). Off by default.
 watch = ["dep:notify-debouncer-mini"]
+# `script::native_signatures`: the registered builders' signatures, for editor
+# tooling (the `figs-lsp` language server). Off by default.
+metadata = ["script", "rhai/metadata"]
 
 [dev-dependencies]
 # Inflates PDF content streams in the rotation tests.

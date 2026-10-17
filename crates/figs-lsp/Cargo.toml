@@ -1,0 +1,20 @@
+[package]
+name = "figs-lsp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Language server for figs scripts (.figs): completion, hover, signatures, diagnostics and semantic highlighting."
+
+[[bin]]
+name = "figs-lsp"
+path = "src/main.rs"
+
+[dependencies]
+# Only the script front-end: the server evaluates scripts for diagnostics and
+# reads the registered builders' signatures; it never renders.
+figs-core = { path = "../figs-core", default-features = false, features = ["script", "metadata"] }
+lsp-server = "0.7"
+lsp-types = "0.95"
+serde.workspace = true
+serde_json = "1"

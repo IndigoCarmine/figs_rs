@@ -31,9 +31,9 @@ use rhai::{Dynamic, Engine, EvalAltResult, Map, Position, AST};
 use super::ScriptError;
 
 /// The framework source files, embedded at build time, in load order (their
-/// file-name order). Rhai hoists script functions, so the order only decides
+/// file-name order), as `(file name, source)`. Rhai hoists script functions, so the order only decides
 /// which line of the concatenated [`source`] a function lands on.
-pub(crate) const PARTS: &[(&str, &str)] = &[
+pub const PARTS: &[(&str, &str)] = &[
     ("00_base.rhai", include_str!("prelude/00_base.rhai")),
     ("10_text.rhai", include_str!("prelude/10_text.rhai")),
     ("15_layout.rhai", include_str!("prelude/15_layout.rhai")),

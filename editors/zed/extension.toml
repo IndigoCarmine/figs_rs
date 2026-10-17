@@ -1,0 +1,16 @@
+id = "figs"
+name = "figs"
+version = "0.1.0"
+schema_version = 1
+authors = ["IndigoCarmine"]
+description = "figs scripts (.figs): highlighting, completion, hover, signatures and diagnostics via figs-lsp."
+repository = "https://github.com/IndigoCarmine/figs_rs"
+
+# figs scripts are Rhai.
+[grammars.rhai]
+repository = "https://github.com/elkowar/tree-sitter-rhai"
+rev = "4ac7384d487ffcb54e746ef1569585a749370c5b"
+
+[language_servers.figs-lsp]
+name = "figs-lsp"
+languages = ["figs"]

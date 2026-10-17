@@ -1,0 +1,59 @@
+{
+  "name": "figs",
+  "displayName": "figs",
+  "description": "figs scripts (.figs): highlighting, completion, hover, signatures and diagnostics via figs-lsp",
+  "version": "0.1.0",
+  "publisher": "figs-rs",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/IndigoCarmine/figs_rs"
+  },
+  "engines": {
+    "vscode": "^1.82.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "figs",
+        "aliases": [
+          "figs"
+        ],
+        "extensions": [
+          ".figs"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "figs",
+        "scopeName": "source.figs",
+        "path": "./syntaxes/figs.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "figs",
+      "properties": {
+        "figs.server.path": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to the `figs-lsp` executable. Empty: `target/release` or `target/debug` of the workspace (when it is the figs_rs repository), else `figs-lsp` on `PATH`."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "figs.restartServer",
+        "title": "figs: Restart Language Server"
+      }
+    ]
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}

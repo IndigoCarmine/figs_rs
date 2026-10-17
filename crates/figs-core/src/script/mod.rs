@@ -1156,6 +1156,14 @@ fn build_engine(base_dir: Option<&Path>) -> Engine {
     engine.set_module_resolver(rhai::module_resolvers::DummyModuleResolver::new());
     engine.disable_symbol("eval");
 
+    // `print` / `debug` are diagnostics, never document output; stdout may
+    // be a protocol stream (the language server talks LSP over it).
+    engine.on_print(|s| eprintln!("{s}"));
+    engine.on_debug(|s, _, pos| match pos.line() {
+        Some(line) => eprintln!("[line {line}] {s}"),
+        None => eprintln!("{s}"),
+    });
+
     engine
         .register_type_with_name::<ScriptNode>("Node")
         .register_type_with_name::<ScriptDoc>("Doc")
@@ -1821,6 +1829,18 @@ mod rich;
 pub mod sites;
 
 pub use prelude::location as prelude_location;
+pub use prelude::PARTS as PRELUDE_FILES;
+
+/// The signature of every function the engine registers natively — the core
+/// builders and methods (`text(content: &str) -> Node`, …), not the prelude —
+/// for editor tooling such as completion lists.
+#[cfg(feature = "metadata")]
+pub fn native_signatures() -> Vec<String> {
+    let mut engine = build_engine(None);
+    prelude::register_style(&mut engine);
+    prelude::register_meta(&mut engine);
+    engine.gen_fn_signatures(false)
+}
 pub use sites::{OffsetSite, OffsetSites, SiteOrigin, SourceMap};
 
 /// Evaluate a Rhai script into a [`RawDocument`]. The script's last expression

@@ -1,0 +1,16 @@
+[package]
+name = "zed-figs"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Zed builds this crate to WebAssembly on its own; keep it out of the figs_rs
+# workspace.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+zed_extension_api = "0.7.0"

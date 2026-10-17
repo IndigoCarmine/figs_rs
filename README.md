@@ -2264,6 +2264,22 @@ Where the move is written:
 - **TOML**: `x`/`y` are set in the node's table in place (via `toml_edit`), so
   comments and formatting survive, and saving writes that text.
 
+### Editor support (VS Code, Zed)
+
+`figs-lsp` (`crates/figs-lsp`) is a language server for `.figs` scripts:
+completion of the core builders and methods, the prelude (with its comments as
+documentation) and the script's own functions and variables — after `fn`, the
+hooks to override — plus hover, signature help, semantic highlighting, the
+outline, go to definition, and diagnostics from evaluating the script as
+`figs build` does, a moment after each edit. Install it with
+`cargo install --path crates/figs-lsp`, then the editor extension:
+[`editors/vscode`](editors/vscode/README.md) (a TextMate grammar and the
+client) or [`editors/zed`](editors/zed/README.md) (the Rhai tree-sitter
+grammar and the server).
+
+A script's `print` / `debug` output goes to stderr (stdout carries the
+server's protocol).
+
 ## Architecture
 
 ```
