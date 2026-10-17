@@ -84,9 +84,46 @@ fn poster_header_rule_width() { style_get("poster_header_rule_width", base_size(
 // template: "(1)", "A.", "I-1"); "" for none.
 fn section_label_style() { style_get("section_label_style", "1.") }
 
+// How a section's title is drawn (`section_head`):
+//   "bar"        the title centred on a full-width bar (`section_bar`; default)
+//   "underline"  the title left, in the accent colour, over an accent rule
+//   "tab"        a tab as wide as the title, rounded on top, on an accent rule
+//   "stripe"     an accent stripe left of the title, on a light accent tint
+//   "badge"      the number in an accent circle, then the title
+//   "ribbon"     a bar as wide as the title ending in an arrow point
+// The filled looks take `section_bar_fill()`; only "bar" takes the border
+// (`section_bar_border()`) and corner radius ("tab" uses the radius for its
+// top corners). Per section: `section(.., #{ variant: #{ section_look: "tab" } })`.
+fn section_look() { style_get("section_look", "bar") }
+
+// The accent of the section looks (the rule, stripe, badge; also `takeaway`
+// and `stat`), and the colour of text set on it.
+fn section_accent() { style_get("section_accent", "#2b4677") }
+fn section_on_accent() { style_get("section_on_accent", "#ffffff") }
+
+// The accent rule of the "underline" and "tab" looks (cm; 0.14 cm at 24 pt).
+fn section_rule_width() { style_get("section_rule_width", section_bar_height() * 0.06) }
+
+// The band behind the "stripe" look: a colour, "" for none, or () (default) —
+// the accent at 12 % when it is a "#rrggbb" colour.
+fn section_tint() { style_get("section_tint", ()) }
+
+// A section as a card: a fill and a border ("" for none) around title and
+// content, the border's width (cm), and the corner radius (cm; rounding also
+// clips the section to its corners). All off by default.
+fn section_fill() { style_get("section_fill", "") }
+fn section_border() { style_get("section_border", "") }
+fn section_border_width() { style_get("section_border_width", separator_width()) }
+fn section_radius() { style_get("section_radius", 0) }
+
 // Section bar: title size (pt; 53.5 pt at 24 pt), colour, font ("" = page font).
+// The colour defaults to white on the filled looks ("bar", "tab", "ribbon")
+// and to `section_accent()` on the others.
 fn section_title_size() { style_get("section_title_size", base_size() * 2.23) }
-fn section_title_color() { style_get("section_title_color", "#ffffff") }
+fn section_title_color() {
+    let open = ["underline", "stripe", "badge"].contains(section_look());
+    style_get("section_title_color", if open { section_accent() } else { "#ffffff" })
+}
 fn section_title_font() { style_get("section_title_font", "") }
 
 // Bar height (cm): 2.3 cm for the 53.5 pt title.
@@ -160,6 +197,17 @@ fn frame_radius() { style_get("frame_radius", base_size() * 0.011) }
 fn frame_pad() { style_get("frame_pad", base_size() * 0.015) }
 fn frame_dash() { style_get("frame_dash", [frame_width() * 4.0, frame_width() * 3.0]) }
 
+// `takeaway` (a filled box for the key message): fill, text colour, size
+// (pt; 29 pt at 24 pt) and whether the text is bold.
+fn takeaway_fill() { style_get("takeaway_fill", section_accent()) }
+fn takeaway_color() { style_get("takeaway_color", section_on_accent()) }
+fn takeaway_size() { style_get("takeaway_size", base_size() * 1.2) }
+fn takeaway_bold() { style_get("takeaway_bold", true) }
+
+// `stat` (a key figure): the figure's size (pt; 72 pt at 24 pt) and colour.
+fn stat_size() { style_get("stat_size", base_size() * 3.0) }
+fn stat_color() { style_get("stat_color", section_accent()) }
+
 // `note` (the highlighted take-home sentence): colour, size (pt), font.
 fn note_color() { style_get("note_color", "#b85c00") }
 fn note_size() { style_get("note_size", base_size()) }
@@ -197,6 +245,7 @@ fn ref_variants() { style_get("ref_variants", #{}) }
 fn table_variants() { style_get("table_variants", #{}) }
 fn subheading_variants() { style_get("subheading_variants", #{}) }
 fn section_variants() { style_get("section_variants", #{}) }
+fn takeaway_variants() { style_get("takeaway_variants", #{}) }
 
 // `bullets`: mark, text size (pt), hanging indent (cm; 1.58 cm at 36 pt) and
 // gap between items (cm).

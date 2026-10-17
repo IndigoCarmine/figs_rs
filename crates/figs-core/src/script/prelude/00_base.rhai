@@ -114,6 +114,7 @@ fn style_presets() {
         poster_bg: linear(90, [[0, "#28314c"], [0.12, "#181e2e"], [0.38, "#10141f"], [1, "#080a10"]]),
         section_bar_fill: linear(90, [[0, "#3d4a73"], [0.56, "#181d2d"], [1, "#080a10"]]),
         section_bar_border: "#caeefb", note_color: "#ffc000", table_fill: "#121622",
+        section_accent: "#caeefb", section_on_accent: "#10141f",
         section_title_glow: true, section_title_shadow: true, section_bar_shadow: true,
     };
     #{
@@ -191,9 +192,13 @@ fn style_keys() {
         "section_overflow", "poster_number_position", "author_font", "ref_font",
         "poster_logo_box", "poster_number_inset", "section_valign", "poster_title_inset",
         "section_body_inset", "bullet_inset",
+        "section_look", "section_accent", "section_on_accent", "section_rule_width",
+        "section_tint", "section_fill", "section_border", "section_border_width",
+        "section_radius", "takeaway_fill", "takeaway_color", "takeaway_size",
+        "takeaway_bold", "stat_size", "stat_color",
         // component variants: name -> map of style keys (see `variant_push`)
         "frame_variants", "note_variants", "ref_variants", "table_variants",
-        "subheading_variants", "section_variants",
+        "subheading_variants", "section_variants", "takeaway_variants",
     ]
 }
 

@@ -1,0 +1,38 @@
+// Poster design patterns: one section per title look (`section_look()`,
+// picked per section through a variant map), sections as cards, a
+// `takeaway` box and `stat` figures. Fictional placeholder content.
+// Latin in Arial, Japanese in Yu Gothic (a font fallback list).
+style("poster", #{ font_family: "Arial, Yu Gothic" });
+
+// A section in look `look`; the look's name is its title.
+fn sample(look, title, content) {
+    section(`${title} (${look})`, content, #{ variant: #{ section_look: look } })
+}
+
+let text_a = "光で伸縮するゲルは、配線のいらない柔らかいアクチュエーターとして期待されている。";
+let text_b = "多孔質の骨格で光と水の通り道を作り、応答の速さと変形量を両立する。";
+
+poster(#{
+    title: "ポスターのデザインパターン",
+    authors: [#{ name: "山田 太郎", aff: 1, presenter: true }, #{ name: "佐藤 花子", aff: 2 }],
+    affiliations: ["架空大学", "架空研究所"],
+    number: "P-000",
+}, rows([
+    columns([
+        sample("bar", "背景", [body(text_a), bullets(["応答が遅い", "変形が小さい"])]),
+        sample("underline", "目的", [body(text_b), note("速さと大きさの両立")]),
+        sample("tab", "方法", [body(text_a), frame([body(text_b)])]),
+    ]),
+    columns([
+        sample("stripe", "結果", [body(text_b), block("", [stat("×12", "応答速度"), stat("35 %", "伸縮率")])]),
+        sample("badge", "考察", [body(text_a), bullets(["孔径が鍵", "水の拡散が律速"])]),
+        sample("ribbon", "結論", [body(text_b), takeaway("多孔質化で 12 倍速く動く")]),
+    ]),
+    // Cards: a tint and a hairline border round each section, rounded.
+    styled(#{ section_fill: "#2b46770d", section_border: "#2b4677", section_radius: 0.6,
+              separators: false }, || columns([
+        sample("bar", "カード", [body(text_a)]),
+        sample("underline", "カード", [body(text_b)]),
+        sample("badge", "カード", [body(text_a)]),
+    ])),
+]))

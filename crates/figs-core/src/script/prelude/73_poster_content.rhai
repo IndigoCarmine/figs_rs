@@ -70,6 +70,32 @@ fn note(s, variant) {
     t
 }
 
+// A filled box for the key message of a section or of the poster: `s` (a
+// string, spans or a node) centred at `takeaway_size()` (bold while
+// `takeaway_bold()`), in `takeaway_color()` on `takeaway_fill()` (the
+// accent), with `frame_radius()` corners, padded `frame_pad()`.
+// `takeaway(s, variant)`: in a style variant (`takeaway_variants`).
+fn takeaway(s) {
+    let t = if type_of(s) == "Node" { s } else {
+        let t = text(s).size(takeaway_size()).color(takeaway_color()).center();
+        if takeaway_bold() { t.bold() } else { t }
+    };
+    let box = col([t]).cross("center").stretch().pad(frame_pad()).radius(frame_radius());
+    let f = takeaway_fill();
+    if has_paint(f) { box.fill(f) } else { box }
+}
+fn takeaway(s, variant) { in_variant("takeaway", variant, || takeaway(s)) }
+
+// A key figure: `value` large (`stat_size()`, bold, `stat_color()`) over
+// `label` (body size, the theme foreground; "" for none), centred on each
+// other. Several side by side: `block("", [stat("×12", "faster"),
+// stat("95 %", "yield")])`.
+fn stat(value, label) {
+    let v = text(value).size(stat_size()).color(stat_color()).bold().center();
+    if type_of(label) == "string" && label == "" { return v; }
+    col([v, fg_text(label).size(base_size()).center()]).cross("center").spacing(section_gap() * 0.25)
+}
+
 // A literature reference line: small (`ref_size()`), centred, in
 // `ref_color()` and `ref_font()`. `ref(s, variant)`: `ref_variants`.
 fn ref(s) {

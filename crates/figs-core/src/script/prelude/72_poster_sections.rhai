@@ -20,32 +20,130 @@ fn section_title(s) {
 // centred and keeps its size even when its line box (a CJK font's tall
 // ascent + descent) is taller than the bar.
 fn section_bar(s) {
-    let t = if type_of(s) == "Node" { row([s]) } else { section_title(s) };
-    t = poster_effect("section_title_glow", t, "glow", section_title_glow(), section_title_glow_look());
-    t = poster_effect("section_title_shadow", t, "shadow", section_title_shadow(), section_title_shadow_look());
-    let h = section_bar_height();
-    let b = section_title_baseline();
-    let bar = if type_of(b) == "()" {
-        stack([t.at(0.5, 0.5).anchor(0.5, "cap_middle")]).viewbox(0, 0, 1, 1)
-    } else if type_of(s) == "Node" {
-        stack([t.at(0.5, 0.5).anchor(0.5, 0.5)]).viewbox(0, 0, 1, 1)
-    } else {
-        // The title's first baseline `b` cm below the bar top (cm down,
-        // fractions across), centred across.
-        if !finite_num(b) || !(h > 0) {
-            throw `section_title_baseline(): must be a length in cm below the bar top, or () (got ${b})`;
-        }
-        stack([t.at(0.5, b).anchor(0.5, "baseline")]).viewbox(0, 0, 1, h)
-    };
-    bar = bar.height(h);
+    let bar = section_title_strip(s, 0.5);
     let fill = section_bar_fill();
     if has_paint(fill) { bar = bar.fill(fill); }
     let b = section_bar_border();
     if b != "" { bar = bar.stroke(b).stroke_width(section_bar_border_width()); }
     let r = section_bar_radius();
     if r > 0 { bar = bar.radius(r); }
-    poster_effect("section_bar_shadow", bar, "shadow", section_bar_shadow(), section_bar_shadow_look())
+    section_bar_effect(bar)
 }
+
+// Title `s` (a string, spans or a node) with the title effects, on a strip
+// `section_bar_height()` high and as wide as its parent gives it (as wide as
+// the title when it wraps its content): at fraction `ax` across (0 = left,
+// 0.5 = centred) and placed down as `section_title_baseline()` says.
+fn section_title_strip(s, ax) {
+    let t = if type_of(s) == "Node" { row([s]) } else { section_title(s) };
+    t = poster_effect("section_title_glow", t, "glow", section_title_glow(), section_title_glow_look());
+    t = poster_effect("section_title_shadow", t, "shadow", section_title_shadow(), section_title_shadow_look());
+    let h = section_bar_height();
+    let b = section_title_baseline();
+    let strip = if type_of(b) == "()" {
+        stack([t.at(ax, 0.5).anchor(ax, "cap_middle")]).viewbox(0, 0, 1, 1)
+    } else if type_of(s) == "Node" {
+        stack([t.at(ax, 0.5).anchor(ax, 0.5)]).viewbox(0, 0, 1, 1)
+    } else {
+        // The title's first baseline `b` cm below the strip top (cm down,
+        // fractions across).
+        if !finite_num(b) || !(h > 0) {
+            throw `section_title_baseline(): must be a length in cm below the bar top, or () (got ${b})`;
+        }
+        stack([t.at(ax, b).anchor(ax, "baseline")]).viewbox(0, 0, 1, h)
+    };
+    strip.height(h)
+}
+
+// `n` with `section_bar_shadow()`.
+fn section_bar_effect(n) {
+    poster_effect("section_bar_shadow", n, "shadow", section_bar_shadow(), section_bar_shadow_look())
+}
+
+// The head of a section in `section_look()`: `label` is its number ("" for
+// none), `title` the title as given, `s` the two joined ("1. Title").
+fn section_head(label, title, s) {
+    let look = section_look();
+    let h = section_bar_height();
+    switch look {
+        "bar" => section_bar(s),
+        "underline" => col([section_title_strip(s, 0), section_rule()]).stretch(),
+        "tab" => {
+            // Rounded on top only: the title strip between two caps whose
+            // viewbox is in cm, so their corners are true quarter circles.
+            // The caps overlap the strip a hair, so no seam shows.
+            let r = if section_bar_radius() > 0 { section_bar_radius() } else { h * 0.25 };
+            let e = h * 0.005;
+            let left = path([[0, h], [0, r]]).arc(r, r, 0).to(r + e, 0).to(r + e, h).closed()
+                .viewbox(0, 0, r, h).width(r).height(h).margin(#{ right: -e });
+            let right = path([[-e, 0], [0, 0]]).arc(r, r, r).to(r, h).to(-e, h).closed()
+                .viewbox(0, 0, r, h).width(r).height(h).margin(#{ left: -e });
+            let mid = section_title_strip(s, 0.5).pad(#{ left: h * 0.15, right: h * 0.15 });
+            let fill = section_bar_fill();
+            if has_paint(fill) { left = left.fill(fill); mid = mid.fill(fill); right = right.fill(fill); }
+            col([section_bar_effect(row([left, mid, right])).align_self("start"), section_rule()]).stretch()
+        },
+        "stripe" => {
+            let strip = row([
+                rect().fill(section_accent()).width(h * 0.2),
+                section_title_strip(s, 0).flex(1).pad(#{ left: h * 0.3 }),
+            ]).height(h).cross("stretch");
+            let tint = section_tint();
+            if type_of(tint) == "()" {
+                let a = section_accent();
+                tint = if type_of(a) == "string" && a.len() == 7 && a.starts_with("#") { a + "1f" } else { "" };
+            }
+            if has_paint(tint) { strip = strip.fill(tint); }
+            strip
+        },
+        "badge" => {
+            let n = label_core(label);
+            if n == "" { return section_title_strip(title, 0); }
+            let d = h * 0.85;
+            let num = section_title(n).color(section_on_accent());
+            let badge = stack([ellipse().fill(section_accent()), num.at(0.5, 0.5).anchor(0.5, "cap_middle")])
+                .viewbox(0, 0, 1, 1).width(d).height(d);
+            row([badge, section_title_strip(title, 0).flex(1)]).height(h).spacing(h * 0.25).cross("center")
+        },
+        "ribbon" => {
+            let fill = section_bar_fill();
+            let body = section_title_strip(s, 0.5).pad(#{ left: h * 0.4, right: h * 0.25 });
+            // The point overlaps the body a little, so no seam shows.
+            let tip = path([[0, 0], [1, 0.5], [0, 1]]).closed().viewbox(0, 0, 1, 1)
+                .width(h * 0.45).height(h).margin(#{ left: -h * 0.015 });
+            if has_paint(fill) { body = body.fill(fill); tip = tip.fill(fill); }
+            section_bar_effect(row([body, tip])).align_self("start")
+        },
+        _ => { throw `section_look(): unknown look "${look}" (bar, underline, tab, stripe, badge, ribbon)`; }
+    }
+}
+
+// Label `s` without the punctuation and spaces around it: "1." and "(1)"
+// give "1".
+fn label_core(s) {
+    let skip = ['.', ')', '(', ':', ' ', '．', '）', '（'];
+    while s.len() > 0 && skip.contains(s[0]) { s = s.sub_string(1); }
+    while s.len() > 0 && skip.contains(s[-1]) { s = s.sub_string(0, s.len() - 1); }
+    s
+}
+
+// The accent rule under the "underline" and "tab" looks.
+fn section_rule() { rect().fill(section_accent()).height(section_rule_width()) }
+
+// Section `n` as a card: `section_fill()`, `section_border()` and
+// `section_radius()` (which also clips it to the rounded corners).
+fn section_card(n) {
+    let f = section_fill();
+    if has_paint(f) { n = n.fill(f); }
+    let b = section_border();
+    if b != "" { n = n.stroke(b).stroke_width(section_border_width()); }
+    let r = section_radius();
+    if r > 0 { n = n.radius(r).clip(); }
+    n
+}
+
+// Is a section card in force (a fill or a border)?
+fn section_is_card() { has_paint(section_fill()) || section_border() != "" }
 
 // The `true` looks of the section effects (cm, scaled from 24 pt).
 fn section_title_glow_look() { #{ blur: base_size() * 0.1 / 24.0, color: "#00000099" } }
@@ -92,7 +190,10 @@ fn section_number(n) {
 // `section(number, title, content)` sets the number: an integer (the count
 // continues from it) or a string used as is ("" for none). The title is a
 // string, spans (`markup(..)`) or a text node (its own look; the number
-// goes before it in the bar's title style).
+// goes before it in the bar's title style). The title is drawn in
+// `section_look()` ("bar", "underline", "tab", "stripe", "badge", "ribbon"),
+// and the whole section is a card while `section_fill()` / `section_border()`
+// is set.
 // `section(title, content, opts)` / `section(number, title, content, opts)`:
 //   footer  item(s) pushed to the bottom of the section (references, a
 //           take-home `note`), below the content's spare height and at least
@@ -191,5 +292,10 @@ fn section_make(n, title, content, opts) {
     let pad = if bi == 0 { sp } else { #{ top: sp, bottom: sp, left: sp + bi, right: sp + bi } };
     let body = col(items).spacing(section_gap()).stretch().pad(pad).flex(1)
         .name(`${tag} (body)`).overflow(body_ov).main(main);
-    col([section_bar(s), body]).stretch().name(tag)
+    let head = section_head(label, title, s);
+    if section_is_card() && ["underline", "badge"].contains(section_look()) {
+        // An open title keeps clear of the card's edge, as the content does.
+        head = head.pad(#{ left: sp + bi, right: sp + bi, top: sp });
+    }
+    section_card(col([head, body]).stretch().name(tag))
 }

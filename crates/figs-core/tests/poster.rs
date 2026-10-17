@@ -302,6 +302,192 @@ fn section_errors() {
     assert!(fail(r#"page(1, 1, section(3, rect()))"#).contains("the title must be a string"));
 }
 
+/// The nodes under `id` (itself included), depth first in child order.
+fn subtree<'a>(d: &'a RawDocument, id: &'a str) -> Vec<(&'a str, &'a RawNode)> {
+    let mut out = vec![(id, &d.nodes[id])];
+    for c in &d.nodes[id].children {
+        out.extend(subtree(d, c));
+    }
+    out
+}
+
+/// A section "A" (1 × 1 cm content rect) in `look`, at 8 pt.
+fn look_src(look: &str) -> String {
+    format!(
+        r#"style(#{{ section_look: "{look}" }}); page(20, 20, section("A", rect().height(1))).unit("cm")"#
+    )
+}
+
+#[test]
+fn section_looks_build_their_heads() {
+    let accent = hex("#2b4677");
+    let white = hex("#ffffff");
+    let h = 8.0 * 2.23 * 0.043; // section_bar_height() at 8 pt
+    for look in ["bar", "underline", "tab", "stripe", "badge", "ribbon"] {
+        let d = raw(&look_src(look));
+        let (head, _) = children(&d, "root")[0];
+        let nodes = subtree(&d, head);
+        let title = nodes
+            .iter()
+            .find(|(_, n)| n.kind == NodeKind::Text && plain(n).ends_with('A'))
+            .unwrap_or_else(|| panic!("{look}: no title"))
+            .1;
+        let filled = |kind: NodeKind| {
+            nodes
+                .iter()
+                .filter(|(_, n)| {
+                    n.kind == kind && n.fill.as_ref().and_then(|p| p.as_solid()) == accent
+                })
+                .count()
+        };
+        match look {
+            "bar" | "tab" | "ribbon" => assert_eq!(title.color, white, "{look}"),
+            _ => assert_eq!(title.color, accent, "{look}"),
+        }
+        match look {
+            // The number sits in the badge, the title alone beside it.
+            "badge" => {
+                assert_eq!(plain(title), "A");
+                assert_eq!(filled(NodeKind::Ellipse), 1);
+                let num = nodes
+                    .iter()
+                    .find(|(_, n)| n.kind == NodeKind::Text && plain(n) == "1");
+                assert_eq!(num.unwrap().1.color, white);
+            }
+            _ => assert_eq!(plain(title), "1. A", "{look}"),
+        }
+        // The accent rule under "underline" and "tab"; the stripe's bar.
+        let rules = filled(NodeKind::Rect);
+        assert_eq!(
+            rules,
+            usize::from(["underline", "tab", "stripe"].contains(&look)),
+            "{look}"
+        );
+        // The tab's caps and the ribbon's point are closed paths.
+        let paths = nodes
+            .iter()
+            .filter(|(_, n)| n.kind == NodeKind::Path)
+            .count();
+        let want = match look {
+            "tab" => 2,
+            "ribbon" => 1,
+            _ => 0,
+        };
+        assert_eq!(paths, want, "{look}");
+        // Every head is a bar's height (plus its rule), the content below it.
+        let l = lay_fixed(&look_src(look));
+        let hr = rect_of(&l, head);
+        let rule = if ["underline", "tab"].contains(&look) {
+            h * 0.06
+        } else {
+            0.0
+        };
+        approx(hr.h / CM, h + rule);
+        let body = children(&d, "root")[1].0;
+        approx(rect_of(&l, body).y, hr.y + hr.h);
+    }
+    // The stripe sits on the accent at 12 %; an explicit tint or "" wins.
+    let tint = |src: &str| {
+        let d = raw(src);
+        solid(&children(&d, "root")[0].1.fill)
+    };
+    assert_eq!(tint(&look_src("stripe")), "#2b46771f");
+    assert_eq!(
+        tint(
+            r##"style(#{ section_look: "stripe", section_tint: "#ff0000" }); page(9, 9, section("A", rect()))"##
+        ),
+        "#ff0000"
+    );
+    assert_eq!(
+        tint(
+            r#"style(#{ section_look: "stripe", section_tint: "" }); page(9, 9, section("A", rect()))"#
+        ),
+        ""
+    );
+}
+
+#[test]
+fn section_looks_per_section_and_errors() {
+    // A variant switches one section's look.
+    let d = raw(r#"page(20, 20, col([
+        section("A", rect()),
+        section("B", rect(), #{ variant: #{ section_look: "badge" } }),
+    ])).unit("cm")"#);
+    assert_eq!(texts(&d), ["1. A", "2", "B"]);
+    // No number, no badge.
+    let d = raw(
+        r#"style(#{ section_look: "badge", section_label_style: "" }); page(9, 9, section("A", rect()))"#,
+    );
+    assert_eq!(texts(&d), ["A"]);
+    assert!(fail(&look_src("wavy")).contains(r#"unknown look "wavy""#));
+}
+
+#[test]
+fn sections_as_cards() {
+    let d = raw(
+        r##"style(#{ section_fill: "#eeeeee", section_border: "#123456", section_radius: 0.5,
+                           section_border_width: 0.1 });
+                    page(20, 20, section("A", rect())).unit("cm")"##,
+    );
+    let s = &d.nodes["root"];
+    assert_eq!(solid(&s.fill), "#eeeeee");
+    assert_eq!(s.stroke, hex("#123456"));
+    approx(s.stroke_width.unwrap(), 0.1);
+    approx(s.corner_radius.unwrap(), 0.5);
+    assert!(s.clip, "rounded cards clip to their corners");
+    // Off by default.
+    let d = raw(r#"page(20, 20, section("A", rect())).unit("cm")"#);
+    let s = &d.nodes["root"];
+    assert!(s.fill.is_none() && s.stroke.is_none() && !s.clip);
+    // An open title keeps clear of a card's edge.
+    let d = raw(
+        r##"style(#{ section_look: "underline", section_border: "#000000" });
+                    page(20, 20, section("A", rect())).unit("cm")"##,
+    );
+    let (_, head) = children(&d, "root")[0];
+    assert!(head.padding.left > 0.0);
+}
+
+#[test]
+fn takeaways_and_stats() {
+    let d = raw(
+        r#"page(20, 20, col([takeaway("Key"), stat("×12", "faster"), stat("95 %", "")])).unit("cm")"#,
+    );
+    let kids = children(&d, "root");
+    let (box_id, b) = kids[0];
+    assert_eq!(solid(&b.fill), "#2b4677");
+    let (_, t) = children(&d, box_id)[0];
+    assert_eq!(plain(t), "Key");
+    assert_eq!(t.color, hex("#ffffff"));
+    assert_eq!(t.font_weight, Some(700));
+    let (stat_id, _) = kids[1];
+    let parts = children(&d, stat_id);
+    assert_eq!(plain(parts[0].1), "×12");
+    assert_eq!(parts[0].1.font_size, Some(24.0));
+    assert_eq!(parts[0].1.color, hex("#2b4677"));
+    assert_eq!(plain(parts[1].1), "faster");
+    // No label: the figure alone.
+    assert_eq!(kids[2].1.kind, NodeKind::Text);
+    // The dark theme: pale-cyan accent, dark text on it; variants apply.
+    let d = raw(
+        r#"style("poster-dark"); page(20, 20, col([takeaway("K"), takeaway("Q", #{ takeaway_bold: false })]))"#,
+    );
+    let kids = children(&d, "root");
+    assert_eq!(solid(&kids[0].1.fill), "#caeefb");
+    assert_eq!(children(&d, kids[0].0)[0].1.color, hex("#10141f"));
+    assert_eq!(children(&d, kids[1].0)[0].1.font_weight, None);
+}
+
+#[test]
+fn poster_patterns_example() {
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    let src = std::fs::read_to_string(examples.join("poster_patterns.figs")).unwrap();
+    let doc = Document::from_script_in(&src, Some(&examples)).unwrap();
+    let l = layout(&doc, &NullMeasurer);
+    approx(l.page.width_pt, 84.1 * CM);
+    assert!(l.nodes[0].rect.h <= l.page.height_pt + 0.01);
+}
+
 // ---- columns, rows, separators -----------------------------------------------
 
 #[test]
