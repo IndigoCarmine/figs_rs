@@ -1,4 +1,7 @@
-// Layout sugar: page presets, boxes, grids, `fill_row`, `side`.
+// ---------------------------------------------------------------------------
+// Layout sugar: page presets, boxes, grids, `fill_row`, `side`
+// ---------------------------------------------------------------------------
+
 // Pixel density of every image without its own `.dpi(n)` (its natural size
 // = pixels / dpi inches), set on the page by `page(preset, root)` /
 // `poster(..)`; () = none (images fill the room they get). "file": the
@@ -62,8 +65,7 @@ fn page(preset, root) {
     if bg != "" { d = d.background(bg); }
     let dpi = image_dpi();
     if type_of(dpi) != "()" { d = d.image_dpi(dpi); }
-    let f = font_family();
-    if f == "" { d } else { d.font(f) }
+    with_font(d, font_family())
 }
 
 // Column / row with the default gap, stretched cross axis and bare strings.
@@ -120,23 +122,18 @@ fn fill_row_gap() { style_get("fill_row_gap", gap()) }
 fn fill_row(items) { fill_row(items, #{}) }
 fn fill_row(items, opts) {
     if type_of(items) != "array" { throw `fill_row(): expected an array of items (got ${type_of(items)})`; }
-    shape_opts("fill_row", opts, ["gap", "align", "captions"]);
-    let align = plot_opt(opts, "align", "start");
-    if !["start", "center", "end"].contains(align) {
-        throw `fill_row(): unknown align "${align}" (start, center, end)`;
-    }
+    check_opts("fill_row", opts, ["gap", "align", "captions"]);
+    let align = one_of("fill_row", "align", opt(opts, "align", "start"), ["start", "center", "end"]);
     let ns = nodes(items);
-    let caps = plot_opt(opts, "captions", ());
+    let caps = opt(opts, "captions", ());
     if type_of(caps) != "()" {
-        if caps != "overhang" && caps != "wrap" && caps != "auto" {
-            throw `fill_row(): unknown captions "${caps}" (overhang, wrap, auto)`;
-        }
+        one_of("fill_row", "captions", caps, ["overhang", "wrap", "auto"]);
         let over = if caps == "auto" { "auto" } else { caps == "overhang" };
         let out = [];
         for n in ns { out.push(recaption(n, over)); }
         ns = out;
     }
-    row(ns).equal_height().spacing(plot_opt(opts, "gap", fill_row_gap())).cross(align)
+    row(ns).equal_height().spacing(opt(opts, "gap", fill_row_gap())).cross(align)
 }
 
 // `n` rebuilt with its captions overhanging (`over`) or wrapping, when it
@@ -173,33 +170,28 @@ fn side_gap() { style_get("side_gap", gap()) }
 //   align  "center" (default), "start" (tops), "end", "stretch"
 fn side(main, note) { side(main, note, #{}) }
 fn side(main, note, opts) {
-    shape_opts("side", opts, ["side", "width", "gap", "align"]);
-    let where = plot_opt(opts, "side", "right");
-    if where != "right" && where != "left" { throw `side(): unknown side "${where}" (right, left)`; }
-    let align = plot_opt(opts, "align", "center");
-    if !["center", "start", "end", "stretch"].contains(align) {
-        throw `side(): unknown align "${align}" (center, start, end, stretch)`;
-    }
-    let n = if type_of(note) == "array" && !poster_is_rich(note) {
+    check_opts("side", opts, ["side", "width", "gap", "align"]);
+    let where = one_of("side", "side", opt(opts, "side", "right"), ["right", "left"]);
+    let align = one_of("side", "align", opt(opts, "align", "center"), ["center", "start", "end", "stretch"]);
+    let n = if type_of(note) == "array" && !is_rich(note) {
         let xs = [];
-        for x in note { xs.push(scheme_text("side", x, base_size(), "start")); }
+        for x in note { xs.push(text_or_node("side", x, base_size(), "start")); }
         col(xs).spacing(caption_gap()).stretch()
-    } else { scheme_text("side", note, base_size(), "start") };
+    } else { text_or_node("side", note, base_size(), "start") };
     let m = as_node(main);
-    let w = plot_opt(opts, "width", side_width());
-    let t = type_of(w);
-    if t == "i64" || t == "f64" {
+    let w = opt(opts, "width", side_width());
+    if is_num(w) {
         if !(w > 0 && w < 1) { throw `side(): width must be a fraction in (0, 1), "5cm" or "auto" (got ${w})`; }
         m = m.flex(1.0 - w);
         n = n.flex(w);
     } else if w == "auto" {
         m = m.flex(1);
     } else {
-        let v = poster_cm("side", w);
+        let v = cm_length("side", w);
         if type_of(v) == "()" { throw `side(): width must be a fraction in (0, 1), "5cm" or "auto" (got ${w})`; }
         m = m.flex(1);
         n = n.width(v);
     }
-    let g = plot_opt(opts, "gap", side_gap());
+    let g = opt(opts, "gap", side_gap());
     row(if where == "right" { [m, n] } else { [n, m] }).spacing(g).cross(align)
 }

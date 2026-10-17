@@ -52,10 +52,7 @@ fn fg() { style_get("fg", "") }
 // Plot foreground: axes, frame, ticks, tick and axis labels, titles, legend
 // text of the swatch legend, error bars without a colour of their own,
 // `plot_text` / `plot_arrow` annotations. Follows `fg()` (black by default).
-fn plot_fg() {
-    let f = fg();
-    style_get("plot_fg", if f == "" { "#000000" } else { f })
-}
+fn plot_fg() { style_get("plot_fg", fg_or("#000000")) }
 
 // Fill behind a whole plot panel (axes, labels and all); "" (default) leaves
 // it transparent over whatever is behind (the page background).
@@ -204,12 +201,7 @@ fn style_keys() {
 // `style(map)` merges individual keys over the current style.
 fn style(x) {
     if type_of(x) == "map" {
-        let keys = style_keys();
-        for k in x.keys() {
-            if !keys.contains(k) {
-                throw `style(): unknown key "${k}" (keys are hook names: ${list_names(keys)})`;
-            }
-        }
+        check_style_keys("style", "key", x);
         style_set(x);
         return;
     }
@@ -240,12 +232,7 @@ fn styled(m, f) {
     if type_of(f) != "Fn" {
         throw `styled(): expected a function building the nodes second, e.g. || scheme([..]) (got ${type_of(f)})`;
     }
-    let keys = style_keys();
-    for k in m.keys() {
-        if !keys.contains(k) {
-            throw `styled(): unknown key "${k}" (keys are hook names: ${list_names(keys)})`;
-        }
-    }
+    check_style_keys("styled", "key", m);
     style_push(m);
     let out = ();
     try {
@@ -258,16 +245,6 @@ fn styled(m, f) {
     out
 }
 fn with_style(m, f) { styled(m, f) }
-
-// "a, b, c" from an array of strings (for error messages).
-fn list_names(xs) {
-    let out = "";
-    for x in xs {
-        if out != "" { out += ", "; }
-        out += x;
-    }
-    out
-}
 
 // Component variants: `style(#{ frame_variants: #{ box: #{ frame_color:
 // "#7f7f7f", frame_radius: 0 } } })` names a bundle of style keys, and
@@ -296,48 +273,74 @@ fn variant_push(who, v) {
     style_push(m);
 }
 
+// `f()` (a closure building a node) with variant `v` of component `who` in
+// force (see `variant_push`); the style is restored afterwards.
+fn in_variant(who, v, f) {
+    variant_push(who, v);
+    let out = f.call();
+    style_pop();
+    out
+}
+
 // ---------------------------------------------------------------------------
-// Shared helpers: options, values, fonts, lists, positions
+// Shared helpers: options, values, fonts, lists
 // ---------------------------------------------------------------------------
+//
+// Every component checks its options, values and positions through these,
+// so the error messages read alike everywhere: `fill_row(): unknown align
+// "x" (start, center, end)`.
+
 // `opts[k]`, or `d` when absent.
-fn plot_opt(opts, k, d) { if opts.contains(k) { opts[k] } else { d } }
+fn opt(opts, k, d) { if opts.contains(k) { opts[k] } else { d } }
 
-// `opts` checked against the option names `keys` of shape `who`.
-fn shape_opts(who, opts, keys) {
+// `opts` checked to be a map whose keys are all option names in `keys` of
+// function `who` (`who(): unknown option "k" (a, b, c)`).
+fn check_opts(who, opts, keys) {
     if type_of(opts) != "map" { throw `${who}(): options must be a map (got ${type_of(opts)})`; }
-    for k in opts.keys() {
-        if !keys.contains(k) { throw `${who}(): unknown option "${k}" (${list_names(keys)})`; }
+    check_keys(who, "option", opts, keys);
+}
+
+// The keys of map `m` checked against `keys`; `what` names them in the error
+// (`who(): unknown key "k" (a, b)`).
+fn check_keys(who, what, m, keys) {
+    for k in m.keys() {
+        if !keys.contains(k) { throw `${who}(): unknown ${what} "${k}" (${list_names(keys)})`; }
     }
 }
 
-// A length option: a number, or a multiple of `w` as a string ("3x").
-fn shape_len(who, v, w) {
-    let t = type_of(v);
-    if t == "i64" || t == "f64" { return v.to_float(); }
-    if t == "string" && v.ends_with("x") {
-        let s = v.sub_string(0, v.len() - 1);
-        try { return parse_float(s) * w; } catch { }
-    }
-    throw `${who}(): expected a length or a multiple like "3x" (got ${v})`;
-}
-
-// `opts` checked against the option names `keys` of `who`.
-fn poster_check_opts(who, opts, keys) {
-    if type_of(opts) != "map" { throw `${who}(): options must be a map (got ${type_of(opts)})`; }
-    for k in opts.keys() {
-        if !keys.contains(k) { throw `${who}(): unknown option "${k}" (${list_names(keys)})`; }
+// The keys of map `m` checked to be style keys (`what` names them in the
+// error: "key", "style key").
+fn check_style_keys(who, what, m) {
+    let keys = style_keys();
+    for k in m.keys() {
+        if !keys.contains(k) {
+            throw `${who}(): unknown ${what} "${k}" (keys are hook names: ${list_names(keys)})`;
+        }
     }
 }
 
-// A finite float (NaN, infinities and non-numbers are not).
-fn plot_finite(v) {
+// `v` checked to be one of `allowed` (`who(): unknown what "v" (a, b)`).
+fn one_of(who, what, v, allowed) {
+    if !allowed.contains(v) { throw `${who}(): unknown ${what} "${v}" (${list_names(allowed)})`; }
+    v
+}
+
+// `x`, or `[x]` when it is not an array.
+fn as_array(x) { if type_of(x) == "array" { x } else { [x] } }
+
+// Is `v` a number (an integer or a float)?
+fn is_num(v) { let t = type_of(v); t == "i64" || t == "f64" }
+
+// A finite number (NaN, infinities and non-numbers are not).
+fn finite_num(v) {
     let t = type_of(v);
     if t == "i64" { return true; }
     t == "f64" && v == v && v.abs() < 1e300
 }
 
-// `xs` as an array of floats (NaN for gaps); throws for non-arrays/non-numbers.
-fn plot_numbers(name, what, xs) {
+// `xs` as an array of floats; throws for non-arrays / non-numbers, naming
+// function `name` and the argument `what`.
+fn numbers(name, what, xs) {
     if type_of(xs) != "array" {
         throw `${name}(): ${what} must be an array of numbers (got ${type_of(xs)})`;
     }
@@ -351,21 +354,18 @@ fn plot_numbers(name, what, xs) {
     out
 }
 
-// Is paint `p` (a colour string or a gradient) set, i.e. not ""?
-fn poster_has_paint(p) { type_of(p) != "string" || p != "" }
-
-// Is `x` rich text: an array holding spans (`[span(..), ..]`, `markup(..)`)?
-fn poster_is_rich(x) {
-    if type_of(x) != "array" { return false; }
-    for v in x { if type_of(v) == "Span" { return true; } }
-    false
+// A length option: a number, or a multiple of `w` as a string ("3x").
+fn len_or_multiple(who, v, w) {
+    if is_num(v) { return v.to_float(); }
+    if type_of(v) == "string" && v.ends_with("x") {
+        let s = v.sub_string(0, v.len() - 1);
+        try { return parse_float(s) * w; } catch { }
+    }
+    throw `${who}(): expected a length or a multiple like "3x" (got ${v})`;
 }
 
-// `prefix` (a string) before `s`, a string or spans.
-fn poster_prefix(prefix, s) { if type_of(s) == "string" { prefix + s } else { [span(prefix)] + s } }
-
 // The length in cm of a "12cm" / "12 cm" size, or () for anything else.
-fn poster_cm(who, w) {
+fn cm_length(who, w) {
     if type_of(w) != "string" || !w.ends_with("cm") { return (); }
     let s = w.sub_string(0, w.len() - 2);
     s.trim();
@@ -375,14 +375,49 @@ fn poster_cm(who, w) {
     v
 }
 
+// Is paint `p` (a colour string or a gradient) set, i.e. not ""?
+fn has_paint(p) { type_of(p) != "string" || p != "" }
+
+// The theme foreground `fg()`, or `c` while it is "" (unset).
+fn fg_or(c) { let f = fg(); if f == "" { c } else { f } }
+
+// Is `x` rich text: an array holding spans (`[span(..), ..]`, `markup(..)`)?
+fn is_rich(x) {
+    if type_of(x) != "array" { return false; }
+    for v in x { if type_of(v) == "Span" { return true; } }
+    false
+}
+
+// Is `x` text a component sets itself: a string or rich text (spans)?
+fn is_text(x) { type_of(x) == "string" || is_rich(x) }
+
+// Is `x` "nothing": () or ""?
+fn is_blank(x) { type_of(x) == "()" || (type_of(x) == "string" && x == "") }
+
+// `prefix` (a string) before `s`, a string or spans.
+fn text_prefix(prefix, s) { if type_of(s) == "string" { prefix + s } else { [span(prefix)] + s } }
+
 // Is font spec `f` unset ("" / [] / ())?
-fn table_no_font(f) {
+fn font_unset(f) {
     let k = type_of(f);
     k == "()" || (k == "string" && f == "") || (k == "array" && f.len() == 0)
 }
 
+// `t` in `font`, unless it is unset ("" / [] / (): no font of its own).
+fn with_font(t, font) { if font_unset(font) { t } else { t.font(font) } }
+
+// "a, b, c" from an array of strings (for error messages).
+fn list_names(xs) {
+    let out = "";
+    for x in xs {
+        if out != "" { out += ", "; }
+        out += x;
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
-// Bare-string sugar
+// Bare strings and node lists
 // ---------------------------------------------------------------------------
 
 // A bare string (or spans) becomes `body(s)`; an array — what helpers such
@@ -391,9 +426,8 @@ fn table_no_font(f) {
 // along in a column around it, taking no room), or its items in a `vbox`;
 // anything else passes through untouched.
 fn as_node(x) {
-    let t = type_of(x);
-    if t == "string" || poster_is_rich(x) { return body(x); }
-    if t != "array" { return x; }
+    if is_text(x) { return body(x); }
+    if type_of(x) != "array" { return x; }
     let s = split_links(x);
     let items = [];
     for v in s.items { items.push(as_node(v)); }
@@ -418,13 +452,14 @@ fn is_link(x) { type_of(x) == "Node" && x.kind() == "connector" }
 // `xs` (an array, or one value; nested arrays spliced in, spans kept whole)
 // split into `items` — everything that takes room, as given — and `links`
 // (connectors, which take none): list helpers size and count the items and
-// add the links to the container they build.
+// add the links to the container they build. The one splice rule of the
+// framework.
 fn split_links(xs) {
     let items = [];
     let links = [];
-    if type_of(xs) != "array" || poster_is_rich(xs) { xs = [xs]; }
+    if type_of(xs) != "array" || is_rich(xs) { xs = [xs]; }
     for x in xs {
-        if type_of(x) == "array" && !poster_is_rich(x) {
+        if type_of(x) == "array" && !is_rich(x) {
             let s = split_links(x);
             items.append(s.items);
             links.append(s.links);
@@ -437,9 +472,17 @@ fn split_links(xs) {
     #{ items: items, links: links }
 }
 
-// The positions of `overlay`, in reading order, and their [main, cross]
-// alignment in a filling column (main is vertical, cross horizontal).
-fn overlay_positions() {
+// ---------------------------------------------------------------------------
+// Positions and corners
+// ---------------------------------------------------------------------------
+//
+// One table of the nine position names (`overlay`, `callout_to`) and the
+// four corners (`pin`, `labeled`, `scalebar`, `inset`, the legend), with the
+// [main, cross] alignment that puts a node there in a filling column.
+
+// The positions, in reading order: [name, main, cross] (main is vertical,
+// cross horizontal).
+fn position_table() {
     [
         ["top-left", "start", "start"], ["top", "start", "center"], ["top-right", "start", "end"],
         ["left", "center", "start"], ["center", "center", "center"], ["right", "center", "end"],
@@ -447,30 +490,48 @@ fn overlay_positions() {
     ]
 }
 
+// The position names, in reading order.
+fn position_names() {
+    let out = [];
+    for p in position_table() { out.push(p[0]); }
+    out
+}
+
+// The four corner names.
+fn corner_names() { ["top-left", "top-right", "bottom-left", "bottom-right"] }
+
+// The corners in the order "auto" placement prefers them.
+fn auto_corner_order() { ["top-right", "top-left", "bottom-right", "bottom-left"] }
+
+// [main, cross] of position `p` (a known name) in a filling column.
+fn position_align(p) {
+    for r in position_table() { if r[0] == p { return [r[1], r[2]]; } }
+    throw `unknown position "${p}"`;
+}
+
+// `corner` checked to be a corner name; `who` names what set it (a function
+// or a hook), so the error points at what the user actually set.
+fn check_corner(who, corner) {
+    if !corner_names().contains(corner) {
+        throw `${who}(): unknown corner "${corner}" (${list_names(corner_names())})`;
+    }
+    corner
+}
+
 // `pin` whose corner came from `who` (a function or hook name), so an unknown
 // corner is reported against what the user actually set (`label_corner(): …`).
 fn pin_in(who, node, corner, inset) {
     if corner == "top-left" { return node.at(inset, inset); }
-    let align = #{
-        "top-right": ["start", "end"],
-        "bottom-left": ["end", "start"],
-        "bottom-right": ["end", "end"],
-    };
-    if !align.contains(corner) {
-        throw `${who}(): unknown corner "${corner}" (top-left, top-right, bottom-left, bottom-right)`;
-    }
-    let a = align[corner];
+    let a = position_align(check_corner(who, corner));
     col([node]).pad(inset).main(a[0]).cross(a[1])
 }
 
 // The corner of the [0, 1]² data area with the fewest `samples` ([u, v],
-// v up) in it, preferring top-right, top-left, bottom-right, bottom-left.
-fn legend_auto_corner(samples) { plot_auto_corner(samples, []) }
-
-// `legend_auto_corner`, skipping the corners in `taken` (the legend's, an
-// earlier inset's); the first free corner if all hold data alike.
-fn plot_auto_corner(samples, taken) {
-    let corners = ["top-right", "top-left", "bottom-right", "bottom-left"];
+// v up) in it, skipping the corners in `taken` (the legend's, an earlier
+// inset's), preferring `auto_corner_order()`; the first free corner if all
+// hold data alike. The one "auto" corner chooser (legend and insets).
+fn auto_corner(samples, taken) {
+    let corners = auto_corner_order();
     let best = corners[0];
     let best_n = -1;
     for c in corners {

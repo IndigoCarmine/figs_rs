@@ -10,21 +10,21 @@ fn author_runs(authors, affiliations) {
     for a in authors {
         if i > 0 { runs = runs_push(runs, author_sep(), false); }
         i += 1;
-        if type_of(a) == "string" || poster_is_rich(a) {
+        if type_of(a) == "string" || is_rich(a) {
             runs = runs_push(runs, a, false);
             continue;
         }
         if type_of(a) != "map" || !a.contains("name") {
             throw `poster_header(): an author is a name or #{ name, aff, presenter } (got ${type_of(a)})`;
         }
-        if plot_opt(a, "presenter", false) {
+        if opt(a, "presenter", false) {
             let m = presenter_mark();
             // A mark of its own (a span in `poster_symbol_font()`) when set.
-            runs = runs_push(runs, if m == "" || table_no_font(poster_symbol_font()) { m }
+            runs = runs_push(runs, if m == "" || font_unset(poster_symbol_font()) { m }
                                    else { [poster_mark_font(span(m))] }, false);
         }
         runs = runs_push(runs, a.name, false);
-        let aff = plot_opt(a, "aff", []);
+        let aff = opt(a, "aff", []);
         if type_of(aff) != "array" { aff = [aff]; }
         if numbered && aff.len() > 0 {
             let s = "";
@@ -91,8 +91,8 @@ fn runs_line(runs, size) {
 // and affiliations are strings or rich text (`markup("…")`, span arrays):
 // e.g. a name in another font, an affiliation with an italic part.
 fn author_line(authors, affiliations) {
-    if type_of(authors) != "array" || poster_is_rich(authors) { authors = [authors]; }
-    if type_of(affiliations) != "array" || poster_is_rich(affiliations) { affiliations = [affiliations]; }
+    if type_of(authors) != "array" || is_rich(authors) { authors = [authors]; }
+    if type_of(affiliations) != "array" || is_rich(affiliations) { affiliations = [affiliations]; }
     let size = author_size();
     let who = author_runs(authors, affiliations);
     if affiliations.len() == 0 { return runs_line(who, size); }
@@ -140,17 +140,17 @@ fn poster_header(opts) {
             throw `poster_header(): unknown key "${k}" (${list_names(keys)})`;
         }
     }
-    let title = plot_opt(opts, "title", "");
-    let tnode = if type_of(title) != "string" && !poster_is_rich(title) {
+    let title = opt(opts, "title", "");
+    let tnode = if type_of(title) != "string" && !is_rich(title) {
         title
     } else if type_of(title) != "string" || title != "" {
         let t = fg_text(title).size(poster_title_size()).bold().center();
         let f = poster_title_font();
         if f == "" { t } else { t.font(f) }
     } else { () };
-    let ti = plot_opt(opts, "title_inset", poster_title_inset());
+    let ti = opt(opts, "title_inset", poster_title_inset());
     if type_of(ti) != "array" { ti = [ti, ti]; }
-    if ti.len() != 2 || !plot_finite(ti[0]) || !plot_finite(ti[1]) || ti[0] < 0 || ti[1] < 0 {
+    if ti.len() != 2 || !finite_num(ti[0]) || !finite_num(ti[1]) || ti[0] < 0 || ti[1] < 0 {
         throw `poster_header(): title_inset is a length in cm >= 0 or [left, right] (got ${ti})`;
     }
     if type_of(tnode) != "()" && (ti[0] > 0 || ti[1] > 0) {
@@ -159,16 +159,16 @@ fn poster_header(opts) {
     // The number at the right end of the title row, so a long title wraps
     // before it instead of running under it, while the author line below
     // keeps the full width.
-    let num = plot_opt(opts, "number", "");
-    let where = plot_opt(opts, "number_position", poster_number_position());
+    let num = opt(opts, "number", "");
+    let where = opt(opts, "number_position", poster_number_position());
     if !["title", "above"].contains(where) {
         throw `poster_header(): unknown number_position "${where}" (title, above)`;
     }
     let above = ();
     if num != "" {
         let n = fg_text(num).size(poster_number_size()).bold();
-        let ni = plot_opt(opts, "number_inset", poster_number_inset());
-        if !plot_finite(ni) || ni < 0 { throw `poster_header(): number_inset is a length in cm >= 0 (got ${ni})`; }
+        let ni = opt(opts, "number_inset", poster_number_inset());
+        if !finite_num(ni) || ni < 0 { throw `poster_header(): number_inset is a length in cm >= 0 (got ${ni})`; }
         if ni > 0 { n = n.margin(#{ right: ni }); }
         if where == "above" {
             above = n.align("right");
@@ -179,19 +179,19 @@ fn poster_header(opts) {
     }
     let main = if type_of(tnode) == "()" { [] } else { [tnode] };
     if type_of(above) != "()" { main.insert(0, above); }
-    let authors = plot_opt(opts, "authors", []);
+    let authors = opt(opts, "authors", []);
     if type_of(authors) != "array" || authors.len() > 0 {
-        main.push(author_line(authors, plot_opt(opts, "affiliations", [])));
+        main.push(author_line(authors, opt(opts, "affiliations", [])));
     }
     let parts = [];
-    let lb = plot_opt(opts, "logo_box", poster_logo_box());
+    let lb = opt(opts, "logo_box", poster_logo_box());
     if type_of(lb) != "()" {
-        lb = plot_numbers("poster_header", "`logo_box`", lb);
+        lb = numbers("poster_header", "`logo_box`", lb);
         if lb.len() != 2 || !(lb[0] > 0.0) || !(lb[1] > 0.0) {
             throw "poster_header(): logo_box is [w, h] in cm";
         }
     }
-    for l in plot_opt(opts, "logos", []) {
+    for l in opt(opts, "logos", []) {
         let n = if type_of(l) == "string" { image(l) } else { l };
         parts.push(if type_of(lb) == "()" { n.height(poster_logo_height()) } else {
             // A fixed box, the logo contained and centred in it.

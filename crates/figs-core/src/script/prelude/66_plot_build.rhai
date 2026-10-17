@@ -74,7 +74,7 @@ fn plot(opts, series) {
     }
     // A per-plot style: pushed over the current one while the plot is
     // built, then the registry is restored exactly (nothing leaks out).
-    let st = plot_opt(opts, "style", ());
+    let st = opt(opts, "style", ());
     if type_of(st) == "()" { return plot_build(opts, series); }
     if type_of(st) != "map" { throw `plot(): style must be a map of style keys (got ${type_of(st)})`; }
     let keys = style_keys();
@@ -92,8 +92,8 @@ fn plot(opts, series) {
 // `plot(opts, series)` once its options are checked and its `style` is in
 // force.
 fn plot_build(opts, series) {
-    let xlog = plot_opt(opts, "xscale", "linear");
-    let ylog = plot_opt(opts, "yscale", "linear");
+    let xlog = opt(opts, "xscale", "linear");
+    let ylog = opt(opts, "yscale", "linear");
     for sc in [xlog, ylog] {
         if sc != "linear" && sc != "log" { throw `plot(): scale must be "linear" or "log" (got "${sc}")`; }
     }
@@ -106,7 +106,7 @@ fn plot_build(opts, series) {
     series = flat;
     let notes = series.filter(|x| plot_is_annotation(x));
     let series = plot_colored(plot_only_series(series));
-    let extra = plot_opt(opts, "marks", []);
+    let extra = opt(opts, "marks", []);
     if type_of(extra) != "array" { extra = [extra]; }
     notes += extra.filter(|x| plot_is_annotation(x));
     extra = extra.filter(|x| !plot_is_annotation(x));
@@ -128,7 +128,7 @@ fn plot_build(opts, series) {
             if xlog || ylog { throw "plot(): bars need linear axes"; }
             nbars += 1;
             if s.x.len() > 0 && type_of(s.x[0]) != "string" {
-                for v in s.x { if plot_finite(v) { bar_xs.push(v); } }
+                for v in s.x { if finite_num(v) { bar_xs.push(v); } }
             }
         }
     }
@@ -171,7 +171,7 @@ fn plot_build(opts, series) {
                 xmin = plot_min(xmin, x - bw / 2.0); xmax = plot_max(xmax, x + bw / 2.0);
                 ymin = plot_min(ymin, 0.0); ymax = plot_max(ymax, 0.0);
             }
-            if type_of(s.yerr) != "()" && plot_finite(s.yerr[i]) {
+            if type_of(s.yerr) != "()" && finite_num(s.yerr[i]) {
                 let e = s.yerr[i].to_float().abs();
                 let lo = plot_tf(s.y[i] - e, ylog);
                 let hi = plot_tf(s.y[i] + e, ylog);
@@ -182,10 +182,10 @@ fn plot_build(opts, series) {
         prepared.push(#{ s: s, pts: pts, errs: errs, bw: bw });
     }
 
-    let xa = plot_axis("x", xmin, xmax, plot_opt(opts, "x", ()), xlog, plot_opt(opts, "xticks", ()), cats);
-    let ya = plot_axis("y", ymin, ymax, plot_opt(opts, "y", ()), ylog, plot_opt(opts, "yticks", ()), []);
-    xa = plot_relabel(xa, plot_opt(opts, "xtick_format", ()), xlog, "x");
-    ya = plot_relabel(ya, plot_opt(opts, "ytick_format", ()), ylog, "y");
+    let xa = plot_axis("x", xmin, xmax, opt(opts, "x", ()), xlog, opt(opts, "xticks", ()), cats);
+    let ya = plot_axis("y", ymin, ymax, opt(opts, "y", ()), ylog, opt(opts, "yticks", ()), []);
+    xa = plot_relabel(xa, opt(opts, "xtick_format", ()), xlog, "x");
+    ya = plot_relabel(ya, opt(opts, "ytick_format", ()), ylog, "y");
     let x0 = xa.lo; let x1 = xa.hi; let y0 = ya.lo; let y1 = ya.hi;
 
     // Data area children (all positions in data units).
@@ -257,7 +257,7 @@ fn plot_build(opts, series) {
 
     // Frame and ticks, on top of the data.
     let fg = plot_fg();
-    let frame = plot_opt(opts, "frame", plot_frame());
+    let frame = opt(opts, "frame", plot_frame());
     if frame == "open" {
         marks.push(path([[x0, y1], [x0, y0], [x1, y0]]).viewbox(x0, y1, x1, y0)
             .stroke(fg).stroke_width(lw).cap("square"));
@@ -275,8 +275,8 @@ fn plot_build(opts, series) {
     // area (anchored at their far end instead).
     let xan = if xin { 1 } else { 0 };
     let yan = if yin { 0 } else { 1 };
-    let xminor = xa.minor + plot_minor(xa, xlog, plot_opt(opts, "xminor", minor_ticks()), "xminor");
-    let yminor = ya.minor + plot_minor(ya, ylog, plot_opt(opts, "yminor", minor_ticks()), "yminor");
+    let xminor = xa.minor + plot_minor(xa, xlog, opt(opts, "xminor", minor_ticks()), "xminor");
+    let yminor = ya.minor + plot_minor(ya, ylog, opt(opts, "yminor", minor_ticks()), "yminor");
     if xa.marks {
         for t in xa.ticks { marks.push(line(0, 0, 0, tl).stroke(fg).stroke_width(lw).at(t, y0).anchor(0, xan)); }
         for t in xminor { marks.push(line(0, 0, 0, tl * 0.6).stroke(fg).stroke_width(lw * 0.8).at(t, y0).anchor(0, xan)); }
@@ -292,7 +292,7 @@ fn plot_build(opts, series) {
     let area = [stack(marks + extra).viewbox(x0, y1, x1, y0)];
 
     // Legend over the data area.
-    let where = plot_opt(opts, "legend", legend_corner());
+    let where = opt(opts, "legend", legend_corner());
     if type_of(where) == "bool" { where = if where { legend_corner() } else { "" }; }
     let lstyle = legend_style();
     let lat = ();
@@ -303,10 +303,10 @@ fn plot_build(opts, series) {
                 throw `plot(): unknown legend option "${k}" (style, corner, at, anchor)`;
             }
         }
-        lstyle = plot_opt(where, "style", lstyle);
-        lat = plot_opt(where, "at", ());
-        lanchor = plot_opt(where, "anchor", lanchor);
-        where = plot_opt(where, "corner", legend_corner());
+        lstyle = opt(where, "style", lstyle);
+        lat = opt(where, "at", ());
+        lanchor = opt(where, "anchor", lanchor);
+        where = opt(where, "corner", legend_corner());
     } else if where == "text" || where == "swatch" {
         lstyle = where;
         where = legend_corner();
@@ -315,8 +315,8 @@ fn plot_build(opts, series) {
     for s in series { if s.label != "" { labelled = true; } }
     let taken = [];      // corners holding the legend / an inset
     if labelled && type_of(lat) != "()" {
-        let p = plot_numbers("plot", "legend `at`", lat);
-        let la = plot_numbers("plot", "legend `anchor`", lanchor);
+        let p = numbers("plot", "legend `at`", lat);
+        let la = numbers("plot", "legend `anchor`", lanchor);
         if p.len() != 2 || la.len() != 2 { throw "plot(): legend `at` and `anchor` must be [x, y]"; }
         let px = plot_tf(p[0], xlog);
         let py = plot_tf(p[1], ylog);
@@ -324,14 +324,14 @@ fn plot_build(opts, series) {
         area[0] = stack(marks + extra + [legend_box(series, lstyle).at(px, py).anchor(la[0], la[1])])
             .viewbox(x0, y1, x1, y0);
     } else if where != "" && labelled {
-        if where == "auto" { where = legend_auto_corner(samples); }
+        if where == "auto" { where = auto_corner(samples, []); }
         area.push(pin(legend_box(series, lstyle), where, base_size() * 0.03));
         taken.push(where);
     }
 
     // Corner insets, over the legend's corner only if asked for by name.
     for a in corner_insets {
-        let c = if a.corner == "auto" { plot_auto_corner(samples, taken) } else { a.corner };
+        let c = if a.corner == "auto" { auto_corner(samples, taken) } else { a.corner };
         taken.push(c);
         area.push(inset_in_corner(a, c));
     }
@@ -345,12 +345,12 @@ fn plot_build(opts, series) {
     // axis ends — and nothing spills past the panel.
     let xpad = plot_len(opts, "xtick_label_pad", xtick_label_pad());   // tick -> label (cm)
     let ypad = plot_len(opts, "ytick_label_pad", ytick_label_pad());
-    let mode = plot_opt(opts, "tick_label_pad_mode", tick_label_pad_mode());
+    let mode = opt(opts, "tick_label_pad_mode", tick_label_pad_mode());
     if mode != "box" && mode != "baseline" {
         throw plot_who(opts, "tick_label_pad_mode") + ` must be "box" or "baseline" (got "${mode}")`;
     }
     let apad = axis_label_pad();                   // title <-> unrotated y label
-    if !plot_finite(apad) || apad < 0 {
+    if !finite_num(apad) || apad < 0 {
         throw `axis_label_pad(): must be a length >= 0 cm (got ${apad}); place a label closer with xlabel_offset / ylabel_offset`;
     }
     let xlpad = plot_label_pad(opts, "xlabel_pad", xlabel_pad(), "xlabel_offset");
@@ -401,7 +401,7 @@ fn plot_build(opts, series) {
     // label), then room for the ticks — after the y label, when it is rotated
     // (`ylabel_rotated()`): a quarter turn swaps its footprint, so in the
     // stretched row it is one line wide and as long as the axis, centred on it.
-    let ylabel = plot_opt(opts, "ylabel", "");
+    let ylabel = opt(opts, "ylabel", "");
     let rotated = plot_has_label(ylabel) && ylabel_rotated();
     let yband = [];
     if rotated {
@@ -437,7 +437,7 @@ fn plot_build(opts, series) {
     } else {
         [rect().height(xtl + xpad), stack(xl).viewbox(x0, 0, x1, 1)]
     };
-    let xlabel = plot_opt(opts, "xlabel", "");
+    let xlabel = opt(opts, "xlabel", "");
     if plot_has_label(xlabel) {
         let t = plot_label(xlabel, asize, afont).center();
         if type_of(xoff) == "()" {
@@ -457,7 +457,7 @@ fn plot_build(opts, series) {
     // under it, its bottom a quarter of the band (two lines) or half the
     // title (one) above the axis — clear of the top tick label's overhang
     // as long as the title is no smaller than the tick labels.
-    let ptitle = plot_opt(opts, "title", "");
+    let ptitle = opt(opts, "title", "");
     let top = [];
     if plot_has_label(ptitle) {
         top.push(plot_label(ptitle, plot_title_size(), plot_title_font()).center());
@@ -478,7 +478,7 @@ fn plot_build(opts, series) {
         parts.push(col(top).spacing(apad).stretch().y(y1).anchor(0, k));
     }
 
-    let fb = plot_opt(opts, "frame_box", plot_frame_box());
+    let fb = opt(opts, "frame_box", plot_frame_box());
     if type_of(fb) != "bool" { throw `plot(): frame_box must be true or false (got ${fb})`; }
     let body = stack(parts).viewbox(x0, y1, x1, y0);
     let node = if fb {
@@ -508,7 +508,7 @@ fn plot_build(opts, series) {
 // Do the ticks of one axis point in? Plot option `opt` ("xtick_direction" /
 // "ytick_direction"), else `dir` (`tick_direction()`).
 fn plot_tick_inward(opts, opt, dir) {
-    let d = plot_opt(opts, opt, dir);
+    let d = opt(opts, opt, dir);
     if d != "out" && d != "in" { throw `plot(): ${opt} must be "out" or "in" (got "${d}")`; }
     d == "in"
 }
@@ -520,8 +520,8 @@ fn plot_who(opts, key) { if opts.contains(key) { `plot(): ${key}` } else { `${ke
 // Plot length `key` (cm): the option when given, else the hook value `v`,
 // as a float; anything but a finite number is an error.
 fn plot_len(opts, key, v) {
-    let x = plot_opt(opts, key, v);
-    if !plot_finite(x) { throw plot_who(opts, key) + ` must be a length in cm (got ${x})`; }
+    let x = opt(opts, key, v);
+    if !finite_num(x) { throw plot_who(opts, key) + ` must be a length in cm (got ${x})`; }
     x.to_float()
 }
 
@@ -538,9 +538,9 @@ fn plot_label_pad(opts, key, v, offset) {
 // An axis-label offset: () (follow the tick labels), or a length > 0 (cm
 // from the axis to the label's baseline).
 fn plot_label_offset(opts, key, v) {
-    let x = plot_opt(opts, key, v);
+    let x = opt(opts, key, v);
     if type_of(x) == "()" { return x; }
-    if !plot_finite(x) || !(x > 0) {
+    if !finite_num(x) || !(x > 0) {
         throw plot_who(opts, key) + ` must be a length > 0 cm from the axis to the label's baseline, or () (got ${x})`;
     }
     x.to_float()

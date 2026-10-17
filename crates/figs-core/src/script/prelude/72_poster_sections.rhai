@@ -32,14 +32,14 @@ fn section_bar(s) {
     } else {
         // The title's first baseline `b` cm below the bar top (cm down,
         // fractions across), centred across.
-        if !plot_finite(b) || !(h > 0) {
+        if !finite_num(b) || !(h > 0) {
             throw `section_title_baseline(): must be a length in cm below the bar top, or () (got ${b})`;
         }
         stack([t.at(0.5, b).anchor(0.5, "baseline")]).viewbox(0, 0, 1, h)
     };
     bar = bar.height(h);
     let fill = section_bar_fill();
-    if poster_has_paint(fill) { bar = bar.fill(fill); }
+    if has_paint(fill) { bar = bar.fill(fill); }
     let b = section_bar_border();
     if b != "" { bar = bar.stroke(b).stroke_width(section_bar_border_width()); }
     let r = section_bar_radius();
@@ -71,10 +71,10 @@ fn poster_effect(who, n, kind, v, look) {
         if !keys.contains(k) { throw `${who}(): unknown key "${k}" (${list_names(keys)})`; }
     }
     if kind == "glow" {
-        return n.glow(plot_opt(v, "blur", 0), plot_opt(v, "color", "#000000"));
+        return n.glow(opt(v, "blur", 0), opt(v, "color", "#000000"));
     }
-    n.shadow(plot_opt(v, "dx", 0), plot_opt(v, "dy", 0), plot_opt(v, "blur", 0),
-             plot_opt(v, "spread", 0), plot_opt(v, "color", "#00000080"))
+    n.shadow(opt(v, "dx", 0), opt(v, "dy", 0), opt(v, "blur", 0),
+             opt(v, "spread", 0), opt(v, "color", "#00000080"))
 }
 
 // The next section number (1, 2, … in the order sections are built), or `n`
@@ -119,7 +119,7 @@ fn section(number, title, content, opts) {
 }
 
 fn section_make(n, title, content, opts) {
-    poster_check_opts("section", opts, ["footer", "overflow", "variant", "fit", "valign"]);
+    check_opts("section", opts, ["footer", "overflow", "variant", "fit", "valign"]);
     if opts.contains("variant") {
         variant_push("section", opts.variant);
         opts.remove("variant");
@@ -128,7 +128,7 @@ fn section_make(n, title, content, opts) {
         return s;
     }
     let node = type_of(title) == "Node";
-    if type_of(title) != "string" && !node && !poster_is_rich(title) {
+    if type_of(title) != "string" && !node && !is_rich(title) {
         throw `section(): the title must be a string, spans or a text node (got ${type_of(title)})`;
     }
     let label = if type_of(n) == "string" { n } else {
@@ -140,11 +140,11 @@ fn section_make(n, title, content, opts) {
         // the two optically centred on each other.
         row([section_title(label), title]).cross("cap_middle")
             .spacing(section_title_size() * 0.28 * 2.54 / 72.0)
-    } else { poster_prefix(`${label} `, title) };
+    } else { text_prefix(`${label} `, title) };
     // The name overflow warnings give the section (and its parts).
     let tag = if type_of(title) == "string" { `section "${title}"` }
               else if label != "" { `section ${label}` } else { "section" };
-    let ov = plot_opt(opts, "overflow", section_overflow());
+    let ov = opt(opts, "overflow", section_overflow());
     if !["visible", "clip", "shrink", "fit"].contains(ov) {
         throw `section(): unknown overflow "${ov}" (visible, clip, shrink, fit)`;
     }
@@ -163,21 +163,21 @@ fn section_make(n, title, content, opts) {
         ov = modes[f];
         opts.overflow = ov;
     }
-    let va = plot_opt(opts, "valign", if ov == "fit" && !opts.contains("valign") && section_valign() == "top" { "center" } else { section_valign() });
+    let va = opt(opts, "valign", if ov == "fit" && !opts.contains("valign") && section_valign() == "top" { "center" } else { section_valign() });
     let valigns = #{ top: "start", center: "center", bottom: "end", spread: "space_between" };
     if type_of(va) != "string" || !valigns.contains(va) {
         throw `section(): unknown valign "${va}" (top, center, bottom, spread)`;
     }
     let main = valigns[va];
     let items = if type_of(content) == "array" { nodes(content) } else { [as_node(content)] };
-    let footer = plot_opt(opts, "footer", ());
+    let footer = opt(opts, "footer", ());
     let body_ov = ov;
     if type_of(footer) != "()" {
         // The content takes the spare height, so the footer ends the section;
         // content that doesn't fit is clipped above it (or shrunk), never
         // drawn over it — unless `overflow: "visible"` is asked for.
-        let fs = if type_of(footer) == "array" && !poster_is_rich(footer) { nodes(footer) }
-                 else { [scheme_text("section", footer, base_size(), "start")] };
+        let fs = if type_of(footer) == "array" && !is_rich(footer) { nodes(footer) }
+                 else { [text_or_node("section", footer, base_size(), "start")] };
         let cov = if ov == "visible" && !opts.contains("overflow") { "clip" } else { ov };
         items = [col(items).spacing(section_gap()).stretch().flex(1).name(`${tag} (content)`).overflow(cov)
                      .main(main),
@@ -187,7 +187,7 @@ fn section_make(n, title, content, opts) {
     }
     let sp = section_pad();
     let bi = section_body_inset();
-    if !plot_finite(bi) || bi < 0 { throw `section_body_inset(): a length in cm >= 0 (got ${bi})`; }
+    if !finite_num(bi) || bi < 0 { throw `section_body_inset(): a length in cm >= 0 (got ${bi})`; }
     let pad = if bi == 0 { sp } else { #{ top: sp, bottom: sp, left: sp + bi, right: sp + bi } };
     let body = col(items).spacing(section_gap()).stretch().pad(pad).flex(1)
         .name(`${tag} (body)`).overflow(body_ov).main(main);

@@ -1,6 +1,7 @@
 // ---------------------------------------------------------------------------
 // Shapes (sugar over the core `ellipse` / `path`)
 // ---------------------------------------------------------------------------
+
 // A circle of radius `r` (a square `ellipse`).
 fn circle(r) { ellipse().width(2 * r).height(2 * r) }
 
@@ -17,8 +18,8 @@ fn block_arrow(x1, y1, x2, y2, shaft_w, head_w, head_len) {
 }
 
 fn block_arrow(x1, y1, x2, y2, shaft_w, head_w, head_len, opts) {
-    shape_opts("block_arrow", opts, ["both"]);
-    let both = plot_opt(opts, "both", false);
+    check_opts("block_arrow", opts, ["both"]);
+    let both = opt(opts, "both", false);
     let f = chord_frame("block_arrow", x1, y1, x2, y2);
     let nx = f[0];
     let ny = f[1];
@@ -81,18 +82,13 @@ fn equilibrium(x1, y1, x2, y2) { equilibrium(x1, y1, x2, y2, #{}) }
 
 fn equilibrium(x1, y1, x2, y2, opts) {
     if type_of(opts) != "map" { opts = #{ gap: opts }; }
-    shape_opts("equilibrium", opts, ["gap", "width", "barb", "head", "head_size", "head_width",
+    check_opts("equilibrium", opts, ["gap", "width", "barb", "head", "head_size", "head_width",
                                      "hook_size", "hook_width", "hook_start"]);
-    let w = plot_opt(opts, "width", annotation_width()).to_float();
-    let gap = plot_opt(opts, "gap", w * 4.0);
-    let barb = plot_opt(opts, "barb", "straight");
-    if barb != "straight" && barb != "hook" {
-        throw `equilibrium(): unknown barb "${barb}" (straight, hook)`;
-    }
-    let head = plot_opt(opts, "head", if barb == "hook" { "none" } else { "barb" });
-    if !["none", "triangle", "barb"].contains(head) {
-        throw `equilibrium(): unknown head "${head}" (none, triangle, barb)`;
-    }
+    let w = opt(opts, "width", annotation_width()).to_float();
+    let gap = opt(opts, "gap", w * 4.0);
+    let barb = one_of("equilibrium", "barb", opt(opts, "barb", "straight"), ["straight", "hook"]);
+    let head = one_of("equilibrium", "head", opt(opts, "head", if barb == "hook" { "none" } else { "barb" }),
+                      equilibrium_heads());
     let f = chord_frame("equilibrium", x1, y1, x2, y2);
     let nx = f[0];
     let ny = f[1];
@@ -119,11 +115,11 @@ fn equilibrium(x1, y1, x2, y2, opts) {
                  else if alias && opts.contains("head_size") { opts.head_size }
                  else if f[2] * 0.4 < w * 20.0 { f[2] * 0.4 } else { w * 20.0 };
         hs = hs.to_float();
-        let hw = if opts.contains("hook_width") { shape_len("equilibrium", opts.hook_width, w) }
-                 else if alias && opts.contains("head_width") { shape_len("equilibrium", opts.head_width, w) }
+        let hw = if opts.contains("hook_width") { len_or_multiple("equilibrium", opts.hook_width, w) }
+                 else if alias && opts.contains("head_width") { len_or_multiple("equilibrium", opts.head_width, w) }
                  else { hs * 0.4 };
         let hl = if opts.contains("head_size") { opts.head_size.to_float() } else { w * 5.0 };
-        let h0 = plot_opt(opts, "hook_start", if alias { 0.0 } else { hl * 0.6 }).to_float();
+        let h0 = opt(opts, "hook_start", if alias { 0.0 } else { hl * 0.6 }).to_float();
         // Where each hook leaves its shaft, the unit back along the shaft,
         // and outwards.
         let ends = [
@@ -148,6 +144,17 @@ fn equilibrium(x1, y1, x2, y2, opts) {
     stack(parts)
 }
 
+// The heads of `equilibrium`: "barb" (a half head, the core "barb_left"),
+// "triangle" or "none".
+fn equilibrium_heads() { ["none", "triangle", "barb"] }
+
+// The core arrow `a` with an `equilibrium` head (a name from
+// `equilibrium_heads()`; "none" for a plain line).
+fn equilibrium_head(a, head) {
+    if head == "none" { a.head("none") }
+    else { a.head_style(if head == "barb" { "barb_left" } else { "triangle" }) }
+}
+
 // Point `a` back along and `o` out from a tip `e` = [x, y, back.., out..].
 fn hook_pt(e, a, o) { [e[0] + e[2] * a + e[4] * o, e[1] + e[3] * a + e[5] * o] }
 
@@ -168,7 +175,7 @@ fn arc_pt(cx, cy, rad, deg) {
 fn arc_arrow(cx, cy, r, a0, a1, w) { arc_arrow(cx, cy, r, a0, a1, w, #{}) }
 
 fn arc_arrow(cx, cy, r, a0, a1, w, opts) {
-    shape_opts("arc_arrow", opts, ["head_width", "head_len", "both"]);
+    check_opts("arc_arrow", opts, ["head_width", "head_len", "both"]);
     let r = r.to_float();
     let w = w.to_float();
     if !(w > 0.0) || !(r > w / 2.0) {
@@ -179,9 +186,9 @@ fn arc_arrow(cx, cy, r, a0, a1, w, opts) {
         throw `arc_arrow(): the angles must differ by less than a full turn (got ${a0} to ${a1})`;
     }
     let dir = if span > 0.0 { 1.0 } else { -1.0 };
-    let hw = plot_opt(opts, "head_width", w * 2.0).to_float();
-    let hl = plot_opt(opts, "head_len", w).to_float();
-    let both = plot_opt(opts, "both", false);
+    let hw = opt(opts, "head_width", w * 2.0).to_float();
+    let hl = opt(opts, "head_len", w).to_float();
+    let both = opt(opts, "both", false);
     // Head length as an angle, leaving the band at least a sliver.
     let dh = hl / r * 180.0 / PI();
     let room = span.abs() / (if both { 2.0 } else { 1.0 }) * 0.999;
@@ -233,13 +240,13 @@ fn block_arrow_along(points, w) { block_arrow_along(points, w, #{}) }
 
 fn block_arrow_along(points, w, opts) {
     let who = "block_arrow_along";
-    shape_opts(who, opts, ["radius", "head_width", "head_len", "both"]);
+    check_opts(who, opts, ["radius", "head_width", "head_len", "both"]);
     let w = w.to_float();
     if !(w > 0.0) { throw `${who}(): the width must be positive (got ${w})`; }
-    let hw = plot_opt(opts, "head_width", w * 2.0).to_float();
-    let hl = plot_opt(opts, "head_len", w).to_float();
-    let both = plot_opt(opts, "both", false);
-    let entries = along_round(along_entries(who, points), plot_opt(opts, "radius", 0).to_float());
+    let hw = opt(opts, "head_width", w * 2.0).to_float();
+    let hl = opt(opts, "head_len", w).to_float();
+    let both = opt(opts, "both", false);
+    let entries = along_round(along_entries(who, points), opt(opts, "radius", 0).to_float());
     let cl = along_flatten(entries);
     if cl.len() < 2 { throw `${who}(): the centre line has no length`; }
     let cum = [0.0];

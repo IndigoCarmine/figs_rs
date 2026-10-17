@@ -37,9 +37,9 @@ fn scheme_label_gap() { style_get("scheme_label_gap", caption_gap()) }
 fn step(node) { as_node(node) }
 fn step(node, opts) {
     if type_of(opts) != "map" { opts = #{ below: opts }; }
-    shape_opts("step", opts, ["above", "below", "left", "right", "overhang"]);
+    check_opts("step", opts, ["above", "below", "left", "right", "overhang"]);
     let o = opts;
-    o.overhang = overhang_mode("step", plot_opt(o, "overhang", caption_overhang()));
+    o.overhang = overhang_mode("step", opt(o, "overhang", caption_overhang()));
     scheme_dress("step", as_node(node), o, false).meta("step", [node, opts])
 }
 // `step(node, caption, opts)`: one caption below, with options
@@ -66,19 +66,19 @@ fn step(node, caption, opts) {
 fn arrow_step() { arrow_step(#{}) }
 fn arrow_step(x) {
     let o = if type_of(x) == "map" { x } else { #{ above: x } };
-    shape_opts("arrow_step", o, ["above", "below", "left", "right", "length", "head", "equilibrium",
+    check_opts("arrow_step", o, ["above", "below", "left", "right", "length", "head", "equilibrium",
                                  "color", "width", "head_size", "head_width"]);
-    let head = plot_opt(o, "head", "end");
+    let head = opt(o, "head", "end");
     if !["end", "both", "start", "none"].contains(head) {
         throw `arrow_step(): unknown head "${head}" (end, both, start, none)`;
     }
-    let eq = plot_opt(o, "equilibrium", false);
+    let eq = opt(o, "equilibrium", false);
     if type_of(eq) == "bool" {
         eq = if eq { #{} } else { () };
     } else if type_of(eq) != "map" {
         throw `arrow_step(): equilibrium must be true, false or a map of equilibrium options (got ${type_of(eq)})`;
     }
-    let len = plot_opt(o, "length", ());
+    let len = opt(o, "length", ());
     if type_of(len) != "()" { len = scheme_length("arrow_step", len); }
     #{ scheme_arrow: true, opts: o, head: head, eq: eq, length: len }
 }
@@ -97,15 +97,15 @@ fn arrow_step(x) {
 fn scheme(items) { scheme(items, #{}) }
 fn scheme(items, opts) {
     if type_of(items) != "array" { throw `scheme(): expected an array of items (got ${type_of(items)})`; }
-    shape_opts("scheme", opts, ["direction", "gap", "align", "arrow_length"]);
-    let dir = plot_opt(opts, "direction", "right");
+    check_opts("scheme", opts, ["direction", "gap", "align", "arrow_length"]);
+    let dir = opt(opts, "direction", "right");
     if dir != "right" && dir != "down" { throw `scheme(): unknown direction "${dir}" (right, down)`; }
     let vertical = dir == "down";
-    let align = plot_opt(opts, "align", "center");
+    let align = opt(opts, "align", "center");
     if !["center", "start", "end"].contains(align) {
         throw `scheme(): unknown align "${align}" (center, start, end)`;
     }
-    let len = scheme_length("scheme", plot_opt(opts, "arrow_length", scheme_arrow_length()));
+    let len = scheme_length("scheme", opt(opts, "arrow_length", scheme_arrow_length()));
     let sl = split_links(items);
     let out = [];
     for x in sl.items {
@@ -113,12 +113,12 @@ fn scheme(items, opts) {
             if !x.contains("scheme_arrow") { throw "scheme(): a map item must be an arrow_step(..)"; }
             out.push(scheme_arrow(x, vertical, len));
         } else {
-            out.push(scheme_text("scheme", x, base_size(), "center"));
+            out.push(text_or_node("scheme", x, base_size(), "center"));
         }
     }
     out += sl.links;
     let c = if vertical { col(out) } else { row(out) };
-    c.spacing(plot_opt(opts, "gap", scheme_gap())).cross(if align == "center" { "axis" } else { align })
+    c.spacing(opt(opts, "gap", scheme_gap())).cross(if align == "center" { "axis" } else { align })
         .main("center")
 }
 
@@ -146,14 +146,14 @@ fn scheme_length(who, v) {
 fn scheme_dress(who, n, labels, stretch) {
     let lab = #{};
     for k in ["above", "below", "left", "right"] {
-        let v = plot_opt(labels, k, ());
+        let v = opt(labels, k, ());
         let al = if k == "left" { "end" } else if k == "right" { "start" } else { "center" };
-        lab[k] = if type_of(v) == "()" { () } else { scheme_text(who, v, scheme_label_size(), al) };
+        lab[k] = if type_of(v) == "()" { () } else { text_or_node(who, v, scheme_label_size(), al) };
     }
     // Captions above / below wider than the node overhang it (one line,
     // centred on it) instead of widening the column ("auto": into free
     // room only).
-    let over = plot_opt(labels, "overhang", false);
+    let over = opt(labels, "overhang", false);
     for k in ["above", "below"] {
         if type_of(lab[k]) != "()" { lab[k] = overhang_as(lab[k], over); }
     }
@@ -186,12 +186,12 @@ fn scheme_dress(who, n, labels, stretch) {
 // with its labels.
 fn scheme_arrow(a, vertical, len) {
     let o = a.opts;
-    let w = plot_opt(o, "width", scheme_arrow_width()).to_float();
-    let c = plot_opt(o, "color", fg());
+    let w = opt(o, "width", scheme_arrow_width()).to_float();
+    let c = opt(o, "color", fg());
     if type_of(a.length) != "()" { len = a.length; }
     let fill = type_of(len) == "string";
-    let hs = plot_opt(o, "head_size", w * 5.0).to_float();
-    let hw = if o.contains("head_width") { shape_len("arrow_step", o.head_width, w) } else { hs * 0.8 };
+    let hs = opt(o, "head_size", w * 5.0).to_float();
+    let hw = if o.contains("head_width") { len_or_multiple("arrow_step", o.head_width, w) } else { hs * 0.8 };
     let node = ();
     if type_of(a.eq) == "map" {
         let eo = a.eq;
@@ -200,9 +200,9 @@ fn scheme_arrow(a, vertical, len) {
             if o.contains(k) && !eo.contains(k) { eo[k] = o[k]; }
         }
         let ew = eo.width.to_float();
-        let g = plot_opt(eo, "gap", ew * 4.0).to_float();
-        let ehs = plot_opt(eo, "head_size", ew * 5.0).to_float();
-        let ehw = if eo.contains("head_width") { shape_len("arrow_step", eo.head_width, ew) } else { ehs * 0.8 };
+        let g = opt(eo, "gap", ew * 4.0).to_float();
+        let ehs = opt(eo, "head_size", ew * 5.0).to_float();
+        let ehw = if eo.contains("head_width") { len_or_multiple("arrow_step", eo.head_width, ew) } else { ehs * 0.8 };
         let t = g + ehw + ew;
         // `equilibrium` strokes in `fg()`: the colour goes in through it.
         style_push(#{ fg: c });
@@ -232,10 +232,10 @@ fn scheme_arrow(a, vertical, len) {
         node = stack([if vertical { rect().height(m) } else { rect().width(m) }, node]);
     }
     let labels = if vertical {
-        #{ right: plot_opt(o, "right", plot_opt(o, "above", ())),
-           left: plot_opt(o, "left", plot_opt(o, "below", ())) }
+        #{ right: opt(o, "right", opt(o, "above", ())),
+           left: opt(o, "left", opt(o, "below", ())) }
     } else {
-        #{ above: plot_opt(o, "above", ()), below: plot_opt(o, "below", ()) }
+        #{ above: opt(o, "above", ()), below: opt(o, "below", ()) }
     };
     let n = scheme_dress("arrow_step", node, labels, fill);
     if fill { n.flex(1) } else { n }
@@ -246,11 +246,11 @@ fn scheme_arrow(a, vertical, len) {
 // they stretch with the arrow (equilibrium options gap, width, head,
 // head_size, head_width; a hooked barb needs a fixed length).
 fn scheme_equilibrium_fill(eo, t, g, vertical) {
-    shape_opts("equilibrium", eo, ["gap", "width", "head", "head_size", "head_width", "barb"]);
-    if plot_opt(eo, "barb", "straight") != "straight" {
+    check_opts("equilibrium", eo, ["gap", "width", "head", "head_size", "head_width", "barb"]);
+    if opt(eo, "barb", "straight") != "straight" {
         throw "arrow_step(): a hooked equilibrium needs a fixed length (not \"fill\")";
     }
-    let head = plot_opt(eo, "head", "barb");
+    let head = opt(eo, "head", "barb");
     if !["none", "triangle", "barb"].contains(head) {
         throw `equilibrium(): unknown head "${head}" (none, triangle, barb)`;
     }

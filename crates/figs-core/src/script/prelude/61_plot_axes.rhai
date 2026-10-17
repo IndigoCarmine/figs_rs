@@ -2,7 +2,7 @@
 
 // Axis transform: identity, or log10 for log axes (non-positive -> gap).
 fn plot_tf(v, log) {
-    if !plot_finite(v) { return (); }
+    if !finite_num(v) { return (); }
     let f = v.to_float();
     if log { if f > 0.0 { f.log() } else { () } } else { f }
 }
@@ -100,7 +100,7 @@ fn plot_axis(name, dlo, dhi, range, log, ticks, cats) {
     }
     let fixed = type_of(range) != "()";
     if fixed {
-        let r = plot_numbers("plot", `${name} range`, range);
+        let r = numbers("plot", `${name} range`, range);
         if r.len() != 2 || !(r[1] > r[0]) {
             throw `plot(): ${name} range must be [lo, hi] with lo < hi (got ${range})`;
         }
@@ -132,7 +132,7 @@ fn plot_axis(name, dlo, dhi, range, log, ticks, cats) {
                 if (e - e0) % every == 0 { ax.ticks.push(e.to_float()); ax.labels.push(log_label(e, plain)); }
             }
         } else {
-            for v in plot_numbers("plot", `${name}ticks`, ticks) {
+            for v in numbers("plot", `${name}ticks`, ticks) {
                 let t = plot_tf(v, true);
                 if type_of(t) != "()" { ax.ticks.push(t); ax.labels.push(format_num(v, tick_decimals([v]))); }
             }
@@ -164,7 +164,7 @@ fn plot_axis(name, dlo, dhi, range, log, ticks, cats) {
     ax.lo = a[0];
     ax.hi = a[1];
     let tv = if type_of(ticks) == "()" { nice_ticks(a[0], a[1], a[2]) }
-             else { plot_numbers("plot", `${name}ticks`, ticks) };
+             else { numbers("plot", `${name}ticks`, ticks) };
     let d = tick_decimals(tv);
     for v in tv {
         ax.ticks.push(v);

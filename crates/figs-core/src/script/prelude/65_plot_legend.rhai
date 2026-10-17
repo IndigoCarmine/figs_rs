@@ -37,7 +37,7 @@ fn legend_box(series, style) {
     for s in series {
         if s.label == "" { continue; }
         if style == "text" {
-            rows.push(plot_font_on(text(s.label).size(legend_size()).color(s.color), legend_font()));
+            rows.push(with_font(text(s.label).size(legend_size()).color(s.color), legend_font()));
         } else {
             rows.push(row([legend_key(s), plot_label(s.label, legend_size(), legend_font())])
                 .cross("center").spacing(legend_size() * 0.02));

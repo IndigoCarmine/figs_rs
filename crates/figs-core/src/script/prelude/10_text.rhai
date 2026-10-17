@@ -1,14 +1,13 @@
-// Semantic text (`body`, `title`, `caption`, `label`, `rich`, `halo`) and the
-// text builders components share (scheme / overlay / side text).
 // ---------------------------------------------------------------------------
-// Semantic text
+// Semantic text (`body`, `title`, `caption`, `label`, `rich`, `halo`) and the
+// text builders components share (scheme / overlay / side / caption text)
 // ---------------------------------------------------------------------------
 
 // `text(s)` in the theme's `fg()` colour (no colour set while it is "").
-fn fg_text(s) {
-    let c = fg();
-    if c == "" { text(s) } else { text(s).color(c) }
-}
+fn fg_text(s) { colored(text(s), fg()) }
+
+// `t` in colour `c`, or as is while `c` is "" (no colour of its own).
+fn colored(t, c) { if c == "" { t } else { t.color(c) } }
 
 // Running text; also what a bare string in a framework container becomes.
 fn body(s) { fg_text(s).size(base_size()) }
@@ -38,36 +37,37 @@ fn rich(s) { body(markup(s)) }
 // placement). Works for any overlay text: `halo(body("50 °C"), "#000000", 0.03)`.
 fn halo(t, color, r) { t.stroke(color).stroke_width(2.0 * r) }
 
+// `halo(t, color, r)`, or `t` as is while `color` is "" (no halo).
+fn halo_if(t, color, r) { if color == "" { t } else { halo(t, color, r) } }
+
+// Text node `n` aligned "start" (as is), "center" or "end" (right-aligned).
+fn align_text(n, align) {
+    if align == "center" { n.center() } else if align == "end" { n.align("right") } else { n }
+}
+
+// `x` when it is a node; else an error of function `who` (`what` describes
+// what `x` may be).
+fn node_or_throw(who, x, what) {
+    if type_of(x) != "Node" { throw `${who}(): ${what} (got ${type_of(x)})`; }
+    x
+}
+
 // Scheme / overlay / side text: a string or spans becomes text at `size`
 // (pt) in `fg()`, aligned `align` ("start", "center", "end"); a node passes
 // through; anything else is an error of function `who`.
-fn scheme_text(who, x, size, align) {
-    let t = type_of(x);
-    if t == "string" || poster_is_rich(x) {
-        let n = fg_text(x).size(size);
-        return if align == "center" { n.center() } else if align == "end" { n.align("right") } else { n };
-    }
-    if t != "Node" {
-        throw `${who}(): expected a string, spans or a node (got ${t})`;
-    }
-    x
+fn text_or_node(who, x, size, align) {
+    if is_text(x) { return align_text(fg_text(x).size(size), align); }
+    node_or_throw(who, x, "expected a string, spans or a node")
 }
 
 // Overlay text: a string (inline markup) or spans in the overlay text style
 // (`overlay_text_size()`, `overlay_text_color()`, a `overlay_text_halo()`),
 // aligned `align` ("start", "center", "end"); a node passes through.
 fn overlay_text(who, x, align) {
-    let t = type_of(x);
-    if t == "string" || poster_is_rich(x) {
-        let n = text(if t == "string" { markup(x) } else { x }).size(overlay_text_size());
-        let c = overlay_text_color();
-        if c != "" { n = n.color(c); }
-        n = if align == "center" { n.center() } else if align == "end" { n.align("right") } else { n };
-        let h = overlay_text_halo();
-        return if h == "" { n } else { halo(n, h, overlay_text_halo_width()) };
+    if is_text(x) {
+        let n = text(if type_of(x) == "string" { markup(x) } else { x }).size(overlay_text_size());
+        n = align_text(colored(n, overlay_text_color()), align);
+        return halo_if(n, overlay_text_halo(), overlay_text_halo_width());
     }
-    if t != "Node" {
-        throw `${who}(): expected a string, spans or a node (got ${t})`;
-    }
-    x
+    node_or_throw(who, x, "expected a string, spans or a node")
 }

@@ -1,6 +1,7 @@
 // ---------------------------------------------------------------------------
 // Annotation hooks
 // ---------------------------------------------------------------------------
+
 // Colour of callouts, highlights and spots: a warm red that reads on both
 // light plots and dark micrographs.
 fn accent() { style_get("accent", "#ff5a3c") }
@@ -54,17 +55,15 @@ fn scalebar_box_radius() { style_get("scalebar_box_radius", 0) }
 // `marks` is an array or a single node. Composes with labels:
 // `labeled(annotate(img, marks), "(a)")`, or `panels([annotate(..), ..])`.
 fn annotate(item, marks) {
-    if type_of(marks) != "array" { marks = [marks]; }
-    stack([as_node(item)] + marks)
+    stack([as_node(item)] + as_array(marks))
 }
 
 // The scale bar's label: bold, base size, centered, in `scalebar_color()`,
 // outlined in `scalebar_halo()` (a `halo` reaching a quarter of the bar
 // thickness past the glyphs).
 fn scalebar_label(s) {
-    let fg = text(s).size(base_size()).bold().center().color(scalebar_color());
-    let h = scalebar_halo();
-    if h == "" { fg } else { halo(fg, h, scalebar_thickness() * 0.25) }
+    let t = text(s).size(base_size()).bold().center().color(scalebar_color());
+    halo_if(t, scalebar_halo(), scalebar_thickness() * 0.25)
 }
 
 // The bar itself: a filled rect `scalebar_thickness()` tall, outlined in
@@ -102,36 +101,33 @@ fn scalebar(len, field, s) {
 }
 
 fn scalebar_cm(len, s, opts) {
-    shape_opts("scalebar", opts, ["box", "pad", "radius", "inset", "corner", "color"]);
-    let box = plot_opt(opts, "box", scalebar_box());
+    check_opts("scalebar", opts, ["box", "pad", "radius", "inset", "corner", "color"]);
+    let box = opt(opts, "box", scalebar_box());
     if type_of(box) == "bool" {
         box = if !box { "" } else if scalebar_box() != "" { scalebar_box() } else { "#000000b3" };
     }
-    let corner = plot_opt(opts, "corner", scalebar_corner());
+    let corner = opt(opts, "corner", scalebar_corner());
     let st = #{};
     if opts.contains("color") { st.scalebar_color = opts.color; }
-    if poster_has_paint(box) { st.scalebar_halo = ""; }
+    if has_paint(box) { st.scalebar_halo = ""; }
     style_push(st);
     let bar = scalebar_rect().width(len);
     let parts = if s == "" { [bar] } else { [scalebar_label(s), bar] };
     let tag = col(parts).cross("center").spacing(scalebar_thickness() * 0.5);
-    if poster_has_paint(box) {
-        tag = tag.pad(plot_opt(opts, "pad", scalebar_box_pad())).fill(box);
-        let r = plot_opt(opts, "radius", scalebar_box_radius());
+    if has_paint(box) {
+        tag = tag.pad(opt(opts, "pad", scalebar_box_pad())).fill(box);
+        let r = opt(opts, "radius", scalebar_box_radius());
         if r > 0 { tag = tag.radius(r); }
     }
     style_pop();
-    pin_in("scalebar", tag, corner, plot_opt(opts, "inset", scalebar_inset()))
+    pin_in("scalebar", tag, corner, opt(opts, "inset", scalebar_inset()))
 }
 
 fn scalebar_field(len, field, s) {
     if !(field > 0) || !(len > 0) || len > field {
         throw `scalebar(): need 0 < len <= field (got ${len} of ${field})`;
     }
-    let corner = scalebar_corner();
-    if !["top-left", "top-right", "bottom-left", "bottom-right"].contains(corner) {
-        throw `scalebar_corner(): unknown corner "${corner}" (top-left, top-right, bottom-left, bottom-right)`;
-    }
+    let corner = check_corner("scalebar_corner", scalebar_corner());
     let right = corner.ends_with("right");
     let m = scalebar_frac_inset() * field;      // side inset, field units
     let rest = field - len - m;                 // free space on the far side

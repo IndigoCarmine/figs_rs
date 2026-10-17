@@ -40,7 +40,7 @@ fn inset_in_corner(a, corner) {
     let pad = a.pad;
     if a.avoid.len() > 0 {
         pad = #{};
-        for e in ["top", "right", "bottom", "left"] { pad[e] = a.pad + plot_opt(a.avoid, e, 0.0); }
+        for e in ["top", "right", "bottom", "left"] { pad[e] = a.pad + opt(a.avoid, e, 0.0); }
     }
     if type_of(a.width) != "()" {
         if type_of(pad) != "map" { return pin_in("inset", a.node, corner, pad); }
@@ -86,19 +86,19 @@ fn inset_spec(sub, opts) {
         if !known.contains(k) { throw `inset(): unknown option "${k}" (${list_names(known)})`; }
     }
     let n = as_node(sub);
-    let width = plot_opt(opts, "width", ());
+    let width = opt(opts, "width", ());
     if type_of(width) != "()" { n = n.width(width); }
     if opts.contains("height") { n = n.height(opts.height); }
-    let size = plot_opt(opts, "size", inset_size()).to_float();
+    let size = opt(opts, "size", inset_size()).to_float();
     if !(size > 0.0 && size <= 1.0) { throw `inset(): size must be a fraction in (0, 1] (got ${size})`; }
     let a = #{ mark: "inset", node: n, at: (), anchor: [0, 0], size: size, width: width,
-               corner: plot_opt(opts, "corner", inset_corner()), pad: plot_opt(opts, "pad", inset_pad()),
-               avoid: inset_avoid(plot_opt(opts, "avoid", ())) };
+               corner: opt(opts, "corner", inset_corner()), pad: opt(opts, "pad", inset_pad()),
+               avoid: inset_avoid(opt(opts, "avoid", ())) };
     if opts.contains("at") {
-        a.at = plot_numbers("inset", "`at`", opts.at);
+        a.at = numbers("inset", "`at`", opts.at);
         if a.at.len() != 2 { throw "inset(): `at` must be [x, y]"; }
     }
-    a.anchor = plot_numbers("inset", "`anchor`", plot_opt(opts, "anchor", a.anchor));
+    a.anchor = numbers("inset", "`anchor`", opt(opts, "anchor", a.anchor));
     if a.anchor.len() != 2 { throw "inset(): `anchor` must be [ax, ay]"; }
     let corners = ["auto", "top-right", "top-left", "bottom-right", "bottom-left"];
     if !corners.contains(a.corner) {
@@ -120,7 +120,7 @@ fn inset_plot(opts, series) {
                 max_ticks: inset_max_ticks() };
     // An inset is sized by its aspect: never "fill".
     if type_of(plot_aspect()) == "string" { st.plot_aspect = 4.0 / 3.0; }
-    let own = plot_opt(opts, "style", #{});
+    let own = opt(opts, "style", #{});
     if type_of(own) != "map" { throw `inset_plot(): style must be a map of style keys (got ${type_of(own)})`; }
     for k in own.keys() { st[k] = own[k]; }
     opts.style = st;

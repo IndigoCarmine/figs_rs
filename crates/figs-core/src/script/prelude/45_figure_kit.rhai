@@ -11,10 +11,7 @@
 // colour ("" = `fg()`, black), line width (cm), liquid colour and the
 // default fill level (0 = empty .. 1 = full).
 fn labware_size() { style_get("labware_size", base_size() * 0.15) }
-fn labware_stroke() {
-    let f = fg();
-    style_get("labware_stroke", if f == "" { "#000000" } else { f })
-}
+fn labware_stroke() { style_get("labware_stroke", fg_or("#000000")) }
 fn labware_stroke_width() { style_get("labware_stroke_width", base_size() * 0.0045) }
 fn labware_liquid() { style_get("labware_liquid", "#9cc8ea") }
 fn labware_level() { style_get("labware_level", 0) }
@@ -33,10 +30,7 @@ fn colorbar_length() { style_get("colorbar_length", base_size() * 0.4) }
 fn colorbar_thickness() { style_get("colorbar_thickness", base_size() * 0.03) }
 fn colorbar_label_size() { style_get("colorbar_label_size", base_size()) }
 fn colorbar_gap() { style_get("colorbar_gap", caption_gap() * 0.5) }
-fn colorbar_border() {
-    let f = fg();
-    style_get("colorbar_border", if f == "" { "#000000" } else { f })
-}
+fn colorbar_border() { style_get("colorbar_border", fg_or("#000000")) }
 fn colorbar_border_width() { style_get("colorbar_border_width", plot_line_width()) }
 
 // `cycle_arrows`: arrow colour (both, unless `colors` is given), width (cm),
@@ -69,27 +63,27 @@ fn labware_kinds() {
 // `step(labware("flask", #{ level: 0.5 }), "Step 1")`.
 fn labware(kind) { labware(kind, #{}) }
 fn labware(kind, opts) {
-    shape_opts("labware", opts, ["level", "liquid", "size", "stroke", "stroke_width", "lid"]);
+    check_opts("labware", opts, ["level", "liquid", "size", "stroke", "stroke_width", "lid"]);
     if !labware_kinds().contains(kind) {
         throw `labware(): unknown kind "${kind}" (${list_names(labware_kinds())})`;
     }
-    let lv = plot_opt(opts, "level", labware_level());
-    if !plot_finite(lv) || lv < 0 || lv > 1 {
+    let lv = opt(opts, "level", labware_level());
+    if !finite_num(lv) || lv < 0 || lv > 1 {
         throw `labware(): level must be a number from 0 to 1 (got ${lv})`;
     }
-    let size = plot_opt(opts, "size", labware_size());
-    let sw = plot_opt(opts, "stroke_width", labware_stroke_width());
-    if !plot_finite(size) || !plot_finite(sw) || !(sw >= 0) || !(size > sw * 2) {
+    let size = opt(opts, "size", labware_size());
+    let sw = opt(opts, "stroke_width", labware_stroke_width());
+    if !finite_num(size) || !finite_num(sw) || !(sw >= 0) || !(size > sw * 2) {
         throw `labware(): size must be a length larger than the line width (got size ${size}, stroke_width ${sw})`;
     }
-    let lid = plot_opt(opts, "lid", true);
+    let lid = opt(opts, "lid", true);
     if kind != "dish" && opts.contains("lid") { throw `labware(): lid is a "dish" option`; }
     // Unit box (height 1) -> cm: scale k, offset o (half a line in).
     let k = (size - sw).to_float();
     let o = sw.to_float() / 2.0;
     let g = labware_shape(kind, lv.to_float(), lid);
-    let ink = plot_opt(opts, "stroke", labware_stroke());
-    let wet = plot_opt(opts, "liquid", labware_liquid());
+    let ink = opt(opts, "stroke", labware_stroke());
+    let wet = opt(opts, "liquid", labware_liquid());
     let parts = [];
     for p in g.liquid { parts.push(lw_node(p, k, o).fill(wet)); }
     for p in g.lines {
@@ -239,31 +233,31 @@ fn labware_shape(kind, lv, lid) {
 //   head_size, head_width  as for the core arrow
 fn vector_note(item, label) { vector_note(item, label, #{}) }
 fn vector_note(item, label, opts) {
-    shape_opts("vector_note", opts, ["from", "to", "color", "width", "size", "gap", "head",
+    check_opts("vector_note", opts, ["from", "to", "color", "width", "size", "gap", "head",
                                      "head_size", "head_width"]);
-    let f = plot_numbers("vector_note", "`from`", plot_opt(opts, "from", [0.2, 0.75]));
-    let t = plot_numbers("vector_note", "`to`", plot_opt(opts, "to", [0.8, 0.25]));
+    let f = numbers("vector_note", "`from`", opt(opts, "from", [0.2, 0.75]));
+    let t = numbers("vector_note", "`to`", opt(opts, "to", [0.8, 0.25]));
     if f.len() != 2 || t.len() != 2 { throw "vector_note(): `from` and `to` are [fx, fy] fractions"; }
     let dx = t[0] - f[0];
     let dy = t[1] - f[1];
     let m = if dx.abs() > dy.abs() { dx.abs() } else { dy.abs() };
     if m == 0.0 { throw "vector_note(): `from` and `to` coincide"; }
-    let head = plot_opt(opts, "head", "end");
+    let head = opt(opts, "head", "end");
     if !["end", "both", "start", "none"].contains(head) {
         throw `vector_note(): unknown head "${head}" (end, both, start, none)`;
     }
-    let c = plot_opt(opts, "color", vector_note_color());
+    let c = opt(opts, "color", vector_note_color());
     let a = arrow(f[0], f[1], t[0], t[1]).viewbox(0, 0, 1, 1).stroke(c)
-        .stroke_width(plot_opt(opts, "width", vector_note_width())).head(head);
+        .stroke_width(opt(opts, "width", vector_note_width())).head(head);
     if opts.contains("head_size") { a = a.head_size(opts.head_size); }
     if opts.contains("head_width") { a = a.head_width(opts.head_width); }
     let layers = [a];
     let none = type_of(label) == "()" || (type_of(label) == "string" && label == "");
     if !none {
         let lt = type_of(label);
-        let lab = if lt == "string" || poster_is_rich(label) {
+        let lab = if lt == "string" || is_rich(label) {
             // Haloed like a panel label, so it reads over the drawing.
-            let t = text(label).size(plot_opt(opts, "size", vector_note_size())).color(c);
+            let t = text(label).size(opt(opts, "size", vector_note_size())).color(c);
             let hc = label_halo();
             if hc == "" { t } else { halo(t, hc, label_halo_width()) }
         } else if lt == "Node" { label }
@@ -273,7 +267,7 @@ fn vector_note(item, label, opts) {
         // level or upright arrow).
         let ax = 0.5 - 0.5 * dx / m;
         let ay = 0.5 - 0.5 * dy / m;
-        layers.push(col([lab]).pad(plot_opt(opts, "gap", vector_note_gap())).at(t[0], t[1]).anchor(ax, ay));
+        layers.push(col([lab]).pad(opt(opts, "gap", vector_note_gap())).at(t[0], t[1]).anchor(ax, ay));
     }
     // Centred in whatever box it is given, hugging the item (a stretched
     // stack would spread the arrow past a fixed-size item).
@@ -299,23 +293,23 @@ fn vector_note(item, label, opts) {
 //   title      a caption above the bar (a string, spans or a node)
 fn colorbar(fill, labels) { colorbar(fill, labels, #{}) }
 fn colorbar(fill, labels, opts) {
-    shape_opts("colorbar", opts, ["direction", "length", "thickness", "size", "gap", "border",
+    check_opts("colorbar", opts, ["direction", "length", "thickness", "size", "gap", "border",
                                   "discrete", "title"]);
-    let dir = plot_opt(opts, "direction", "horizontal");
+    let dir = opt(opts, "direction", "horizontal");
     if dir != "horizontal" && dir != "vertical" {
         throw `colorbar(): unknown direction "${dir}" (horizontal, vertical)`;
     }
     let vertical = dir == "vertical";
-    if type_of(labels) != "array" || poster_is_rich(labels) { labels = [labels]; }
-    let th = plot_opt(opts, "thickness", colorbar_thickness());
-    let len = plot_opt(opts, "length", colorbar_length());
+    if type_of(labels) != "array" || is_rich(labels) { labels = [labels]; }
+    let th = opt(opts, "thickness", colorbar_thickness());
+    let len = opt(opts, "length", colorbar_length());
     if type_of(len) != "string" || len != "fill" {
-        if !plot_finite(len) || !(len > 0) { throw `colorbar(): length must be a length in cm or "fill" (got ${len})`; }
+        if !finite_num(len) || !(len > 0) { throw `colorbar(): length must be a length in cm or "fill" (got ${len})`; }
     }
-    let border = plot_opt(opts, "border", colorbar_border());
+    let border = opt(opts, "border", colorbar_border());
     // The bar: a gradient (or solid) rect, or a row / column of blocks.
     let bar = ();
-    if plot_opt(opts, "discrete", false) {
+    if opt(opts, "discrete", false) {
         if type_of(fill) != "array" || fill.len() == 0 { throw "colorbar(): discrete needs an array of colours"; }
         let blocks = [];
         for x in fill {
@@ -337,19 +331,19 @@ fn colorbar(fill, labels, opts) {
     // The labels: a unit viewbox stack along the bar (it measures as its
     // largest label across).
     let n = labels.len();
-    let size = plot_opt(opts, "size", colorbar_label_size());
+    let size = opt(opts, "size", colorbar_label_size());
     let ls = [];
     for i in 0..n {
         let x = labels[i];
         if type_of(x) == "string" && x == "" { continue; }
         if type_of(x) == "i64" || type_of(x) == "f64" { x = `${x}`; }
-        let t = scheme_text("colorbar", x, size, "center");
+        let t = text_or_node("colorbar", x, size, "center");
         let p = if n == 1 { 0.5 } else { i.to_float() / (n - 1).to_float() };
         let e = if n == 1 { 0.5 } else if i == 0 { 0.0 } else if i == n - 1 { 1.0 } else { 0.5 };
         ls.push(if vertical { t.at(0, 1.0 - p).anchor(0, if e == 0.5 { "cap_middle" } else { 1.0 - e }) }
                 else { t.at(p, 0).anchor(e, 0) });
     }
-    let g = plot_opt(opts, "gap", colorbar_gap());
+    let g = opt(opts, "gap", colorbar_gap());
     let fixed = type_of(len) != "string";
     let body = if vertical {
         let r = row([bar, stack(ls).viewbox(0, 0, 1, 1)]).spacing(g).stretch();
@@ -358,9 +352,9 @@ fn colorbar(fill, labels, opts) {
         let c = col([bar, stack(ls).viewbox(0, 0, 1, 1)]).spacing(g).stretch();
         if fixed { c.width(len) } else { c }
     };
-    let title = plot_opt(opts, "title", ());
+    let title = opt(opts, "title", ());
     if type_of(title) == "()" { return body; }
-    let head = scheme_text("colorbar", title, size, if vertical { "start" } else { "center" });
+    let head = text_or_node("colorbar", title, size, if vertical { "start" } else { "center" });
     // A filling bar fills what is left under its title.
     if !fixed { return col([head, body.flex(1)]).spacing(g).stretch(); }
     col([head, body]).spacing(g).cross(if vertical { "start" } else { "center" })
@@ -386,27 +380,27 @@ fn colorbar(fill, labels, opts) {
 // they add to its height.
 fn cycle_arrows(item) { cycle_arrows(item, #{}) }
 fn cycle_arrows(item, opts) {
-    shape_opts("cycle_arrows", opts, ["direction", "sides", "colors", "color", "labels", "width",
+    check_opts("cycle_arrows", opts, ["direction", "sides", "colors", "color", "labels", "width",
                                       "depth", "span", "gap", "size"]);
-    let dir = plot_opt(opts, "direction", "cw");
+    let dir = opt(opts, "direction", "cw");
     if dir != "cw" && dir != "ccw" { throw `cycle_arrows(): unknown direction "${dir}" (cw, ccw)`; }
-    let sides = plot_opt(opts, "sides", "top-bottom");
+    let sides = opt(opts, "sides", "top-bottom");
     if sides != "top-bottom" && sides != "left-right" {
         throw `cycle_arrows(): unknown sides "${sides}" (top-bottom, left-right)`;
     }
-    let c = plot_opt(opts, "color", cycle_arrow_color());
-    let cs = plot_opt(opts, "colors", [c, c]);
+    let c = opt(opts, "color", cycle_arrow_color());
+    let cs = opt(opts, "colors", [c, c]);
     if type_of(cs) != "array" || cs.len() != 2 { throw "cycle_arrows(): colors must be [first, second]"; }
-    let labels = plot_opt(opts, "labels", [(), ()]);
-    if type_of(labels) != "array" || labels.len() != 2 || poster_is_rich(labels) {
+    let labels = opt(opts, "labels", [(), ()]);
+    if type_of(labels) != "array" || labels.len() != 2 || is_rich(labels) {
         throw "cycle_arrows(): labels must be [first, second]";
     }
-    let span = plot_opt(opts, "span", cycle_arrow_span());
-    if !plot_finite(span) || !(span > 0) || span > 1 { throw `cycle_arrows(): span must be a fraction in (0, 1] (got ${span})`; }
+    let span = opt(opts, "span", cycle_arrow_span());
+    if !finite_num(span) || !(span > 0) || span > 1 { throw `cycle_arrows(): span must be a fraction in (0, 1] (got ${span})`; }
     let a = (1.0 - span) / 2.0;
     let b = 1.0 - a;
-    let w = plot_opt(opts, "width", cycle_arrow_width());
-    let depth = plot_opt(opts, "depth", cycle_arrow_depth());
+    let w = opt(opts, "width", cycle_arrow_width());
+    let depth = opt(opts, "depth", cycle_arrow_depth());
     let lr = sides == "left-right";
     // Clockwise chords (the item side of each band), bulging outwards by a
     // positive bend; anticlockwise runs them backwards, bent the other way.
@@ -420,20 +414,20 @@ fn cycle_arrows(item, opts) {
         arc = arc.viewbox(0, 0, 1, 1).stroke(cs[i]).stroke_width(w);
         bands.push(if lr { arc.width(depth) } else { arc.height(depth) });
     }
-    let size = plot_opt(opts, "size", base_size());
+    let size = opt(opts, "size", base_size());
     let labs = [];
     for i in 0..2 {
         let x = labels[i];
         let none = type_of(x) == "()" || (type_of(x) == "string" && x == "");
         labs.push(if none { () } else {
             let t = type_of(x);
-            if t == "string" || poster_is_rich(x) { text(x).size(size).color(cs[i]).center() }
+            if t == "string" || is_rich(x) { text(x).size(size).color(cs[i]).center() }
             else if t == "Node" { x }
             else { throw `cycle_arrows(): a label must be a string, spans or a node (got ${t})`; }
         });
     }
-    let g = plot_opt(opts, "gap", cycle_arrow_gap());
-    let n = if type_of(item) == "string" || poster_is_rich(item) { fg_text(item).size(size) } else { as_node(item) };
+    let g = opt(opts, "gap", cycle_arrow_gap());
+    let n = if type_of(item) == "string" || is_rich(item) { fg_text(item).size(size) } else { as_node(item) };
     let parts = [];
     if lr {
         if type_of(labs[0]) != "()" { parts.push(col([labs[0]]).main("center")); parts.push(rect().width(g)); }

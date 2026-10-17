@@ -10,22 +10,22 @@
 //              "stretch", "baseline"
 fn block(title, items) { block(title, items, #{}) }
 fn block(title, items, opts) {
-    poster_check_opts("block", opts, ["widths", "gap", "title_gap", "align"]);
+    check_opts("block", opts, ["widths", "gap", "title_gap", "align"]);
     let sl = split_links(items);
     let xs = sl.items;
-    let ws = poster_weights("block", xs.len(), plot_opt(opts, "widths", ()));
+    let ws = sizes_for("block", xs.len(), opt(opts, "widths", ()));
     let cells = [];
-    for i in 0..xs.len() { cells.push(poster_sized("block", as_node(xs[i]), ws[i], false)); }
+    for i in 0..xs.len() { cells.push(sized("block", as_node(xs[i]), ws[i], false)); }
     cells += sl.links;
-    let align = plot_opt(opts, "align", "start");
+    let align = opt(opts, "align", "start");
     if !["start", "center", "end", "stretch", "baseline"].contains(align) {
         throw `block(): unknown align "${align}" (start, center, end, stretch, baseline)`;
     }
-    let r = row(cells).spacing(plot_opt(opts, "gap", block_gap())).cross(align);
+    let r = row(cells).spacing(opt(opts, "gap", block_gap())).cross(align);
     let none = type_of(title) == "()" || (type_of(title) == "string" && title == "");
     if none { return r; }
     let head = if type_of(title) == "Node" { title } else { subheading(title) };
-    col([head, r]).spacing(plot_opt(opts, "title_gap", block_title_gap())).stretch()
+    col([head, r]).spacing(opt(opts, "title_gap", block_title_gap())).stretch()
 }
 
 // --- content blocks ---
@@ -103,8 +103,8 @@ fn subheading(s) {
     if m == "" { return fg_text(s).size(size); }
     let bold = subheading_mark_bold();
     let ms = subheading_mark_size();
-    let sym = !table_no_font(poster_symbol_font());
-    if !bold && ms == size && !sym { return fg_text(poster_prefix(`${m} `, s)).size(size); }
+    let sym = !font_unset(poster_symbol_font());
+    if !bold && ms == size && !sym { return fg_text(text_prefix(`${m} `, s)).size(size); }
     let mark = poster_mark_font(span(`${m} `));
     if bold { mark = mark.bold(); }
     if ms != size { mark = mark.size(ms); }
@@ -126,9 +126,9 @@ fn bullets(items, opts) {
     if type_of(items) != "array" {
         throw `bullets(): expected an array of items (got ${type_of(items)})`;
     }
-    poster_check_opts("bullets", opts, ["pitch"]);
-    let pitch = plot_opt(opts, "pitch", bullet_pitch());
-    if type_of(pitch) != "()" && !(plot_finite(pitch) && pitch > 0) {
+    check_opts("bullets", opts, ["pitch"]);
+    let pitch = opt(opts, "pitch", bullet_pitch());
+    if type_of(pitch) != "()" && !(finite_num(pitch) && pitch > 0) {
         throw `bullets(): pitch must be a positive length in cm or () (got ${pitch})`;
     }
     let ind = bullet_indent();
@@ -136,17 +136,17 @@ fn bullets(items, opts) {
     let ms = bullet_mark_size();
     let out = [];
     for x in items {
-        if type_of(x) == "array" && !poster_is_rich(x) {
+        if type_of(x) == "array" && !is_rich(x) {
             out.push(row([rect().width(ind), bullets(x, #{ pitch: pitch }).flex(1)]).stretch());
             continue;
         }
-        let item = if type_of(x) == "string" || poster_is_rich(x) { fg_text(x).size(size) } else { x };
+        let item = if type_of(x) == "string" || is_rich(x) { fg_text(x).size(size) } else { x };
         let mark = poster_mark_font(fg_text(bullet_mark()).size(ms)).width(ind);
         out.push(row([mark, item.flex(1)]).cross("baseline"));
     }
     let c = col(out).spacing(bullet_gap()).stretch();
     let bi = bullet_inset();
-    if !plot_finite(bi) || bi < 0 { throw `bullet_inset(): a length in cm >= 0 (got ${bi})`; }
+    if !finite_num(bi) || bi < 0 { throw `bullet_inset(): a length in cm >= 0 (got ${bi})`; }
     if bi > 0 { c = c.pad(#{ left: bi }); }
     if type_of(pitch) == "()" { c } else { c.baseline_pitch(pitch) }
 }
@@ -172,7 +172,7 @@ fn bullets(items, opts) {
 // `table_fill()` / `table_header_fill()`. Node cells keep their own font.
 fn table(rows) { table(rows, #{}) }
 fn table(rows, opts) {
-    poster_check_opts("table", opts, ["header", "widths", "align", "rules", "pad", "pad_x", "pad_y",
+    check_opts("table", opts, ["header", "widths", "align", "rules", "pad", "pad_x", "pad_y",
                                       "font", "header_font", "fonts", "rule_mode", "variant"]);
     if opts.contains("variant") {
         variant_push("table", opts.variant);
@@ -190,9 +190,9 @@ fn table(rows, opts) {
         if nc == 0 { nc = k; }
         if k != nc || nc == 0 { throw `table(): rows differ in length (${nc} vs ${k} columns)`; }
     }
-    let header = plot_opt(opts, "header", true);
-    let ws = poster_weights("table", nc, plot_opt(opts, "widths", ()));
-    let al = plot_opt(opts, "align", "left");
+    let header = opt(opts, "header", true);
+    let ws = sizes_for("table", nc, opt(opts, "widths", ()));
+    let al = opt(opts, "align", "left");
     if type_of(al) == "string" {
         let a = [];
         for i in 0..nc { a.push(al); }
@@ -201,21 +201,21 @@ fn table(rows, opts) {
     if type_of(al) != "array" || al.len() != nc {
         throw "table(): align must be a string or one per column";
     }
-    let pad = plot_opt(opts, "pad", ());
-    let px = plot_opt(opts, "pad_x", if type_of(pad) == "()" { table_pad_x() } else { pad });
-    let py = plot_opt(opts, "pad_y", if type_of(pad) == "()" { table_pad_y() } else { pad });
+    let pad = opt(opts, "pad", ());
+    let px = opt(opts, "pad_x", if type_of(pad) == "()" { table_pad_x() } else { pad });
+    let py = opt(opts, "pad_y", if type_of(pad) == "()" { table_pad_y() } else { pad });
     // Fonts: per column, then the table's `font`, then the hooks.
-    let cf = plot_opt(opts, "fonts", ());
+    let cf = opt(opts, "fonts", ());
     if type_of(cf) != "()" && (type_of(cf) != "array" || cf.len() != nc) {
         throw `table(): fonts must be one font per column (${nc}; "" for the table font)`;
     }
-    let body_font = plot_opt(opts, "font", table_font());
-    let head_font = plot_opt(opts, "header_font", plot_opt(opts, "font", table_header_font()));
-    let rules = plot_opt(opts, "rules", table_rules());
+    let body_font = opt(opts, "font", table_font());
+    let head_font = opt(opts, "header_font", opt(opts, "font", table_header_font()));
+    let rules = opt(opts, "rules", table_rules());
     if !["grid", "rows", "booktabs", "none"].contains(rules) {
         throw `table(): unknown rules "${rules}" (grid, rows, booktabs, none)`;
     }
-    let mode = plot_opt(opts, "rule_mode", table_rule_mode());
+    let mode = opt(opts, "rule_mode", table_rule_mode());
     if mode != "space" && mode != "overlay" {
         throw `table(): unknown rule_mode "${mode}" (space, overlay)`;
     }
@@ -245,12 +245,12 @@ fn table(rows, opts) {
             let k = table_span(x);
             let content = if type_of(x) == "map" { x.content } else { x };
             let font = if head { head_font } else { body_font };
-            if type_of(cf) != "()" && !table_no_font(cf[j]) && !(head && opts.contains("header_font")) {
+            if type_of(cf) != "()" && !font_unset(cf[j]) && !(head && opts.contains("header_font")) {
                 font = cf[j];
             }
             let cell = table_cell(content, head, al[j], px, py, font);
             if k == 1 {
-                cells.push(poster_sized("table", cell, ws[j], false));
+                cells.push(sized("table", cell, ws[j], false));
             } else {
                 cells += table_spanned(cell, ws, j, k, if vertical { rw } else { 0.0 }, table_cell_fill(head));
             }
@@ -264,7 +264,7 @@ fn table(rows, opts) {
     // All widths absolute: the table is exactly as wide as its columns.
     let total = 0.0;
     for w in ws {
-        let v = poster_cm("table", w);
+        let v = cm_length("table", w);
         if type_of(v) == "()" { return t; }
         total += v;
     }
@@ -293,7 +293,7 @@ fn table_overlay(rows, header, ws, al, px, py, f, r) {
             let k = table_span(x);
             let content = if type_of(x) == "map" { x.content } else { x };
             let font = if head { f.head } else { f.body };
-            if type_of(f.cf) != "()" && !table_no_font(f.cf[j]) && !(head && f.own_head) {
+            if type_of(f.cf) != "()" && !font_unset(f.cf[j]) && !(head && f.own_head) {
                 font = f.cf[j];
             }
             let cell = table_cell(content, head, al[j], px, py, font);
@@ -304,7 +304,7 @@ fn table_overlay(rows, header, ws, al, px, py, f, r) {
                 if ci == last { layers.push(rect().width(r.rw).fill(r.rc).x(1).anchor(1, 0)); }
                 cell = stack(layers).viewbox(0, 0, 1, 1);
             }
-            cells += if k == 1 { [poster_sized("table", cell, ws[j], false)] }
+            cells += if k == 1 { [sized("table", cell, ws[j], false)] }
                      else { table_spanned(cell, ws, j, k, 0.0, table_cell_fill(head)) };
             j += k;
             ci += 1;
@@ -323,7 +323,7 @@ fn table_overlay(rows, header, ws, al, px, py, f, r) {
     // All widths absolute: the table is exactly as wide as its columns.
     let total = 0.0;
     for w in ws {
-        let v = poster_cm("table", w);
+        let v = cm_length("table", w);
         if type_of(v) == "()" { return t; }
         total += v;
     }
@@ -354,7 +354,7 @@ fn table_spanned(cell, ws, j, k, rw, fill) {
     let cm = 0;
     for c in j..(j + k) {
         let w = ws[c];
-        let v = poster_cm("table", w);
+        let v = cm_length("table", w);
         if type_of(v) != "()" { sum += v; cm += 1; }
         else if type_of(w) == "i64" || type_of(w) == "f64" { sum += w.to_float(); }
         else { throw "table(): a colspan can't cover \"auto\" columns"; }
@@ -364,14 +364,14 @@ fn table_spanned(cell, ws, j, k, rw, fill) {
     if cm > 0 { throw "table(): a colspan must cover only lengths or only flex weights"; }
     if extra == 0.0 { return [cell.flex(sum)]; }
     let blank = rect().width(extra / 2.0);
-    if poster_has_paint(fill) { blank = blank.fill(fill); }
+    if has_paint(fill) { blank = blank.fill(fill); }
     [blank, cell.flex(sum), blank]
 }
 
 // The fill of a header / body cell ("" for none).
 fn table_cell_fill(head) {
     let f = if head { table_header_fill() } else { "" };
-    if poster_has_paint(f) { f } else { table_fill() }
+    if has_paint(f) { f } else { table_fill() }
 }
 
 // One table cell: `x` (a string or number becomes text, bold in the header)
@@ -384,9 +384,9 @@ fn table_cell(x, head, align, px, py) {
 }
 fn table_cell(x, head, align, px, py, font) {
     let t = type_of(x);
-    let n = if t == "string" || t == "i64" || t == "f64" || poster_is_rich(x) {
-        let s = fg_text(if poster_is_rich(x) { x } else { `${x}` }).size(table_size()).align(align);
-        s = plot_font_on(s, font);
+    let n = if t == "string" || t == "i64" || t == "f64" || is_rich(x) {
+        let s = fg_text(if is_rich(x) { x } else { `${x}` }).size(table_size()).align(align);
+        s = with_font(s, font);
         if head { s.bold() } else { s }
     } else { x };
     // One padding on all sides; the larger axis gets the rest as spacers.
@@ -400,5 +400,5 @@ fn table_cell(x, head, align, px, py, font) {
         c = col([s, c.flex(1), s]).stretch();
     }
     let f = table_cell_fill(head);
-    if poster_has_paint(f) { c.fill(f) } else { c }
+    if has_paint(f) { c.fill(f) } else { c }
 }

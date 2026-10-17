@@ -12,14 +12,14 @@ fn plot_series(kind, xs, ys, opts) {
     if xs.len() != ys.len() {
         throw `${kind}(): x and y differ in length (${xs.len()} vs ${ys.len()})`;
     }
-    let ys = plot_numbers(kind, "y", ys);
+    let ys = numbers(kind, "y", ys);
     let cats = xs.len() > 0 && type_of(xs[0]) == "string";
     if cats {
         for v in xs {
             if type_of(v) != "string" { throw `${kind}(): x mixes category names and numbers`; }
         }
     } else {
-        xs = plot_numbers(kind, "x", xs);
+        xs = numbers(kind, "x", xs);
     }
     let s = #{ kind: if kind == "line_plot" { "line" } else { kind }, x: xs, y: ys, label: "", color: "", width: (), dash: [],
                marker: if kind == "scatter" { "o" } else { "none" }, size: (), yerr: (), open: () };
@@ -38,7 +38,7 @@ fn plot_series(kind, xs, ys, opts) {
         throw `${kind}(): open must be true or false (got ${s.open})`;
     }
     if type_of(s.yerr) != "()" {
-        s.yerr = plot_numbers(kind, "yerr", s.yerr);
+        s.yerr = numbers(kind, "yerr", s.yerr);
         if s.yerr.len() != ys.len() {
             throw `${kind}(): yerr has ${s.yerr.len()} values for ${ys.len()} points`;
         }
@@ -105,13 +105,7 @@ fn plot_text(s) { text(s).size(base_size()).color(plot_fg()) }
 
 // Plot text `s` (a string, or spans such as `markup("*T* [K]")`) at `size`
 // (pt) in `font` ("" or [] for the page font), in `plot_fg()`.
-fn plot_label(s, size, font) { plot_font_on(text(s).size(size).color(plot_fg()), font) }
-
-// `t` in `font`, unless it is "" / [] / () (then no font of its own).
-fn plot_font_on(t, font) {
-    let k = type_of(font);
-    if k == "()" || (k == "string" && font == "") || (k == "array" && font.len() == 0) { t } else { t.font(font) }
-}
+fn plot_label(s, size, font) { with_font(text(s).size(size).color(plot_fg()), font) }
 
 // Is a label option set: a non-empty string, or spans (an array)?
 fn plot_has_label(v) {

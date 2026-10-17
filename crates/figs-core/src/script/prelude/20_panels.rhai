@@ -1,6 +1,7 @@
 // ---------------------------------------------------------------------------
 // Panels: labels, captions, pins and overlays
 // ---------------------------------------------------------------------------
+
 // Panel label template used by `panels(items)`; see `panel_label`.
 fn label_style() { style_get("label_style", "(a)") }
 
@@ -104,8 +105,7 @@ fn label_tag(s) {
     if bg != "" {
         return stack([rect().fill(bg), t.at(0.0, 0.0).margin(label_pad())]);
     }
-    let h = label_halo();
-    if h == "" { t } else { halo(t, h, label_halo_width()) }
+    halo_if(t, label_halo(), label_halo_width())
 }
 
 // Overlay label `s` on `item`, `label_inset()` in from its `label_corner()`:
@@ -120,11 +120,12 @@ fn label_tag(s) {
 // label and the item (default `label_outside_gap()`).
 fn labeled(item, s) { labeled(item, s, #{}) }
 fn labeled(item, s, opts) {
-    shape_opts("labeled", opts, ["position", "gap"]);
-    let pos = plot_opt(opts, "position", label_position());
+    check_opts("labeled", opts, ["position", "gap"]);
+    let pos = one_of("labeled", "position", opt(opts, "position", label_position()),
+                     ["inside"] + corner_names() + ["outside-left", "outside-top"]);
     if pos == "inside" { return labeled_in(item, s, label_corner(), "label_corner"); }
     if pos == "outside-left" || pos == "outside-top" {
-        let g = plot_opt(opts, "gap", label_outside_gap());
+        let g = opt(opts, "gap", label_outside_gap());
         // Beside: the item takes the rest of the width; above: the item
         // keeps its own height (an image stays unletterboxed).
         let n = as_node(item);
@@ -133,9 +134,6 @@ fn labeled(item, s, opts) {
         } else {
             col([label_tag(s), if n.meta("fill") == true { n.flex(1) } else { n }]).spacing(g).stretch()
         }, n);
-    }
-    if !["top-left", "top-right", "bottom-left", "bottom-right"].contains(pos) {
-        throw `labeled(): unknown position "${pos}" (inside, top-left, top-right, bottom-left, bottom-right, outside-left, outside-top)`;
     }
     labeled_in(item, s, pos, "labeled")
 }
@@ -159,9 +157,9 @@ fn labeled_in(item, s, corner, who) {
 // `fill_row(.., #{ captions: "overhang" })` can rebuild it.
 fn captioned(item, c) { captioned(item, c, #{}) }
 fn captioned(item, c, opts) {
-    shape_opts("captioned", opts, ["overhang"]);
-    let over = overhang_mode("captioned", plot_opt(opts, "overhang", caption_overhang()));
-    let cap = if type_of(c) == "string" || poster_is_rich(c) { caption(c) } else { c };
+    check_opts("captioned", opts, ["overhang"]);
+    let over = overhang_mode("captioned", opt(opts, "overhang", caption_overhang()));
+    let cap = if is_text(c) { caption(c) } else { c };
     cap = overhang_as(cap, over);
     fill_like(col([as_node(item).flex(1), cap]).spacing(caption_gap()).stretch()
         .meta("captioned", [item, c]), item)
@@ -248,7 +246,7 @@ fn overlay(item, map, opts) {
     if type_of(map) != "map" {
         throw `overlay(): expected a map of position -> node(s) (got ${type_of(map)})`;
     }
-    shape_opts("overlay", opts, ["inset", "gap", "size", "color", "halo"]);
+    check_opts("overlay", opts, ["inset", "gap", "size", "color", "halo"]);
     let look = #{};
     for k in ["size", "color", "halo"] {
         if opts.contains(k) { look[`overlay_text_${k}`] = opts[k]; }
@@ -261,9 +259,8 @@ fn overlay(item, map, opts) {
         style_pop();
         return s;
     }
-    let names = [];
-    for p in overlay_positions() { names.push(p[0]); }
-    let inset = plot_opt(opts, "inset", overlay_inset());
+    let names = position_names();
+    let inset = opt(opts, "inset", overlay_inset());
     let per = #{};
     if type_of(inset) == "map" {
         for k in inset.keys() {
@@ -272,12 +269,10 @@ fn overlay(item, map, opts) {
         per = inset;
         inset = overlay_inset();
     }
-    let g = plot_opt(opts, "gap", overlay_gap());
-    for k in map.keys() {
-        if !names.contains(k) { throw `overlay(): unknown position "${k}" (${list_names(names)})`; }
-    }
+    let g = opt(opts, "gap", overlay_gap());
+    check_keys("overlay", "position", map, names);
     let layers = [as_node(item)];
-    for p in overlay_positions() {
+    for p in position_table() {
         if !map.contains(p[0]) { continue; }
         let v = map[p[0]];
         let sl = split_links(v);

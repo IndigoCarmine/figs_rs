@@ -77,10 +77,7 @@ fn poster_number_inset() { style_get("poster_number_inset", 0) }
 fn poster_title_inset() { style_get("poster_title_inset", 0) }
 
 // The rule under the header ("" for none) and its width (cm, 1 pt at 24 pt).
-fn poster_header_rule() {
-    let f = fg();
-    style_get("poster_header_rule", if f == "" { "#7f7f7f" } else { f })
-}
+fn poster_header_rule() { style_get("poster_header_rule", fg_or("#7f7f7f")) }
 fn poster_header_rule_width() { style_get("poster_header_rule_width", base_size() * 0.00147) }
 
 // Section numbering template: "1." gives "1. Title" (any `panel_label`
@@ -141,10 +138,7 @@ fn separators() { style_get("separators", true) }
 fn row_separators() { style_get("row_separators", false) }
 
 // Separator colour, width (cm; 1.5 pt at 24 pt) and dash (12 pt on, 4.5 off).
-fn separator_color() {
-    let f = fg();
-    style_get("separator_color", if f == "" { "#7f7f7f" } else { f })
-}
+fn separator_color() { style_get("separator_color", fg_or("#7f7f7f")) }
 fn separator_width() { style_get("separator_width", base_size() * 0.0022) }
 fn separator_dash() {
     style_get("separator_dash", [separator_width() * 8.0, separator_width() * 3.0])
@@ -160,10 +154,7 @@ fn separator_offset() { style_get("separator_offset", 0) }
 
 // `frame`: border colour, width (cm), corner radius (cm), padding (cm) and
 // the dash of `dashed_frame`.
-fn frame_color() {
-    let f = fg();
-    style_get("frame_color", if f == "" { "#7f7f7f" } else { f })
-}
+fn frame_color() { style_get("frame_color", fg_or("#7f7f7f")) }
 fn frame_width() { style_get("frame_width", separator_width()) }
 fn frame_radius() { style_get("frame_radius", base_size() * 0.011) }
 fn frame_pad() { style_get("frame_pad", base_size() * 0.015) }
@@ -254,7 +245,7 @@ fn poster_symbol_font() { style_get("poster_symbol_font", "") }
 // slot, when one is set.
 fn poster_mark_font(x) {
     let f = poster_symbol_font();
-    if table_no_font(f) { x } else { x.font(#{ symbol: f }) }
+    if font_unset(f) { x } else { x.font(#{ symbol: f }) }
 }
 
 // `table`: text size (pt), rule colour, rule width (cm; 1 pt at 24 pt), the
@@ -266,10 +257,7 @@ fn poster_mark_font(x) {
 // outer frame just inside the table's edge), so they take no space: the
 // rows sit edge to edge and the table is as tall (wide) as its cells.
 fn table_size() { style_get("table_size", base_size()) }
-fn table_rule() {
-    let f = fg();
-    style_get("table_rule", if f == "" { "#000000" } else { f })
-}
+fn table_rule() { style_get("table_rule", fg_or("#000000")) }
 fn table_rule_width() { style_get("table_rule_width", base_size() * 0.00147) }
 fn table_header_rule_width() { style_get("table_header_rule_width", table_rule_width() * 3.0) }
 fn table_rules() { style_get("table_rules", "grid") }

@@ -1,13 +1,13 @@
 // `node` sized along a container's main axis by `w`: a number is a flex
 // weight, "12cm" an absolute length, "auto" its natural size.
-fn poster_sized(who, node, w, vertical) {
+fn sized(who, node, w, vertical) {
     let t = type_of(w);
     if t == "i64" || t == "f64" {
         if !(w > 0) { throw `${who}(): a flex weight must be positive (got ${w})`; }
         return node.flex(w);
     }
     if w == "auto" { return node; }
-    let v = poster_cm(who, w);
+    let v = cm_length(who, w);
     if type_of(v) == "()" {
         throw `${who}(): sizes are flex weights (2), lengths ("12cm") or "auto" (got ${w})`;
     }
@@ -15,7 +15,7 @@ fn poster_sized(who, node, w, vertical) {
 }
 
 // Sizes for `n` items: `ws` checked against `n`, or n ones.
-fn poster_weights(who, n, ws) {
+fn sizes_for(who, n, ws) {
     if type_of(ws) == "()" {
         let out = [];
         for i in 0..n { out.push(1); }
@@ -38,7 +38,7 @@ fn vsep(w) { poster_vsep(w, separator_inset(), (), separator_offset()) }
 // the bottom), `off` cm right of the gutter's centre.
 fn poster_vsep(w, y0, y1) { poster_vsep(w, y0, y1, separator_offset()) }
 fn poster_vsep(w, y0, y1, off) {
-    if !plot_finite(off) { throw `columns(): a separator offset is a length in cm (got ${off})`; }
+    if !finite_num(off) { throw `columns(): a separator offset is a length in cm (got ${off})`; }
     let l = if off == 0 {
         line(0.5, 0, 0.5, 1).viewbox(0, 0, 1, 1)
     } else {
@@ -91,13 +91,13 @@ fn columns(items, widths, opts) {
     if type_of(items) != "array" {
         throw `columns(): expected an array of nodes (got ${type_of(items)})`;
     }
-    poster_check_opts("columns", opts, ["gutter", "separators"]);
+    check_opts("columns", opts, ["gutter", "separators"]);
     let sl = split_links(items);
     items = sl.items;
     let n = items.len();
-    let ws = poster_weights("columns", n, widths);
-    let gs = poster_per_gap("columns", "gutter", plot_opt(opts, "gutter", poster_gutter()), n);
-    let ss = poster_per_gap("columns", "separators", plot_opt(opts, "separators", separators()), n);
+    let ws = sizes_for("columns", n, widths);
+    let gs = poster_per_gap("columns", "gutter", opt(opts, "gutter", poster_gutter()), n);
+    let ss = poster_per_gap("columns", "separators", opt(opts, "separators", separators()), n);
     let uniform = poster_uniform(gs, ss);
     let out = [];
     for i in 0..n {
@@ -115,14 +115,14 @@ fn columns(items, widths, opts) {
                         throw `columns(): unknown separator key "${k}" (start, end, offset)`;
                     }
                 }
-                let y0 = plot_opt(s, "start", plot_opt(s, "from", separator_inset()));
-                poster_vsep(g, y0, plot_opt(s, "end", plot_opt(s, "until", ())),
-                            plot_opt(s, "offset", separator_offset()))
+                let y0 = opt(s, "start", opt(s, "from", separator_inset()));
+                poster_vsep(g, y0, opt(s, "end", opt(s, "until", ())),
+                            opt(s, "offset", separator_offset()))
             } else {
                 throw `columns(): a separator is true, false, an end (cm) or #{ start, end, offset } (got ${t})`;
             });
         }
-        out.push(poster_sized("columns", as_node(items[i]), ws[i], false));
+        out.push(sized("columns", as_node(items[i]), ws[i], false));
     }
     row(out + sl.links).spacing(if uniform && gs.len() > 0 { gs[0] } else { 0 }).stretch()
 }
@@ -142,13 +142,13 @@ fn rows(items, heights, opts) {
     if type_of(items) != "array" {
         throw `rows(): expected an array of nodes (got ${type_of(items)})`;
     }
-    poster_check_opts("rows", opts, ["gaps", "separators"]);
+    check_opts("rows", opts, ["gaps", "separators"]);
     let sl = split_links(items);
     items = sl.items;
     let n = items.len();
-    let hs = poster_weights("rows", n, heights);
-    let gs = poster_per_gap("rows", "gaps", plot_opt(opts, "gaps", poster_row_gap()), n);
-    let ss = poster_per_gap("rows", "separators", plot_opt(opts, "separators", row_separators()), n);
+    let hs = sizes_for("rows", n, heights);
+    let gs = poster_per_gap("rows", "gaps", opt(opts, "gaps", poster_row_gap()), n);
+    let ss = poster_per_gap("rows", "separators", opt(opts, "separators", row_separators()), n);
     for s in ss {
         if type_of(s) != "bool" { throw `rows(): separators are true or false (got ${type_of(s)})`; }
     }
@@ -158,7 +158,7 @@ fn rows(items, heights, opts) {
         if i > 0 && !uniform {
             out.push(if ss[i - 1] { hsep(gs[i - 1]) } else { rect().height(gs[i - 1]) });
         }
-        out.push(poster_sized("rows", as_node(items[i]), hs[i], true));
+        out.push(sized("rows", as_node(items[i]), hs[i], true));
     }
     col(out + sl.links).spacing(if uniform && gs.len() > 0 { gs[0] } else { 0 }).stretch()
 }

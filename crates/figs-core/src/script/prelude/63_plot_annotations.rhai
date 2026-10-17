@@ -71,18 +71,18 @@ fn plot_shift_arrows(a, b, xs, opts) {
             throw `${who}(): from and to must be series (line_plot / scatter / bars), got ${type_of(sr)}`;
         }
     }
-    shape_opts(who, opts, ["color", "width", "head", "dash", "trim", "min_length", "anchor"]);
+    check_opts(who, opts, ["color", "width", "head", "dash", "trim", "min_length", "anchor"]);
     if type_of(xs) != "array" { xs = [xs]; }
-    let trim = plot_opt(opts, "trim", shift_arrow_trim()).to_float();
+    let trim = opt(opts, "trim", shift_arrow_trim()).to_float();
     if !(trim >= 0.0 && trim < 0.5) { throw `${who}(): trim is a fraction from 0 to 0.5 (got ${trim})`; }
-    let min = plot_opt(opts, "min_length", shift_arrow_min_length());
-    if !plot_finite(min) || min < 0 { throw `${who}(): min_length is a length in y data units >= 0 (got ${min})`; }
-    let anchor = plot_opt(opts, "anchor", shift_arrow_anchor());
+    let min = opt(opts, "min_length", shift_arrow_min_length());
+    if !finite_num(min) || min < 0 { throw `${who}(): min_length is a length in y data units >= 0 (got ${min})`; }
+    let anchor = opt(opts, "anchor", shift_arrow_anchor());
     if !["gap", "curve"].contains(anchor) { throw `${who}(): unknown anchor "${anchor}" (gap, curve)`; }
     let o = #{};
     for k in ["color", "width", "head", "dash"] { if opts.contains(k) { o[k] = opts[k]; } }
     let out = [];
-    for x in plot_numbers(who, "x", xs) {
+    for x in numbers(who, "x", xs) {
         let y0 = plot_interp(who, a, x);
         let y1 = plot_interp(who, b, x);
         let dy = (y1 - y0).to_float();
@@ -121,38 +121,38 @@ fn plot_annotation(name, kind, pts, s, opts, known) {
     }
     // Unset style-dependent defaults stay () until the plot draws the
     // annotation, so its `style:` option applies to them.
-    let a = #{ mark: kind, pts: plot_numbers(name, "coordinates", pts), s: s, color: () };
+    let a = #{ mark: kind, pts: numbers(name, "coordinates", pts), s: s, color: () };
     if opts.contains("color") {
         a.color = if type_of(opts.color) == "i64" { palette_color(opts.color) } else { opts.color };
     }
     if kind == "text" {
         if type_of(s) != "string" { throw `${name}(): text must be a string (got ${type_of(s)})`; }
-        a.size = plot_opt(opts, "size", ());
-        a.font = plot_opt(opts, "font", ());
+        a.size = opt(opts, "size", ());
+        a.font = opt(opts, "font", ());
         for k in ["bold", "italic", "markup"] {
-            a[k] = plot_opt(opts, k, false);
+            a[k] = opt(opts, k, false);
             if type_of(a[k]) != "bool" { throw `${name}(): ${k} must be true or false (got ${a[k]})`; }
         }
         // Parse markup now, so a malformed string is reported at this call.
         if a.markup { a.s = markup(s); }
-        a.anchor = plot_numbers(name, "anchor", plot_opt(opts, "anchor", [0.5, 0.5]));
+        a.anchor = numbers(name, "anchor", opt(opts, "anchor", [0.5, 0.5]));
         if a.anchor.len() != 2 { throw `${name}(): anchor must be [ax, ay]`; }
     } else if kind == "dimension" {
-        if type_of(s) != "string" && !poster_is_rich(s) {
+        if type_of(s) != "string" && !is_rich(s) {
             throw `${name}(): the label must be a string or spans (got ${type_of(s)})`;
         }
-        a.width = plot_opt(opts, "width", ());
-        a.size = plot_opt(opts, "size", ());
-        a.gap = plot_opt(opts, "gap", ());
-        a.dash = plot_opt(opts, "dash", []);
+        a.width = opt(opts, "width", ());
+        a.size = opt(opts, "size", ());
+        a.gap = opt(opts, "gap", ());
+        a.dash = opt(opts, "dash", []);
         a.vertical = false;
         // The label's side: above / right (false) or below / left (true).
-        a.flip = plot_opt(opts, "below", plot_opt(opts, "left", false));
+        a.flip = opt(opts, "below", opt(opts, "left", false));
         if type_of(a.flip) != "bool" { throw `${name}(): below / left must be true or false (got ${a.flip})`; }
     } else {
-        a.width = plot_opt(opts, "width", ());
-        a.head = plot_opt(opts, "head", "end");
-        a.dash = plot_opt(opts, "dash", []);
+        a.width = opt(opts, "width", ());
+        a.head = opt(opts, "head", "end");
+        a.dash = opt(opts, "dash", []);
     }
     a
 }
@@ -186,7 +186,7 @@ fn plot_annotation_node(a, xlog, ylog, x0, x1, y0, y1) {
     let c = if type_of(a.color) == "()" { plot_fg() } else { a.color };
     if a.mark == "text" {
         let size = if type_of(a.size) == "()" { base_size() } else { a.size };
-        let t = plot_font_on(text(a.s).size(size).color(c),
+        let t = with_font(text(a.s).size(size).color(c),
                              if type_of(a.font) == "()" { plot_font() } else { a.font });
         if a.bold { t = t.bold(); }
         if a.italic { t = t.italic(); }
@@ -200,7 +200,7 @@ fn plot_annotation_node(a, xlog, ylog, x0, x1, y0, y1) {
             .stroke_width(w).head("both").dash(a.dash);
         let size = if type_of(a.size) == "()" { base_size() } else { a.size };
         let g = if type_of(a.gap) == "()" { tick_label_pad() } else { a.gap };
-        let t = plot_font_on(text(a.s).size(size).color(c), plot_font()).nowrap();
+        let t = with_font(text(a.s).size(size).color(c), plot_font()).nowrap();
         let mx = (p[0] + p[2]) / 2.0;
         let my = (p[1] + p[3]) / 2.0;
         let lab = if a.vertical {

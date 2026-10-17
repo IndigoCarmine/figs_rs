@@ -102,33 +102,33 @@ fn link_opts(who, defaults, opts) {
 fn zoom_link(item, copy) { zoom_link(item, copy, #{}) }
 fn zoom_link(item, copy, opts) {
     let who = "zoom_link";
-    shape_opts(who, opts, ["region", "color", "width", "dash", "region_dash", "frame",
+    check_opts(who, opts, ["region", "color", "width", "dash", "region_dash", "frame",
                            "outline", "style", "opacity", "attach"]);
-    let r = plot_numbers(who, "`region`", plot_opt(opts, "region", [0.4, 0.4, 0.6, 0.6]));
+    let r = numbers(who, "`region`", opt(opts, "region", [0.4, 0.4, 0.6, 0.6]));
     if r.len() != 4 || !(r[2] > r[0]) || !(r[3] > r[1]) {
         throw `${who}(): region is [fx0, fy0, fx1, fy1] fractions of the item's box (fx0 < fx1, fy0 < fy1)`;
     }
-    let shape = plot_opt(opts, "outline", zoom_outline());
+    let shape = opt(opts, "outline", zoom_outline());
     if !["rect", "circle", "none"].contains(shape) {
         throw `${who}(): unknown outline "${shape}" (rect, circle, none)`;
     }
-    let st = plot_opt(opts, "style", zoom_style());
+    let st = opt(opts, "style", zoom_style());
     if !["lines", "cone"].contains(st) {
         throw `${who}(): unknown style "${st}" (lines, cone)`;
     }
-    let att = plot_opt(opts, "attach", zoom_attach());
+    let att = opt(opts, "attach", zoom_attach());
     if !["facing", "hull"].contains(att) {
         throw `${who}(): unknown attach "${att}" (facing, hull)`;
     }
-    let color = plot_opt(opts, "color", zoom_color());
-    let base = #{ stroke: color, width: plot_opt(opts, "width", zoom_width()) };
-    let rd = plot_opt(opts, "region_dash", zoom_region_dash());
+    let color = opt(opts, "color", zoom_color());
+    let base = #{ stroke: color, width: opt(opts, "width", zoom_width()) };
+    let rd = opt(opts, "region_dash", zoom_region_dash());
     let fs = if shape == "circle" { "ellipse" } else { "box" };
     let out = [];
     // The cone first: drawn under the outlines.
     if st == "cone" {
         let c = #{ route: "cone", from_box: r, from_shape: fs, fill: color,
-                   opacity: plot_opt(opts, "opacity", zoom_cone_opacity()) };
+                   opacity: opt(opts, "opacity", zoom_cone_opacity()) };
         if att == "hull" { c.from = "hull-1"; c.to = "hull-1"; }
         out.push(connect(item, copy, c));
     }
@@ -137,11 +137,11 @@ fn zoom_link(item, copy, opts) {
     } else if shape == "circle" {
         out.push(connect(item, item, base + #{ route: "outline", from_box: r, from_shape: "ellipse", dash: rd }));
     }
-    if plot_opt(opts, "frame", zoom_copy_frame()) {
+    if opt(opts, "frame", zoom_copy_frame()) {
         out += link_box(copy, (), base + #{ dash: rd });
     }
     if st == "lines" {
-        let d = plot_opt(opts, "dash", zoom_dash());
+        let d = opt(opts, "dash", zoom_dash());
         let ks = if att == "hull" { ["hull-1", "hull-2"] } else { ["facing-1", "facing-2"] };
         for k in ks {
             out.push(connect(item, copy, base + #{ from_box: r, from_shape: fs, from: k, to: k, dash: d }));
@@ -184,31 +184,31 @@ fn link_box(node, r, o) {
 fn callout_to(item, label) { callout_to(item, label, #{}) }
 fn callout_to(item, label, opts) {
     let who = "callout_to";
-    shape_opts(who, opts, ["at", "position", "color", "width", "gap", "head", "size", "route"]);
-    let at = plot_numbers(who, "`at`", plot_opt(opts, "at", [0.5, 0.5]));
+    check_opts(who, opts, ["at", "position", "color", "width", "gap", "head", "size", "route"]);
+    let at = numbers(who, "`at`", opt(opts, "at", [0.5, 0.5]));
     if at.len() != 2 { throw `${who}(): at is [fx, fy] fractions of the item's box`; }
-    let pos = plot_opt(opts, "position", callout_position());
-    let size = plot_opt(opts, "size", callout_size());
+    let pos = opt(opts, "position", callout_position());
+    let size = opt(opts, "size", callout_size());
     let sides = ["left", "right", "above", "below"];
     let inside = ();
-    for p in overlay_positions() { if p[0] == pos { inside = p; } }
+    for p in position_table() { if p[0] == pos { inside = p; } }
     if type_of(inside) == "()" && !sides.contains(pos) {
         let names = [];
-        for p in overlay_positions() { names.push(p[0]); }
+        for p in position_table() { names.push(p[0]); }
         throw `${who}(): unknown position "${pos}" (${list_names(names + sides)})`;
     }
     let n = as_node(item);
     let lab = if type_of(inside) != "()" {
         let t = overlay_text(who, label, inside[2]);
-        if type_of(label) == "string" || poster_is_rich(label) { t = t.size(size); }
+        if type_of(label) == "string" || is_rich(label) { t = t.size(size); }
         t
     } else {
-        scheme_text(who, label, size, if pos == "left" { "end" } else { "start" })
+        text_or_node(who, label, size, if pos == "left" { "end" } else { "start" })
     };
     let leader = connect(lab, n, #{
-        to: at, stroke: plot_opt(opts, "color", callout_color()),
-        width: plot_opt(opts, "width", callout_width()), gap: [plot_opt(opts, "gap", callout_gap()), 0],
-        head: plot_opt(opts, "head", "none"), route: plot_opt(opts, "route", "straight") });
+        to: at, stroke: opt(opts, "color", callout_color()),
+        width: opt(opts, "width", callout_width()), gap: [opt(opts, "gap", callout_gap()), 0],
+        head: opt(opts, "head", "none"), route: opt(opts, "route", "straight") });
     let g = callout_side_gap();
     if pos == "right" { return row([n, lab, leader]).spacing(g).cross("center"); }
     if pos == "left" { return row([lab, n, leader]).spacing(g).cross("center"); }
@@ -244,7 +244,7 @@ fn block_link(a, b, opts) {
     for k in opts.keys() {
         if k == "width" { o.band = opts.width; } else if k == "color" { o.fill = opts.color; } else { o[k] = opts[k]; }
     }
-    let w = plot_opt(o, "band", block_link_width());
+    let w = opt(o, "band", block_link_width());
     connect(a, b, link_opts("block_link", #{
         band: w, fill: block_link_color(), opacity: block_link_opacity(), head: "end",
         radius: w }, o))
@@ -291,11 +291,11 @@ fn behind(group, layers) {
 // Give `node` a size (`.width` / `.height`, or an icon).
 fn pile(node, n) { pile(node, n, #{}) }
 fn pile(node, n, opts) {
-    shape_opts("pile", opts, ["offset", "opacity"]);
+    check_opts("pile", opts, ["offset", "opacity"]);
     if type_of(n) != "i64" || n < 1 { throw `pile(): n must be a positive integer (got ${n})`; }
-    let off = plot_numbers("pile", "`offset`", plot_opt(opts, "offset", pile_offset()));
+    let off = numbers("pile", "`offset`", opt(opts, "offset", pile_offset()));
     if off.len() != 2 { throw "pile(): offset is [dx, dy] cm"; }
-    let op = plot_opt(opts, "opacity", pile_opacity()).to_float();
+    let op = opt(opts, "opacity", pile_opacity()).to_float();
     let x0 = if off[0] < 0.0 { -(n - 1).to_float() * off[0] } else { 0.0 };
     let y0 = if off[1] < 0.0 { -(n - 1).to_float() * off[1] } else { 0.0 };
     let m = as_node(node);
@@ -315,12 +315,12 @@ fn pile(node, n, opts) {
 // (`backdrop_radius()`), `stroke` / `stroke_width` for a border.
 fn backdrop(node) { backdrop(node, #{}) }
 fn backdrop(node, opts) {
-    shape_opts("backdrop", opts, ["color", "pad", "radius", "stroke", "stroke_width"]);
-    let b = col([as_node(node)]).pad(plot_opt(opts, "pad", backdrop_pad()))
-        .fill(plot_opt(opts, "color", backdrop_color())).radius(plot_opt(opts, "radius", backdrop_radius()))
+    check_opts("backdrop", opts, ["color", "pad", "radius", "stroke", "stroke_width"]);
+    let b = col([as_node(node)]).pad(opt(opts, "pad", backdrop_pad()))
+        .fill(opt(opts, "color", backdrop_color())).radius(opt(opts, "radius", backdrop_radius()))
         .cross("center").main("center");
     if opts.contains("stroke") {
-        b = b.stroke(opts.stroke).stroke_width(plot_opt(opts, "stroke_width", annotation_width()));
+        b = b.stroke(opts.stroke).stroke_width(opt(opts, "stroke_width", annotation_width()));
     }
     b
 }

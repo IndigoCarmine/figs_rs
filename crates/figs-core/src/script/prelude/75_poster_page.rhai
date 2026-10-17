@@ -12,5 +12,5 @@ fn poster(preset, header, body) {
     let root = col(parts).spacing(poster_row_gap()).pad(poster_margin()).stretch();
     let d = page(preset, root);
     let bg = poster_bg();
-    if poster_has_paint(bg) { d.background(bg) } else { d }
+    if has_paint(bg) { d.background(bg) } else { d }
 }
