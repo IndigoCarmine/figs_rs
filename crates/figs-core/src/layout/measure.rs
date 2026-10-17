@@ -153,7 +153,31 @@ fn measure_own<M: LeafMeasure>(ctx: &Ctx<M>, idx: usize, c: Constraints) -> Size
         }
     };
 
+    // A container with an aspect ratio and no side known (loose constraints
+    // — a plot in a centred column, or wrapped in a plain `col`) would wrap
+    // its content, which says little about its size (a plot's labels):
+    // like an image, it takes the largest box of its aspect that fits.
+    if let Some(ar) = loose_aspect(&node.common, c) {
+        if matches!(
+            node.kind,
+            NodeType::Container { .. } | NodeType::Stack { .. }
+        ) {
+            let fit = contain(ar, c.max_w, c.max_h);
+            if fit.w > 0.0 && fit.h > 0.0 {
+                return c.clamp(fit);
+            }
+        }
+    }
     resolve_box_size(&node.common, intrinsic, c)
+}
+
+/// The aspect ratio of a node that has one but no side decided: no explicit
+/// `width` / `height` and no tight constraint.
+fn loose_aspect(common: &Common, c: Constraints) -> Option<f32> {
+    let ar = common.aspect_ratio.filter(|a| a.is_finite() && *a > 0.0)?;
+    let known =
+        common.width.is_some() || common.height.is_some() || c.is_tight_w() || c.is_tight_h();
+    (!known).then_some(ar)
 }
 
 /// Wrap-content size of a container: sum along the main axis, max along the
@@ -208,11 +232,17 @@ pub(super) fn measure_container<M: LeafMeasure>(
     // scale with it (no bounded width: measured as usual).
     let shared = (equal_height && inner_max_w.is_finite())
         .then(|| equal_height_widths(ctx, children, inner_max_w, gaps, base));
+    // Flex children share the main axis when it is tight, exactly as
+    // arrange will; in a row also when its width is only bounded: a row with
+    // flex children takes all the width it may (Flutter's
+    // `MainAxisSize.max`), so they are measured at the width they get, not
+    // at their intrinsic one (an aspect-ratio panel would claim it all).
+    let main_bounded = main_tight || (axis == Axis::Horizontal && inner_max_w.is_finite());
     let flex_of = |child: usize| {
         ctx.doc.nodes[child]
             .common
             .flex
-            .filter(|w| *w > 0.0 && main_tight && shared.is_none())
+            .filter(|w| *w > 0.0 && main_bounded && shared.is_none())
     };
 
     // Non-flex children (all of them when the main axis isn't tight) first.

@@ -159,7 +159,8 @@ pub(super) fn register_style(engine: &mut Engine) {
 ///
 /// - `n.meta(key, value)` returns `n` with the note set (any value);
 /// - `n.meta(key)` reads it back, `()` when unset;
-/// - `n.prepend(child)` inserts `child` as the first child of container `n`.
+/// - `n.prepend(child)` inserts `child` as the first child of container `n`;
+/// - `n.kind()` is the node's kind (its TOML `type`, e.g. "connector").
 ///
 /// Notes are never lowered into the document; they let one framework component
 /// leave a hint for another that receives the finished node. A plot notes the
@@ -173,6 +174,25 @@ pub(super) fn register_meta(engine: &mut Engine) {
     });
     engine.register_fn("meta", |n: super::ScriptNode, key: &str| {
         n.meta.get(key).cloned().unwrap_or(Dynamic::UNIT)
+    });
+    // The node's kind as its TOML `type` ("column", "image", "connector",
+    // …): lets a helper tell connectors (which take no room) from items.
+    engine.register_fn("kind", |n: super::ScriptNode| -> String {
+        use crate::schema::NodeKind as K;
+        match n.node.kind {
+            K::Column => "column",
+            K::Row => "row",
+            K::Stack => "stack",
+            K::Image => "image",
+            K::Text => "text",
+            K::Rect => "rect",
+            K::Line => "line",
+            K::Arrow => "arrow",
+            K::Ellipse => "ellipse",
+            K::Path => "path",
+            K::Connector => "connector",
+        }
+        .into()
     });
     engine.register_fn(
         "prepend",

@@ -1249,7 +1249,8 @@ setters:
 - **script-only**: `.meta(key, value)` / `.meta(key)` (a note on the node for
   other script code, `()` when unset; never part of the document — how a plot
   asks `labeled` for label room), `.prepend(child)` (insert a first child into
-  a `col`/`row`/`stack`).
+  a `col`/`row`/`stack`), `.kind()` (the node's TOML `type`: `"connector"`,
+  `"image"`, …).
 
 Build it like any document (extension selects the front-end):
 
@@ -1316,7 +1317,7 @@ Components (lengths in cm, font sizes in pt):
 | `side(main, note)` / `side(main, note, opts)` | A panel with a text block beside it: `note` (a string, spans, a node, or an array → a column `caption_gap()` apart) right of `main`, vertically centred, taking `side_width()` (0.4) of the width, `side_gap()` apart. Options `side` (`"right"` / `"left"`), `width` (a fraction, `"5cm"` or `"auto"`), `gap`, `align` (`"center"`, `"start"`, `"end"`, `"stretch"`). |
 | `scheme(items)` / `scheme(items, opts)` / `scheme_v(..)` | A reaction scheme or process flow without coordinates: `items` (nodes, strings like `"+"`, `step`s, `arrow_step`s) in a row `scheme_gap()` apart, every item centred on one axis. Options `direction` (`"right"` / `"down"` = `scheme_v`), `gap`, `align`, `arrow_length` (cm or `"fill"` for every arrow). See *Schemes*. |
 | `step(node, #{ above, below, left, right })` / `step(node, caption)` | A node with captions (a string, rich text or a node each; strings at `scheme_label_size()`, centred), `scheme_label_gap()` from it; the node is marked as the step's axis (core `.axis()`), so in a scheme — or any `.cross("axis")` container — it sits on the axis while each caption takes only its own room. |
-| `arrow_step(label)` / `arrow_step(opts)` | An arrow for `scheme` with text above / below it (`scheme_v`: right / left). Options `above`, `below`, `length` (cm, default `scheme_arrow_length()`, or `"fill"`: share the spare width), `head` (`"end"`, `"both"`, `"start"`, `"none"`), `equilibrium` (`true` or a map of `equilibrium` options: the ⇌ pair), `color` (default `fg()`), `width` (default `scheme_arrow_width()`), `head_size`, `head_width`. |
+| `arrow_step(label)` / `arrow_step(opts)` | An arrow for `scheme` with text above / below it (`scheme_v`: right / left). Options `above`, `below`, `length` (cm, default `scheme_arrow_length()`, or `"fill"`: share the spare width, at least `scheme_fill_min_length()`), `head` (`"end"`, `"both"`, `"start"`, `"none"`), `equilibrium` (`true` or a map of `equilibrium` options: the ⇌ pair), `color` (default `fg()`), `width` (default `scheme_arrow_width()`), `head_size`, `head_width`. |
 | `labware(kind)` / `labware(kind, opts)` | Lab glassware as clean line art (core paths), all `labware_size()` tall (1.2 cm at 8 pt; a dish 0.42 of it) so they line up in a `scheme`: `"vial"`, `"tube"`, `"flask"` (round-bottom), `"erlenmeyer"`, `"beaker"`, `"funnel"`, `"dish"` (Petri dish), `"cuvette"`, `"syringe"`. Options `level` (liquid, 0 … 1; default `labware_level()` = 0), `liquid` (colour or gradient; `labware_liquid()`), `size` (height, cm), `stroke` / `stroke_width` (`labware_stroke()` / `labware_stroke_width()`), `lid` (dish). See *Figure kit*. |
 | `vector_note(item, label)` / `(item, label, opts)` | A straight arrow across a panel (a dipole over a structure, a field over a photo), `label` just beyond its head in its colour (haloed like a panel label). `from` / `to` are `[fx, fy]` **fractions of the item's box** (default `[0.2, 0.75]` → `[0.8, 0.25]`); the label is kept inside the item. Options `color` (`vector_note_color()` = `accent()`), `width`, `size`, `gap`, `head`, `head_size`, `head_width`. |
 | `colorbar(fill, labels)` / `(fill, labels, opts)` | A colour scale: a bar filled with `fill` (colours spread as a gradient, `[offset, colour]` stops, or a ready paint) and `labels` spread evenly along it — the ends flush with the bar's ends, the rest centred. Options `direction` (`"horizontal"`: labels below; `"vertical"`: low at the bottom, labels right), `length` (cm or `"fill"`; `colorbar_length()`), `thickness`, `size`, `gap`, `border` (`""` for none), `discrete: true` (one block per colour), `title`. |
@@ -1380,6 +1381,7 @@ fn scalebar_box_radius() { 0.05 }   // cm (default 0)
 fn scheme_gap() { 0.4 }             // between scheme items, cm (default gap())
 fn scheme_arrow_length() { 2 }      // scheme arrows, cm (default base_size() * 0.2 = 1.6)
 fn scheme_arrow_width() { 0.03 }    // their stroke, cm (default annotation_width())
+fn scheme_fill_min_length() { 1 }   // a "fill" arrow with no width to share, cm (default scheme_arrow_length())
 fn scheme_label_size() { 7 }        // step captions and arrow labels, pt (default base_size())
 fn scheme_label_gap() { 0.05 }      // caption / label to its node or arrow, cm (default caption_gap())
 fn side_width() { 0.5 }             // side(main, note): the note's share (default 0.4)
@@ -1644,7 +1646,12 @@ overlay(photo, #{ bottom: backdrop(rich("*T* = 25 °C")) })
 
 They return connectors (or arrays of them, spliced into any container) that
 take no room; nodes are referred to by value (`connect(img, detail)`), or by
-an `.id("name")`.
+an `.id("name")`. Every framework helper takes such arrays among its items
+too: list helpers (`block`, `grid`, `columns`, `rows`, `scheme`, `panels`,
+`section`, `frame`, `fill_row`, `overlay` values, `behind`) splice them in and
+count only the items that take room (`block("Zoom", [fill_row([a, b]),
+zoom_link(a, b, ..)], #{ widths: [1] })`); a single-item argument given an
+array (`labeled([row([a, b]), zoom_link(a, b)], "(a)")`) wraps it in a column.
 
 **Figure kit.** The furniture of chemistry and materials figures is built in
 too, so a scheme or a panel needs no hand-drawn shapes
@@ -2146,7 +2153,16 @@ Modeled on Flutter's `BoxConstraints`/`RenderFlex`:
   The aspect is `aspect_ratio`, else the file's natural aspect, else 4:3. An
   unbounded axis (auto page height) doesn't limit; it never yields an infinite
   size. Several such images side by side in a `row` each claim the full width
-  and overflow — give them `flex` or a size.
+  and overflow — give them `flex` or a size. A `col` / `row` / `stack` with an
+  `aspect_ratio` (a plot) does the same instead of wrapping its content, so a
+  plot wrapped in a plain `col` keeps its shape.
+- **flex in a loose row**: a row whose width is bounded but not fixed (in a
+  centred column) gives its `flex` children their shares of that width in
+  measure as in arrange — a row with flex children takes all the width it may
+  (Flutter's `MainAxisSize.max`), so they are never measured at their
+  intrinsic size and then grown.
+- **degenerate shapes**: a line / arrow / path drawn in a `viewbox` over a box
+  that came out empty (zero length) draws nothing, with a warning naming it.
 - **rotation**: an odd quarter turn measures the node with the constraints'
   axes swapped and reports its size swapped back, so the parent sees the turned
   footprint; arrange gives the node its slot with width and height exchanged

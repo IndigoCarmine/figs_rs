@@ -151,6 +151,9 @@ fn scheme_arrow_length() { style_get("scheme_arrow_length", base_size() * 0.2) }
 
 // Stroke width of scheme arrows (cm): the annotation stroke.
 fn scheme_arrow_width() { style_get("scheme_arrow_width", annotation_width()) }
+// The shortest a "fill" arrow gets (cm) when its scheme has no spare room
+// to share (a scheme that isn't stretched across its parent).
+fn scheme_fill_min_length() { style_get("scheme_fill_min_length", scheme_arrow_length()) }
 
 // Scheme text (`step` captions, arrow labels): size (pt) and its gap to the
 // node or arrow it belongs to (cm).
@@ -339,7 +342,7 @@ fn style_keys() {
         "annotation_dash", "scalebar_color", "scalebar_thickness",
         "scalebar_corner", "scalebar_inset", "scalebar_halo", "scalebar_frac_inset",
         "overlay_inset", "overlay_gap", "scheme_gap", "scheme_arrow_length",
-        "scheme_arrow_width", "scheme_label_size", "scheme_label_gap", "side_width", "side_gap",
+        "scheme_arrow_width", "scheme_fill_min_length", "scheme_label_size", "scheme_label_gap", "side_width", "side_gap",
         "labware_size", "labware_stroke", "labware_stroke_width", "labware_liquid", "labware_level",
         "vector_note_color", "vector_note_width", "vector_note_size", "vector_note_gap",
         "colorbar_length", "colorbar_thickness", "colorbar_label_size", "colorbar_gap",
@@ -699,17 +702,56 @@ fn halo(t, color, r) { t.stroke(color).stroke_width(2.0 * r) }
 // Bare-string sugar
 // ---------------------------------------------------------------------------
 
-// A bare string becomes `body(s)`; anything else passes through untouched.
+// A bare string (or spans) becomes `body(s)`; an array — what helpers such
+// as `zoom_link` return, or an item with its links: `[fill_row(..),
+// zoom_link(..)]` — becomes one node: its only item (the connectors ride
+// along in a column around it, taking no room), or its items in a `vbox`;
+// anything else passes through untouched.
 fn as_node(x) {
-    if type_of(x) == "string" { body(x) } else { x }
+    let t = type_of(x);
+    if t == "string" || poster_is_rich(x) { return body(x); }
+    if t != "array" { return x; }
+    let s = split_links(x);
+    let items = [];
+    for v in s.items { items.push(as_node(v)); }
+    if s.links.len() == 0 && items.len() == 1 { return items[0]; }
+    if items.len() == 1 { return col(items + s.links).stretch(); }
+    col(items + s.links).spacing(gap()).stretch()
 }
 
 // `as_node` over an array — the bridge to core containers:
-// `col(nodes(["Results", image("a.png")]))`.
+// `col(nodes(["Results", image("a.png")]))`. Nested arrays are spliced in
+// (as core containers do), so a helper's connectors go along.
 fn nodes(items) {
+    let s = split_links(items);
     let out = [];
-    for x in items { out.push(as_node(x)); }
-    out
+    for v in s.items { out.push(as_node(v)); }
+    out + s.links
+}
+
+// Is `x` a connector (a link drawn after layout, taking no room)?
+fn is_link(x) { type_of(x) == "Node" && x.kind() == "connector" }
+
+// `xs` (an array, or one value; nested arrays spliced in, spans kept whole)
+// split into `items` — everything that takes room, as given — and `links`
+// (connectors, which take none): list helpers size and count the items and
+// add the links to the container they build.
+fn split_links(xs) {
+    let items = [];
+    let links = [];
+    if type_of(xs) != "array" || poster_is_rich(xs) { xs = [xs]; }
+    for x in xs {
+        if type_of(x) == "array" && !poster_is_rich(x) {
+            let s = split_links(x);
+            items.append(s.items);
+            links.append(s.links);
+        } else if is_link(x) {
+            links.push(x);
+        } else {
+            items.push(x);
+        }
+    }
+    #{ items: items, links: links }
 }
 
 // Column / row with the default gap, stretched cross axis and bare strings.
@@ -730,7 +772,8 @@ fn grid(ncols, g, items) {
     }
     let rows = [];
     let cells = [];
-    for x in items {
+    let s = split_links(items);
+    for x in s.items {
         cells.push(as_node(x).flex(1));
         if cells.len() == ncols {
             rows.push(row(cells).spacing(g).stretch().flex(1));
@@ -741,7 +784,7 @@ fn grid(ncols, g, items) {
         while cells.len() < ncols { cells.push(rect().flex(1)); }
         rows.push(row(cells).spacing(g).stretch().flex(1));
     }
-    col(rows).spacing(g).stretch().flex(1)
+    col(rows + s.links).spacing(g).stretch().flex(1)
 }
 
 // ---------------------------------------------------------------------------
@@ -1356,23 +1399,26 @@ fn panels(items) { panels(label_style(), items) }
 // `panels(style, items)`, or `panels(items, captions)`: labeled + captioned.
 fn panels(style, items) {
     if type_of(style) == "array" { return panels(label_style(), style, items); }
+    let sl = split_links(items);
     let out = [];
     let i = 0;
-    for x in items {
+    for x in sl.items {
         out.push(labeled(x, panel_label(style, i)));
         i += 1;
     }
-    out
+    out + sl.links
 }
 
 // Labeled panels, each with its caption below: `captioned(labeled(..), c)`.
 fn panels(style, items, captions) {
-    if items.len() != captions.len() {
-        throw `panels(): ${items.len()} items but ${captions.len()} captions`;
+    let n = split_links(items).items.len();
+    if n != captions.len() {
+        throw `panels(): ${n} items but ${captions.len()} captions`;
     }
     let out = [];
     let i = 0;
     for x in panels(style, items) {
+        if is_link(x) { out.push(x); continue; }
         out.push(captioned(x, captions[i]));
         i += 1;
     }
@@ -1523,9 +1569,10 @@ fn overlay(item, map, opts) {
     for p in overlay_positions() {
         if !map.contains(p[0]) { continue; }
         let v = map[p[0]];
-        let xs = if type_of(v) == "array" && !poster_is_rich(v) { v } else { [v] };
+        let sl = split_links(v);
         let ns = [];
-        for x in xs { ns.push(overlay_text("overlay", x, p[2])); }
+        for x in sl.items { ns.push(overlay_text("overlay", x, p[2])); }
+        ns += sl.links;
         let pi = if per.contains(p[0]) { per[p[0]] } else { inset };
         layers.push(col(ns).spacing(g).cross(p[2]).pad(pi).main(p[1]));
     }
@@ -1837,7 +1884,9 @@ fn arrow_step(x) {
 //   direction     "right" (default) or "down" (a column, as `scheme_v`)
 //   gap           between items, cm (default `scheme_gap()`)
 //   align         across the flow: "center" (default), "start", "end"
-//   arrow_length  of every arrow without its own: cm or "fill"
+//   arrow_length  of every arrow without its own: cm or "fill" — sharing
+//                 the spare width of a scheme stretched across its parent;
+//                 never shorter than `scheme_fill_min_length()`
 //                 (default `scheme_arrow_length()`)
 // Images need a size (`image("a.png").height(2)`: the width follows).
 fn scheme(items) { scheme(items, #{}) }
@@ -1852,8 +1901,9 @@ fn scheme(items, opts) {
         throw `scheme(): unknown align "${align}" (center, start, end)`;
     }
     let len = scheme_length("scheme", plot_opt(opts, "arrow_length", scheme_arrow_length()));
+    let sl = split_links(items);
     let out = [];
-    for x in items {
+    for x in sl.items {
         if type_of(x) == "map" {
             if !x.contains("scheme_arrow") { throw "scheme(): a map item must be an arrow_step(..)"; }
             out.push(scheme_arrow(x, vertical, len));
@@ -1861,6 +1911,7 @@ fn scheme(items, opts) {
             out.push(scheme_text("scheme", x, base_size(), "center"));
         }
     }
+    out += sl.links;
     let c = if vertical { col(out) } else { row(out) };
     c.spacing(plot_opt(opts, "gap", scheme_gap())).cross(if align == "center" { "axis" } else { align })
         .main("center")
@@ -1959,6 +2010,12 @@ fn scheme_arrow(a, vertical, len) {
         if o.contains("head_size") { node = node.head_size(hs); }
         if o.contains("head_width") { node = node.head_width(o.head_width); }
         if c != "" { node = node.stroke(c); }
+    }
+    if fill {
+        // At least `scheme_fill_min_length()` long: a spacer under the
+        // arrow, which fills the stack along the flow.
+        let m = scheme_fill_min_length();
+        node = stack([if vertical { rect().height(m) } else { rect().width(m) }, node]);
     }
     let labels = if vertical {
         #{ right: plot_opt(o, "right", plot_opt(o, "above", ())),
@@ -2579,7 +2636,8 @@ fn block_arrow_bent(opts) {
 // array of them) drawn behind `group`, which keeps its own size: a core
 // `stack([..layers, group])`.
 fn behind(group, layers) {
-    if type_of(layers) != "array" { layers = [layers]; }
+    let sl = split_links(layers);
+    layers = sl.items + sl.links;
     let g = as_node(group);
     let out = [];
     for x in layers {
@@ -4457,6 +4515,8 @@ fn columns(items, widths, opts) {
         throw `columns(): expected an array of nodes (got ${type_of(items)})`;
     }
     poster_check_opts("columns", opts, ["gutter", "separators"]);
+    let sl = split_links(items);
+    items = sl.items;
     let n = items.len();
     let ws = poster_weights("columns", n, widths);
     let gs = poster_per_gap("columns", "gutter", plot_opt(opts, "gutter", poster_gutter()), n);
@@ -4487,7 +4547,7 @@ fn columns(items, widths, opts) {
         }
         out.push(poster_sized("columns", as_node(items[i]), ws[i], false));
     }
-    row(out).spacing(if uniform && gs.len() > 0 { gs[0] } else { 0 }).stretch()
+    row(out + sl.links).spacing(if uniform && gs.len() > 0 { gs[0] } else { 0 }).stretch()
 }
 
 // Rows of sections (or `columns`) down the page, sharing the height equally
@@ -4506,6 +4566,8 @@ fn rows(items, heights, opts) {
         throw `rows(): expected an array of nodes (got ${type_of(items)})`;
     }
     poster_check_opts("rows", opts, ["gaps", "separators"]);
+    let sl = split_links(items);
+    items = sl.items;
     let n = items.len();
     let hs = poster_weights("rows", n, heights);
     let gs = poster_per_gap("rows", "gaps", plot_opt(opts, "gaps", poster_row_gap()), n);
@@ -4521,7 +4583,7 @@ fn rows(items, heights, opts) {
         }
         out.push(poster_sized("rows", as_node(items[i]), hs[i], true));
     }
-    col(out).spacing(if uniform && gs.len() > 0 { gs[0] } else { 0 }).stretch()
+    col(out + sl.links).spacing(if uniform && gs.len() > 0 { gs[0] } else { 0 }).stretch()
 }
 
 // `opts` checked against the option names `keys` of `who`.
@@ -4755,10 +4817,12 @@ fn variant_push(who, v) {
 fn block(title, items) { block(title, items, #{}) }
 fn block(title, items, opts) {
     poster_check_opts("block", opts, ["widths", "gap", "title_gap", "align"]);
-    let xs = if type_of(items) == "array" { items } else { [items] };
+    let sl = split_links(items);
+    let xs = sl.items;
     let ws = poster_weights("block", xs.len(), plot_opt(opts, "widths", ()));
     let cells = [];
     for i in 0..xs.len() { cells.push(poster_sized("block", as_node(xs[i]), ws[i], false)); }
+    cells += sl.links;
     let align = plot_opt(opts, "align", "start");
     if !["start", "center", "end", "stretch", "baseline"].contains(align) {
         throw `block(): unknown align "${align}" (start, center, end, stretch, baseline)`;

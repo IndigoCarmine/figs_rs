@@ -43,11 +43,26 @@ pub(crate) fn arrange<M: LeafMeasure>(
         slot,
         parent_xf,
     );
+    let mut content = paint_content(&node.kind, &node.common, rect);
+    if collapsed_path(&node.kind, &content) {
+        // A shape drawn in a viewbox over a box that came out empty (an
+        // arrow with length "fill" in a parent that doesn't stretch it):
+        // nothing to draw — say so instead of handing the renderer a
+        // degenerate path.
+        tracing::warn!(
+            node = %node.id,
+            within = ctx.named_ancestor(idx).as_deref().unwrap_or("-"),
+            width = rect.w,
+            height = rect.h,
+            "a line / arrow / path drawn in a viewbox got an empty box (zero length);              nothing drawn — give it a size, or a parent that stretches it"
+        );
+        content = PaintContent::Container;
+    }
     out.push(ComputedNode {
         id: node.id.clone(),
         rect,
         transform: xf,
-        content: paint_content(&node.kind, &node.common, rect),
+        content,
         clips: Vec::new(),
         effects: (!node.effects.is_none()).then(|| Box::new(node.effects.clone())),
         descendants: 0,
@@ -823,6 +838,18 @@ fn cross_axis_offset(align: CrossAxisAlign, content_cross: f32, child_cross: f32
         CrossAxisAlign::Center => slack / 2.0,
         CrossAxisAlign::End => slack,
     }
+}
+
+/// Whether a path's points, not all coincident in its own (viewbox)
+/// coordinates, collapsed onto one point when mapped onto its box.
+fn collapsed_path(kind: &NodeType, content: &PaintContent) -> bool {
+    let (NodeType::Path(props), PaintContent::Path(paint)) = (kind, content) else {
+        return false;
+    };
+    let extent = |segs: &[crate::geom::PathSegment]| {
+        crate::path::bounds(segs).map_or(0.0, |(lo, hi)| (hi.x - lo.x).max(hi.y - lo.y))
+    };
+    props.viewbox.is_some() && extent(&props.segments) > 0.0 && extent(&paint.segments) < 1e-3
 }
 
 fn paint_content(kind: &NodeType, common: &Common, rect: Rect) -> PaintContent {
