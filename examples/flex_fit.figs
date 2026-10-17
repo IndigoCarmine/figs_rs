@@ -1,0 +1,84 @@
+// Room that yields, without coordinates:
+//   caption_overhang "auto"   step captions overhang into free room only —
+//                             over an arrow drawn at mid-height, never into
+//                             an arrow's own label — and wrap otherwise
+//   styled(map, || ..)        a group built in its own style (bigger scheme
+//                             labels), the style restored afterwards
+//   plot_aspect "fill"        plots take the spare height of their column;
+//   section fit "flex"        a section that must shrink or grow lets them
+//                             absorb it instead of scaling everything
+//   .align("center")          one natural-size item centred in a column
+//                             that stretches the rest
+//   "auto" cells              a table / labelled panels at their own width
+//   zoom_link attach "hull"   lines along the outer tangents (diagonal copy)
+// Everything is fictional placeholder content and synthetic data.
+style("poster", #{
+    base_size: 12, title_size: 30, gap: 0.5, poster_margin: 0.8, poster_gutter: 0.6,
+    section_title_size: 20, author_size: 14,
+    caption_overhang: "auto", plot_aspect: "fill", image_dpi: 300,
+});
+let h = csv("data/heating.csv");
+let g = csv("data/growth.csv");
+
+let flask = labware("flask", #{ level: 0.5 });
+let funnel = labware("funnel");
+let dish = labware("dish", #{ level: 0.3, liquid: "#d9c7a3" });
+
+// Long captions: over the arrow beside them when it is free there, wrapped
+// where an arrow carries a label underneath.
+let process = scheme([
+    step(flask, "monomer and linker in water"),
+    arrow_step(#{ above: "N₂", length: 3 }),
+    step(funnel, "filtered and washed"),
+    arrow_step(#{ below: "dry, 60 °C", length: 3 }),
+    step(dish, "transparent gel"),
+]);
+// The same kind of scheme in its own style: bigger labels, nothing per call.
+let big = styled(#{ scheme_label_size: 16, scheme_gap: 0.3 }, || scheme([
+    step(image("img/mol_a.png"), "precursor"),
+    arrow_step(#{ above: "hν" }),
+    step(image("img/mol_b.png"), "product"),
+]));
+
+let curve = plot(#{ xlabel: "T [°C]", ylabel: "α", x: [20, 100], y: [0, 1.1] }, [
+    scatter(h.T, h.a10, "10 μM"), scatter(h.T, h.a100, "100 μM"),
+]);
+let growth = plot(#{ xlabel: "t [h]", ylabel: "OD", legend: "text" }, [
+    line_plot(g.time_h, g.wt, "wild type"), line_plot(g.time_h, g.mutant, "mutant"),
+]);
+
+let photo = image("img/sunlit.png").dpi(0).id("photo");
+let zoom = image("img/particles_zoom.png").dpi(0).id("zoom");
+
+poster("a3-landscape", #{
+    title: "Room that yields: captions, plots and cells that size themselves",
+    authors: [#{ name: "A. Author", aff: 1, presenter: true }, #{ name: "B. Author", aff: 2 }],
+    affiliations: ["Fictional Institute", "Imaginary University"],
+    number: "P-07",
+}, columns([
+    section("Process", [
+        process,
+        big,
+        // A natural-size structure centred, the text around it stretched.
+        image("img/mol_c.png").align("center"),
+        body("The structure keeps its natural size and sits in the middle; the text spans the column."),
+    ]),
+    section("Data", [
+        body("Two plots share whatever height the text leaves: the section neither overflows nor scales its text."),
+        labeled(curve, "(a)"),
+        labeled(growth, "(b)"),
+        bullets(["Plots absorb the difference.", "Text keeps its size."]),
+    ], #{ fit: "flex" }),
+    section("Cells", [
+        block("Own width", [
+            table([["Run", "T [°C]"], ["1", "25"], ["2", "60"]]),
+            body("A table in an \"auto\" cell is as wide as its text; this cell takes the rest."),
+        ], #{ widths: ["auto", 1] }),
+        row([
+            labeled(image("img/mol_a.png"), "A", #{ position: "outside-left" }),
+            labeled(image("img/mol_b.png"), "B", #{ position: "outside-left" }),
+        ]).spacing(0.5).main("center"),
+        row([col([photo]).flex(2), col([rect().height(2), zoom]).flex(1)]).spacing(0.6),
+        zoom_link(photo, zoom, #{ region: [0.1, 0.1, 0.3, 0.3], attach: "hull" }),
+    ]),
+], [4, 3, 3]))

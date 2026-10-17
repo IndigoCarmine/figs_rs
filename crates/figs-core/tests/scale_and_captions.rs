@@ -80,11 +80,11 @@ fn captions_overhang_on_request() {
     assert!(text(&d, "one").overhang.is_off());
     let e = fail(r#"page(10, 10, fill_row([image("a.png")], #{ captions: "float" }))"#);
     assert!(
-        e.contains("unknown captions \"float\" (overhang, wrap)"),
+        e.contains("unknown captions \"float\" (overhang, wrap, auto)"),
         "{e}"
     );
     let e = fail(r#"page(10, 10, step(rect(), "x", #{ overhang: 1 }))"#);
-    assert!(e.contains("overhang is true or false"), "{e}");
+    assert!(e.contains("overhang is true, false or"), "{e}");
 }
 
 /// The column named `name`.
@@ -130,7 +130,7 @@ fn sections_fit_and_align_their_content() {
     );
     let e = fail(r#"page("a4", section("S", [rect()], #{ fit: "grow" }))"#);
     assert!(
-        e.contains("unknown fit \"grow\" (both, shrink, none)"),
+        e.contains("unknown fit \"grow\" (both, shrink, flex, none)"),
         "{e}"
     );
     let e = fail(r#"page("a4", section("S", [rect()], #{ valign: "middle" }))"#);

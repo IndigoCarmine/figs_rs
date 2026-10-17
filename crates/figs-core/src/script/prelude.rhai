@@ -74,11 +74,18 @@ fn caption_gap() { style_get("caption_gap", gap() * 0.5) }
 // Captions (`captioned`, `panels(.., captions)`, `step`) wider than their
 // item overhang it into the gaps — centred, in one line — instead of
 // widening the item or wrapping to its width (the core `.overhang()`).
+// "auto": they overhang only into free room — the gaps beside the item in
+// a row, up to whatever the neighbours draw at the caption's height (an
+// arrow's label, a taller structure; half a gap when two captions reach
+// into it), within the row — and wrap to that otherwise
+// (`.overhang("auto")`), so it is safe as a global setting.
 fn caption_overhang() { style_get("caption_overhang", false) }
 
 // Pixel density of every image without its own `.dpi(n)` (its natural size
 // = pixels / dpi inches), set on the page by `page(preset, root)` /
-// `poster(..)`; () = none (images fill the room they get).
+// `poster(..)`; () = none (images fill the room they get). "file": the
+// density each file records (PNG pHYs, JPEG JFIF) — images whose file
+// records none have no natural size.
 fn image_dpi() { style_get("image_dpi", ()) }
 
 // Widths (cm) of the "single" (one journal column) and "double" (full page
@@ -287,6 +294,14 @@ fn backdrop_radius() { style_get("backdrop_radius", base_size() * 0.015) }
 fn label_position() { style_get("label_position", "inside") }
 fn label_outside_gap() { style_get("label_outside_gap", caption_gap()) }
 
+// `zoom_link`: how the lines / cone attach — "facing" (the facing sides'
+// corners; right for side-by-side or stacked boxes) or "hull" (the outer
+// tangents of region and copy together, for diagonal placements too).
+fn zoom_attach() { style_get("zoom_attach", "facing") }
+
+// Plots with `plot_aspect()` "fill": the least height (cm) they shrink to.
+fn plot_min_height() { style_get("plot_min_height", base_size() * 0.25) }
+
 // ---------------------------------------------------------------------------
 // Style presets
 // ---------------------------------------------------------------------------
@@ -372,7 +387,7 @@ fn style_keys() {
         "cycle_arrow_depth", "cycle_arrow_span", "cycle_arrow_gap",
         "scalebar_box", "scalebar_box_pad", "scalebar_box_radius", "overlay_text_size",
         "overlay_text_color", "overlay_text_halo", "overlay_text_halo_width", "inset_avoid_band",
-        "fill_row_gap", "caption_overhang", "image_dpi",
+        "fill_row_gap", "caption_overhang", "image_dpi", "zoom_attach", "plot_min_height",
         // links, piles, backdrops
         "zoom_color", "zoom_width", "zoom_dash", "zoom_region_dash", "zoom_copy_frame",
         "zoom_outline", "zoom_style", "zoom_cone_opacity",
@@ -415,7 +430,8 @@ fn style_keys() {
         "table_font", "table_header_font", "separator_offset", "section_title_baseline",
         "poster_symbol_font", "block_gap", "block_title_gap", "bullet_pitch", "table_rule_mode",
         "section_overflow", "poster_number_position", "author_font", "ref_font",
-        "poster_logo_box", "poster_number_inset", "section_valign",
+        "poster_logo_box", "poster_number_inset", "section_valign", "poster_title_inset",
+        "section_body_inset", "bullet_inset",
         // component variants: name -> map of style keys (see `variant_push`)
         "frame_variants", "note_variants", "ref_variants", "table_variants",
         "subheading_variants", "section_variants",
@@ -451,6 +467,35 @@ fn style(name, overrides) {
     style(name);
     style(overrides);
 }
+
+// `styled(map, || nodes)` (or `with_style`): build `nodes` — the function
+// is called once — with the style keys of `map` in force (merged over the
+// current style, like `style(map)`), then restore the style exactly, even
+// when building fails. Nest freely; the result is whatever the function
+// returns: `styled(#{ scheme_label_size: 18 }, || scheme([..]))`.
+fn styled(m, f) {
+    if type_of(m) != "map" { throw `styled(): expected a map of style keys first (got ${type_of(m)})`; }
+    if type_of(f) != "Fn" {
+        throw `styled(): expected a function building the nodes second, e.g. || scheme([..]) (got ${type_of(f)})`;
+    }
+    let keys = style_keys();
+    for k in m.keys() {
+        if !keys.contains(k) {
+            throw `styled(): unknown key "${k}" (keys are hook names: ${list_names(keys)})`;
+        }
+    }
+    style_push(m);
+    let out = ();
+    try {
+        out = f.call();
+    } catch (e) {
+        style_pop();
+        throw e;
+    }
+    style_pop();
+    out
+}
+fn with_style(m, f) { styled(m, f) }
 
 // "a, b, c" from an array of strings (for error messages).
 fn list_names(xs) {
@@ -526,6 +571,11 @@ fn bar_width() { style_get("bar_width", 0.7) }
 
 // Width / height of a whole plot panel (axes and labels included), so plots
 // get a height on auto-height pages; 0 leaves the size to the layout.
+// "fill": no aspect — the plot takes the spare height of its column
+// (`.flex(1)`, at least `plot_min_height()`), so in a section that must
+// grow or shrink the plots absorb the difference (see `section(.., #{ fit:
+// "flex" })`); wrappers (`labeled`, `captioned`, `overlay`, `annotate`)
+// pass the fill on.
 fn plot_aspect() { style_get("plot_aspect", 4.0 / 3.0) }
 
 // Empty band at the top of a *labelled* plot that the panel label fits in
@@ -1388,11 +1438,11 @@ fn labeled(item, s, opts) {
         // Beside: the item takes the rest of the width; above: the item
         // keeps its own height (an image stays unletterboxed).
         let n = as_node(item);
-        return if pos == "outside-left" {
+        return fill_like(if pos == "outside-left" {
             row([label_tag(s), n.flex(1)]).spacing(g).cross("start")
         } else {
-            col([label_tag(s), n]).spacing(g).stretch()
-        };
+            col([label_tag(s), if n.meta("fill") == true { n.flex(1) } else { n }]).spacing(g).stretch()
+        }, n);
     }
     if !["top-left", "top-right", "bottom-left", "bottom-right"].contains(pos) {
         throw `labeled(): unknown position "${pos}" (inside, top-left, top-right, bottom-left, bottom-right, outside-left, outside-top)`;
@@ -1408,7 +1458,7 @@ fn labeled_in(item, s, corner, who) {
     if type_of(room) != "()" && room > 0.0 {
         item = item.prepend(rect().height(room)).meta("label_room", ());
     }
-    stack([item, tag])
+    fill_like(stack([item, tag]), item)
 }
 
 // `item` with caption `c` (a string or spans become `caption(c)`) below it,
@@ -1420,11 +1470,29 @@ fn labeled_in(item, s, corner, who) {
 fn captioned(item, c) { captioned(item, c, #{}) }
 fn captioned(item, c, opts) {
     shape_opts("captioned", opts, ["overhang"]);
-    let over = plot_opt(opts, "overhang", caption_overhang());
+    let over = overhang_mode("captioned", plot_opt(opts, "overhang", caption_overhang()));
     let cap = if type_of(c) == "string" || poster_is_rich(c) { caption(c) } else { c };
-    if over { cap = cap.overhang(); }
-    col([as_node(item).flex(1), cap]).spacing(caption_gap()).stretch()
-        .meta("captioned", [item, c])
+    cap = overhang_as(cap, over);
+    fill_like(col([as_node(item).flex(1), cap]).spacing(caption_gap()).stretch()
+        .meta("captioned", [item, c]), item)
+}
+
+// `wrapper` taking the spare height like `item` when `item` fills (a plot
+// with `plot_aspect()` "fill"): `.flex(1)` and the mark passed on.
+fn fill_like(wrapper, item) {
+    if type_of(item) == "Node" && item.meta("fill") == true { wrapper.flex(1).meta("fill", true) }
+    else { wrapper }
+}
+
+// An overhang setting checked: true, false or "auto" (`who` for errors).
+fn overhang_mode(who, v) {
+    if type_of(v) == "bool" || (type_of(v) == "string" && v == "auto") { return v; }
+    throw `${who}(): overhang is true, false or "auto" (got ${v})`;
+}
+
+// `n` overhanging as `mode` says (true, "auto", or false: as is).
+fn overhang_as(n, mode) {
+    if type_of(mode) == "string" { n.overhang("auto") } else if mode { n.overhang() } else { n }
 }
 
 // Label each item in order with `label_style()` ("(a)", "(b)", …).
@@ -1627,7 +1695,7 @@ fn overlay(item, map, opts) {
         let pi = if per.contains(p[0]) { per[p[0]] } else { inset };
         layers.push(col(ns).spacing(g).cross(p[2]).pad(pi).main(p[1]));
     }
-    stack(layers)
+    fill_like(stack(layers), item)
 }
 
 // Overlay text: a string (inline markup) or spans in the overlay text style
@@ -1661,7 +1729,8 @@ fn overlay_text(who, x, align) {
 //             captions)` / `step` items keep their one-line width, centred
 //             on their item and overhanging into the gaps, so a long
 //             caption neither widens its item nor wraps; "wrap": they wrap
-//             to the item's width (default: as each item was built, see
+//             to the item's width; "auto": overhang into free room, else
+//             wrap (default: as each item was built, see
 //             `caption_overhang()`)
 fn fill_row(items) { fill_row(items, #{}) }
 fn fill_row(items, opts) {
@@ -1674,10 +1743,10 @@ fn fill_row(items, opts) {
     let ns = nodes(items);
     let caps = plot_opt(opts, "captions", ());
     if type_of(caps) != "()" {
-        if caps != "overhang" && caps != "wrap" {
-            throw `fill_row(): unknown captions "${caps}" (overhang, wrap)`;
+        if caps != "overhang" && caps != "wrap" && caps != "auto" {
+            throw `fill_row(): unknown captions "${caps}" (overhang, wrap, auto)`;
         }
-        let over = caps == "overhang";
+        let over = if caps == "auto" { "auto" } else { caps == "overhang" };
         let out = [];
         for n in ns { out.push(recaption(n, over)); }
         ns = out;
@@ -1929,9 +1998,7 @@ fn step(node, opts) {
     if type_of(opts) != "map" { opts = #{ below: opts }; }
     shape_opts("step", opts, ["above", "below", "left", "right", "overhang"]);
     let o = opts;
-    let over = plot_opt(o, "overhang", caption_overhang());
-    if type_of(over) != "bool" { throw `step(): overhang is true or false (got ${type_of(over)})`; }
-    o.overhang = over;
+    o.overhang = overhang_mode("step", plot_opt(o, "overhang", caption_overhang()));
     scheme_dress("step", as_node(node), o, false).meta("step", [node, opts])
 }
 // `step(node, caption, opts)`: one caption below, with options
@@ -2043,11 +2110,11 @@ fn scheme_dress(who, n, labels, stretch) {
         lab[k] = if type_of(v) == "()" { () } else { scheme_text(who, v, scheme_label_size(), al) };
     }
     // Captions above / below wider than the node overhang it (one line,
-    // centred on it) instead of widening the column.
-    if plot_opt(labels, "overhang", false) {
-        for k in ["above", "below"] {
-            if type_of(lab[k]) != "()" { lab[k] = lab[k].overhang(); }
-        }
+    // centred on it) instead of widening the column ("auto": into free
+    // room only).
+    let over = plot_opt(labels, "overhang", false);
+    for k in ["above", "below"] {
+        if type_of(lab[k]) != "()" { lab[k] = overhang_as(lab[k], over); }
     }
     let g = scheme_label_gap();
     let cross = if stretch { "stretch" } else { "axis" };
@@ -2620,11 +2687,16 @@ fn link_opts(who, defaults, opts) {
 //                from the region to the copy, a light / projection cone
 //                (default `zoom_style()`)
 //   opacity      of the cone's fill (default `zoom_cone_opacity()`)
+//   attach       "facing" or "hull": the lines / cone along the outer
+//                tangents of region and copy together — right when the
+//                copy sits diagonally from the region (default
+//                `zoom_attach()`)
+// outline "none" draws no region at all: the lines / cone still start at it.
 fn zoom_link(item, copy) { zoom_link(item, copy, #{}) }
 fn zoom_link(item, copy, opts) {
     let who = "zoom_link";
     shape_opts(who, opts, ["region", "color", "width", "dash", "region_dash", "frame",
-                           "outline", "style", "opacity"]);
+                           "outline", "style", "opacity", "attach"]);
     let r = plot_numbers(who, "`region`", plot_opt(opts, "region", [0.4, 0.4, 0.6, 0.6]));
     if r.len() != 4 || !(r[2] > r[0]) || !(r[3] > r[1]) {
         throw `${who}(): region is [fx0, fy0, fx1, fy1] fractions of the item's box (fx0 < fx1, fy0 < fy1)`;
@@ -2637,6 +2709,10 @@ fn zoom_link(item, copy, opts) {
     if !["lines", "cone"].contains(st) {
         throw `${who}(): unknown style "${st}" (lines, cone)`;
     }
+    let att = plot_opt(opts, "attach", zoom_attach());
+    if !["facing", "hull"].contains(att) {
+        throw `${who}(): unknown attach "${att}" (facing, hull)`;
+    }
     let color = plot_opt(opts, "color", zoom_color());
     let base = #{ stroke: color, width: plot_opt(opts, "width", zoom_width()) };
     let rd = plot_opt(opts, "region_dash", zoom_region_dash());
@@ -2644,8 +2720,10 @@ fn zoom_link(item, copy, opts) {
     let out = [];
     // The cone first: drawn under the outlines.
     if st == "cone" {
-        out.push(connect(item, copy, #{ route: "cone", from_box: r, from_shape: fs, fill: color,
-                                        opacity: plot_opt(opts, "opacity", zoom_cone_opacity()) }));
+        let c = #{ route: "cone", from_box: r, from_shape: fs, fill: color,
+                   opacity: plot_opt(opts, "opacity", zoom_cone_opacity()) };
+        if att == "hull" { c.from = "hull-1"; c.to = "hull-1"; }
+        out.push(connect(item, copy, c));
     }
     if shape == "rect" {
         out += link_box(item, r, base + #{ dash: rd });
@@ -2657,7 +2735,8 @@ fn zoom_link(item, copy, opts) {
     }
     if st == "lines" {
         let d = plot_opt(opts, "dash", zoom_dash());
-        for k in ["facing-1", "facing-2"] {
+        let ks = if att == "hull" { ["hull-1", "hull-2"] } else { ["facing-1", "facing-2"] };
+        for k in ks {
             out.push(connect(item, copy, base + #{ from_box: r, from_shape: fs, from: k, to: k, dash: d }));
         }
     }
@@ -3439,6 +3518,8 @@ fn inset_plot(opts, series) {
     let st = #{ tick_label_size: ts, axis_label_size: ts, legend_size: ts, plot_title_size: ts,
                 tick_length: tick_length() * 0.75, plot_pad: plot_pad() * 0.5, plot_bg: inset_bg(),
                 max_ticks: inset_max_ticks() };
+    // An inset is sized by its aspect: never "fill".
+    if type_of(plot_aspect()) == "string" { st.plot_aspect = 4.0 / 3.0; }
     let own = plot_opt(opts, "style", #{});
     if type_of(own) != "map" { throw `inset_plot(): style must be a map of style keys (got ${type_of(own)})`; }
     for k in own.keys() { st[k] = own[k]; }
@@ -4180,6 +4261,11 @@ fn plot_build(opts, series) {
     let bg = plot_bg();
     if bg != "" { node = node.fill(bg); }
     let ar = plot_aspect();
+    if type_of(ar) == "string" {
+        if ar != "fill" { throw `plot_aspect(): a width / height ratio, 0 or "fill" (got "${ar}")`; }
+        // No aspect: the spare height of its column, at least the minimum.
+        return node.flex(1).min_height(plot_min_height()).meta("fill", true);
+    }
     if ar.to_float() > 0.0 { node = node.aspect(ar); }
     node
 }
@@ -4346,6 +4432,10 @@ fn poster_logo_box() { style_get("poster_logo_box", ()) }
 // The poster number's distance in from the right edge of the header (cm).
 fn poster_number_inset() { style_get("poster_number_inset", 0) }
 
+// Clear space (cm) either side of the poster title — a number, or
+// [left, right] — so a long title wraps short of the logos / number.
+fn poster_title_inset() { style_get("poster_title_inset", 0) }
+
 // The rule under the header ("" for none) and its width (cm, 1 pt at 24 pt).
 fn poster_header_rule() {
     let f = fg();
@@ -4401,6 +4491,8 @@ fn section_bar_shadow() { style_get("section_bar_shadow", false) }
 
 // Padding around a section's content (cm) and the gap between its items.
 fn section_pad() { style_get("section_pad", base_size() * 0.0125) }
+// Extra space (cm) left and right of a section's content, over `section_pad()`.
+fn section_body_inset() { style_get("section_body_inset", 0) }
 fn section_gap() { style_get("section_gap", base_size() * 0.02) }
 
 // Dashed separators in the column gutters (`separators()`) and between rows
@@ -4481,6 +4573,8 @@ fn bullet_mark() { style_get("bullet_mark", "•") }
 fn bullet_size() { style_get("bullet_size", base_size()) }
 fn bullet_indent() { style_get("bullet_indent", bullet_size() * 0.044) }
 fn bullet_gap() { style_get("bullet_gap", bullet_size() * 0.004) }
+// Space (cm) left of a bulleted list's marks (nested lists: per level).
+fn bullet_inset() { style_get("bullet_inset", 0) }
 
 // The bullet mark's size (pt), independent of the text (default the same);
 // a mark of another size stays on the first line's baseline.
@@ -4932,9 +5026,12 @@ fn section_make(n, title, content, opts) {
     }
     if opts.contains("fit") {
         let f = opts.fit;
-        let modes = #{ both: "fit", shrink: "shrink", none: "visible" };
+        // "flex": the flexible items (plots with plot_aspect "fill") take
+        // the spare height or give it up; only past their minimum is the
+        // content shrunk uniformly.
+        let modes = #{ both: "fit", shrink: "shrink", none: "visible", flex: "shrink" };
         if type_of(f) != "string" || !modes.contains(f) {
-            throw `section(): unknown fit "${f}" (both, shrink, none)`;
+            throw `section(): unknown fit "${f}" (both, shrink, flex, none)`;
         }
         if opts.contains("overflow") {
             throw "section(): give fit or overflow, not both";
@@ -4964,7 +5061,11 @@ fn section_make(n, title, content, opts) {
         body_ov = "visible";
         main = "start";
     }
-    let body = col(items).spacing(section_gap()).stretch().pad(section_pad()).flex(1)
+    let sp = section_pad();
+    let bi = section_body_inset();
+    if !plot_finite(bi) || bi < 0 { throw `section_body_inset(): a length in cm >= 0 (got ${bi})`; }
+    let pad = if bi == 0 { sp } else { #{ top: sp, bottom: sp, left: sp + bi, right: sp + bi } };
+    let body = col(items).spacing(section_gap()).stretch().pad(pad).flex(1)
         .name(`${tag} (body)`).overflow(body_ov).main(main);
     col([section_bar(s), body]).stretch().name(tag)
 }
@@ -5143,6 +5244,9 @@ fn bullets(items, opts) {
         out.push(row([mark, item.flex(1)]).cross("baseline"));
     }
     let c = col(out).spacing(bullet_gap()).stretch();
+    let bi = bullet_inset();
+    if !plot_finite(bi) || bi < 0 { throw `bullet_inset(): a length in cm >= 0 (got ${bi})`; }
+    if bi > 0 { c = c.pad(#{ left: bi }); }
     if type_of(pitch) == "()" { c } else { c.baseline_pitch(pitch) }
 }
 
@@ -5535,7 +5639,7 @@ fn poster_header(opts) {
     if type_of(opts) != "map" { throw `poster_header(): expected a map (got ${type_of(opts)})`; }
     for k in opts.keys() {
         let keys = ["title", "authors", "affiliations", "logos", "number", "number_position",
-                    "number_inset", "logo_box"];
+                    "number_inset", "logo_box", "title_inset"];
         if !keys.contains(k) {
             throw `poster_header(): unknown key "${k}" (${list_names(keys)})`;
         }
@@ -5548,6 +5652,14 @@ fn poster_header(opts) {
         let f = poster_title_font();
         if f == "" { t } else { t.font(f) }
     } else { () };
+    let ti = plot_opt(opts, "title_inset", poster_title_inset());
+    if type_of(ti) != "array" { ti = [ti, ti]; }
+    if ti.len() != 2 || !plot_finite(ti[0]) || !plot_finite(ti[1]) || ti[0] < 0 || ti[1] < 0 {
+        throw `poster_header(): title_inset is a length in cm >= 0 or [left, right] (got ${ti})`;
+    }
+    if type_of(tnode) != "()" && (ti[0] > 0 || ti[1] > 0) {
+        tnode = tnode.margin(#{ left: ti[0], right: ti[1] });
+    }
     // The number at the right end of the title row, so a long title wraps
     // before it instead of running under it, while the author line below
     // keeps the full width.

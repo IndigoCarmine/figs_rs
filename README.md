@@ -68,7 +68,13 @@ You provide: hierarchy, style, content, and constraints (`flex`, `aspect_ratio`,
   `"axis"`, and `name` labels it in diagnostics (see
   [Axes, equal-height rows & overflow](#axes-equal-height-rows--overflow)).
   `overhang = true` makes a node take no room across its parent column / row
-  (see [Natural sizes & overhang](#natural-sizes--overhang)).
+  (`"auto"`: only into free room; see
+  [Natural sizes & overhang](#natural-sizes--overhang)). `align_self`
+  (`start`/`center`/`end`/`stretch`) aligns one child of a column / row
+  across, over the parent's `cross_axis_alignment` (CSS `align-self`; a
+  self-aligned child is off a baseline / axis line), and `min_width` /
+  `min_height` are the least size of the box (a flex share or a
+  wrap-content size below it grows to it).
 - **Container** (`column`/`row`): `children`, `spacing`, `main_axis_alignment`
   (`start`/`center`/`end`/`space_between`/`space_around`/`space_evenly`),
   `cross_axis_alignment` (`start`/`center`/`end`/`stretch`/`baseline`/`cap_middle` —
@@ -100,8 +106,9 @@ You provide: hierarchy, style, content, and constraints (`flex`, `aspect_ratio`,
   [Fonts](#fonts-fallback-lists-per-script-families-weights-italic)).
 - **image**: `src`, `fit` (`contain`/`cover`/`fill`), `smooth` (`false`:
   nearest-neighbour scaling, see [Pixelated images](#pixelated-images)),
-  `dpi` (a natural size of pixels / dpi inches; `[page] image_dpi` sets it
-  for every image — see [Natural sizes & overhang](#natural-sizes--overhang)).
+  `dpi` (a natural size of pixels / dpi inches, or `"file"`: the density the
+  file records; `[page] image_dpi` sets it for every image — see
+  [Natural sizes & overhang](#natural-sizes--overhang)).
 - **rect**: `fill`, `stroke`, `stroke_width`, `stroke_align`, `corner_radius`.
   Every `fill` (rect, ellipse, path, containers) and `page.background` takes a
   colour *or a gradient* (see [Gradients & frames](#gradients--frames)).
@@ -1087,7 +1094,33 @@ spare both ways — natural-size images, a scheme, short text — scaled *up*
 uniformly until they fill the box on one axis, centred across, the main axis
 placed by the container's alignment). A single child taller than its box is clamped to it (it is given a box
 of that size), so the report comes from the level where the children add
-up.
+up. `fit` takes the content's extent across as the larger of its loose
+size and the width nothing in it can go below: explicit widths, natural-size
+images, images with a height (and their file's aspect), unwrapped text —
+added up along a row, where a flex child's minimum counts by its share (a
+600 pt wide rect in one of two equal cells needs a 1200 pt row), so a rigid
+item in a flex cell is scaled with everything instead of squeezed into its
+cell.
+
+**Content-sized cells.** A row measures a child without `flex` (an "auto"
+cell: `columns(.., ["auto", 1])`, `block(.., #{ widths: ["auto", ..] })`, a
+plain `row([a, b])`) at its *own* width: a row inside it doesn't take all
+the room it may (Flutter's `MainAxisSize.min` there) — its flex children
+are measured at their own width, at most their share, and it is as wide as
+it needs for each of them to get that from its share. So labelled panels
+side by side (`labeled(.., #{ position: "outside-left" })`), a `table` and
+a scheme with `"fill"` arrows keep their natural width in such a cell; a
+width decided for the child (a flex share, a stretching column) still lets
+what is inside fill it.
+
+**Self alignment and minimum sizes.** `align_self` (script `.align_self(v)`,
+or `.align(v)` on any node but a text, whose `align` is its line alignment)
+places one child of a column / row across: `"center"` centres a natural-size
+image in a column that stretches the rest, `"stretch"` stretches even a
+natural-size image, `"start"` / `"end"` pin it. `min_width` / `min_height`
+(script `.min_width(v)` / `.min_height(v)`) keep a box at least that big —
+a flex child that would get less takes its minimum (and the container
+reports the overflow).
 
 ### Natural sizes & overhang
 
@@ -1101,7 +1134,11 @@ it (nor an overlay / label stack whose base layer it is) — and shrinks
 (keeping its aspect) only when it doesn't fit; an explicit `width` / `height`
 still wins, and a parent that decides a side (a flex share, an
 `equal_height` row) still scales it. The pixel size comes from the file
-header (`LeafMeasure::image_pixels`).
+header (`LeafMeasure::image_pixels`). `dpi = "file"` (script
+`.dpi("file")`, `.image_dpi("file")`) takes the density the file records —
+a PNG's `pHYs` chunk in pixels per metre, a JPEG's JFIF density
+(`LeafMeasure::image_density`, `render::image_density`) — falling back to the
+page's numeric `image_dpi` for a node's own `"file"`, else no natural size.
 
 **Overhang.** `overhang = true` (script `.overhang()`) takes a node out of
 its parent's cross extent: it is laid out at its natural cross size (a
@@ -1113,6 +1150,16 @@ then leaves the row of images where it was. A row keeps room at its ends for
 the overhanging captions of its first and last child (directly in a column,
 or in a stack's base layer), so they stay inside the row's box; between
 items they only use the gaps.
+
+`overhang = "auto"` (script `.overhang("auto")`) overhangs only into free
+room: the row holding the node's column finds, at the node's height, how far
+left and right nothing else is drawn — its other children one level down (an
+arrow drawn at mid-height leaves the room under it free, an arrow's own
+label doesn't), half way to another `"auto"` caption reaching into the same
+gap, and never past the row's box — and the node wraps to its column plus
+that room, centred where it can be and shifted where one side is short. It
+never collides, so it is safe as a global setting (the framework's
+`caption_overhang()`).
 
 ### Connectors
 
@@ -1145,7 +1192,11 @@ gap = [0, 0.1]          # keep the ends off the boxes ([start, end] or one numbe
   between neighbours runs straight (boxes apart both ways: the axis with the
   wider gap). `"facing-1"` / `"facing-2"` are the first / second corner (top
   or left first) of that facing side: two connectors attached so join a
-  region to its magnified copy without crossing.
+  region to its magnified copy without crossing. `"hull-1"` / `"hull-2"`
+  are the ends of the two outer tangents of both ends' outlines (the
+  bridges of their convex hull): right for a copy placed diagonally from the
+  region too (both ends take them; a `cone` with a hull end fills the area
+  between the outlines along the tangents).
 - **Sub-box** (`from_box` / `to_box = [fx0, fy0, fx1, fy1]`): attach to a
   part of the node's box — a region of an image — the attachment then being
   relative to it.
@@ -1219,8 +1270,11 @@ setters:
   `.margin(e)`, `.pad(e)` — `e` a number, `[v, h]` / `[t, h, b]` /
   `[t, r, b, l]` (CSS order) or `#{ top, right, bottom, left, x, y }` (`x` / `y`
   set both horizontal / vertical sides; a named side wins), as in TOML —
-  `.rotate(deg)` (clockwise; see [Rotation](#rotation)), `.overhang()` (no
-  room across the parent; see [Natural sizes & overhang](#natural-sizes--overhang)).
+  `.rotate(deg)` (clockwise; see [Rotation](#rotation)), `.overhang()` /
+  `.overhang("auto")` (no room across the parent; see
+  [Natural sizes & overhang](#natural-sizes--overhang)), `.align_self(v)` (or
+  `.align(v)` on a non-text node: `"start"`, `"center"`, `"end"`, `"stretch"`
+  across its column / row), `.min_width(n)`, `.min_height(n)`.
 - **effects** (any node): `.shadow(dx, dy, blur[, [spread,] color])`,
   `.glow(blur[, color])`, `.opacity(a)` — see
   [Shadows, glows & opacity](#shadows-glows--opacity).
@@ -1273,9 +1327,9 @@ setters:
   `.arc(r, x, y, #{ sweep, large, rotation })` (`r` a number or `[rx, ry]`) —
   see [Curves](#curves).
 - **image**: `.fit("contain"|"cover"|"fill")`, `.smooth(false)`, `.dpi(n)`
-  (natural size: pixels / n inches).
+  (natural size: pixels / n inches; `.dpi("file")`: the file's density).
 - **page**: `.unit("cm"|…)`, `.background(hex | gradient)`, `.dpi(n)`,
-  `.image_dpi(n)` (every image's default pixel density),
+  `.image_dpi(n)` (every image's default pixel density, or `"file"`),
   `.min_stroke_px(px)` (see [Output formats](#output-formats)),
   `.font(name | list | #{ latin, cjk, symbol, fallback })`, and the text
   defaults `.scripts(..)`, `.font_synthesis(..)`, `.synthetic_bold_width(em)`,
@@ -1335,6 +1389,7 @@ Components (lengths in cm, font sizes in pt):
 | Function | Result |
 |---|---|
 | `style(preset)` / `style(map)` / `style(preset, map)` | Switch a bundle of defaults in one line: `style("nature");` at the top of the script. See [Style presets](#style-presets). |
+| `styled(map, \|\| nodes)` / `with_style(map, \|\| nodes)` | Build a group in its own style: the function is called once with the style keys of `map` in force (merged over the current style), and the style is restored exactly afterwards — also when building fails, and however deep the calls nest. `styled(#{ scheme_label_size: 16 }, \|\| scheme([..]))`: bigger labels for one scheme, no per-element `.size()`. Returns what the function returns (a node, an array). |
 | `page(preset, root)` | Page of a named size, unit `cm`, in the style's `font_family()` when one is set and on its `page_bg()` background when one is set. Journal presets `"single"` (`single_width()`, default 8.5 cm column) and `"double"` (`double_width()`, default 17.5 cm) fix only the width and get an [auto height](#auto-page-height) that fits the content. Paper presets `"a5"`, `"a4"`, `"a3"`, `"a2"`, `"a1"`, `"a0"` (posters), `"letter"` are fixed; append `-landscape` to swap their sides (journal presets have no landscape form). The core `page(w, h, root)` is unchanged. |
 | `paper_size(preset)` | `[w, h]` of a preset, to drop down to core: `let s = paper_size("double"); page(s[0], 5, root).unit("cm")`. For journal presets `h` is the string `"auto"`, so `page(s[0], s[1], root)` stays auto. |
 | `title(s)` / `caption(s)` / `label(s)` / `body(s)` | Semantic text: `title_size()` (1.5× base) bold centered / base centered / `label_size()` (1.25× base) bold / base. `s` may also be a span array: `body(markup("H_2O"))`. |
@@ -1358,16 +1413,16 @@ Components (lengths in cm, font sizes in pt):
 | `inset(main, sub)` / `inset(main, sub, opts)` | The same on any panel that is not a plot (a photo, a schematic): `stack([main, …])` with `sub` in a corner (`"auto"` = top-right). |
 | `inset_plot(series)` / `inset_plot(opts, series)` | A `plot` dressed for an inset: labels at `inset_text_size()`, ≤ `inset_max_ticks()` ticks, shorter ticks, tight pad, `inset_bg()` under the whole box. Its `style` option overrides these. |
 | `overlay(item, map)` / `overlay(item, map, opts)` | Nodes at their natural size over any panel by **position name** — `#{ "top-right": tag, bottom: [a, b] }`; positions `top-left`, `top`, `top-right`, `left`, `center`, `right`, `bottom-left`, `bottom`, `bottom-right`. A value is a node, a string (inline [markup](#rich-text-markup): `"50 *μ*m"`), spans or an array of those (a column `overlay_gap()` apart, aligned to the position's side), `overlay_inset()` (the label inset) in from the edges. Text is set in the **overlay text style** — `overlay_text_size()`, `overlay_text_color()` (default `fg()`), `overlay_text_halo()` (a halo colour, default none) `overlay_text_halo_width()` wide — so labels over photos need no per-call styling. No coordinates: each position is a filling, padded, aligned column, as `pin`'s corners. Options `inset` (cm for all, or a map position → inset — a number, `[v, h]` or `#{ top, right, bottom, left }`: `#{ inset: #{ "top-left": 0 } }`), `gap`, and `size` / `color` / `halo` — this call's text style over the hooks (`overlay(img, map, #{ size: 22, color: "#d64541" })`). A core `stack`, so `labeled(overlay(..), "(a)")` composes. |
-| `fill_row(items)` / `fill_row(items, opts)` | Images, plots and panels built on them (labelled, overlaid, captioned) side by side at **one height that fills the width** — widths in proportion to their aspect ratios, worked out at layout time from the real image sizes (the core [`equal_height`](#axes-equal-height-rows--overflow) row); text items keep their natural width. Options `gap` (`fill_row_gap()`), `align` (`"start"`, `"center"`, `"end"`), `captions` — `"overhang"`: the captions of `captioned` / `panels(.., captions)` / `step` items keep their one-line width, centred on their item and overhanging into the gaps (the row keeps room at its ends), so a long caption neither widens its item nor wraps; `"wrap"`: they wrap to the item's width (default: as each item was built). No trial heights. |
+| `fill_row(items)` / `fill_row(items, opts)` | Images, plots and panels built on them (labelled, overlaid, captioned) side by side at **one height that fills the width** — widths in proportion to their aspect ratios, worked out at layout time from the real image sizes (the core [`equal_height`](#axes-equal-height-rows--overflow) row); text items keep their natural width. Options `gap` (`fill_row_gap()`), `align` (`"start"`, `"center"`, `"end"`), `captions` — `"overhang"`: the captions of `captioned` / `panels(.., captions)` / `step` items keep their one-line width, centred on their item and overhanging into the gaps (the row keeps room at its ends), so a long caption neither widens its item nor wraps; `"wrap"`: they wrap to the item's width; `"auto"`: they overhang into free room only and wrap otherwise (default: as each item was built). No trial heights. |
 | `side(main, note)` / `side(main, note, opts)` | A panel with a text block beside it: `note` (a string, spans, a node, or an array → a column `caption_gap()` apart) right of `main`, vertically centred, taking `side_width()` (0.4) of the width, `side_gap()` apart. Options `side` (`"right"` / `"left"`), `width` (a fraction, `"5cm"` or `"auto"`), `gap`, `align` (`"center"`, `"start"`, `"end"`, `"stretch"`). |
 | `scheme(items)` / `scheme(items, opts)` / `scheme_v(..)` | A reaction scheme or process flow without coordinates: `items` (nodes, strings like `"+"`, `step`s, `arrow_step`s) in a row `scheme_gap()` apart, every item centred on one axis. Options `direction` (`"right"` / `"down"` = `scheme_v`), `gap`, `align`, `arrow_length` (cm or `"fill"` for every arrow). See *Schemes*. |
-| `step(node, #{ above, below, left, right, overhang })` / `step(node, caption)` / `step(node, caption, opts)` | A node with captions (a string, rich text or a node each; strings at `scheme_label_size()`, centred), `scheme_label_gap()` from it; the node is marked as the step's axis (core `.axis()`), so in a scheme — or any `.cross("axis")` container — it sits on the axis while each caption takes only its own room. `overhang: true` (default `caption_overhang()`): a caption above / below wider than the node keeps its one-line width, centred on it, without widening the step (core [`.overhang()`](#natural-sizes--overhang)). |
+| `step(node, #{ above, below, left, right, overhang })` / `step(node, caption)` / `step(node, caption, opts)` | A node with captions (a string, rich text or a node each; strings at `scheme_label_size()`, centred), `scheme_label_gap()` from it; the node is marked as the step's axis (core `.axis()`), so in a scheme — or any `.cross("axis")` container — it sits on the axis while each caption takes only its own room. `overhang: true` (default `caption_overhang()`): a caption above / below wider than the node keeps its one-line width, centred on it, without widening the step (core [`.overhang()`](#natural-sizes--overhang)); `overhang: "auto"`: only into free room — over an arrow drawn at mid-height, never into an arrow's own label or a neighbour's caption — wrapping otherwise. Captions above / below centre on the step's own node box, so a step around a row holding steps captions the whole row. |
 | `arrow_step(label)` / `arrow_step(opts)` | An arrow for `scheme` with text above / below it (`scheme_v`: right / left). Options `above`, `below`, `length` (cm, default `scheme_arrow_length()`, or `"fill"`: share the spare width, at least `scheme_fill_min_length()`), `head` (`"end"`, `"both"`, `"start"`, `"none"`), `equilibrium` (`true` or a map of `equilibrium` options: the ⇌ pair), `color` (default `fg()`), `width` (default `scheme_arrow_width()`), `head_size`, `head_width`. |
 | `labware(kind)` / `labware(kind, opts)` | Lab glassware as clean line art (core paths), all `labware_size()` tall (1.2 cm at 8 pt; a dish 0.42 of it) so they line up in a `scheme`: `"vial"`, `"tube"`, `"flask"` (round-bottom), `"erlenmeyer"`, `"beaker"`, `"funnel"`, `"dish"` (Petri dish), `"cuvette"`, `"syringe"`. Options `level` (liquid, 0 … 1; default `labware_level()` = 0), `liquid` (colour or gradient; `labware_liquid()`), `size` (height, cm), `stroke` / `stroke_width` (`labware_stroke()` / `labware_stroke_width()`), `lid` (dish). See *Figure kit*. |
 | `vector_note(item, label)` / `(item, label, opts)` | A straight arrow across a panel (a dipole over a structure, a field over a photo), `label` just beyond its head in its colour (haloed like a panel label). `from` / `to` are `[fx, fy]` **fractions of the item's box** (default `[0.2, 0.75]` → `[0.8, 0.25]`); the label is kept inside the item. Options `color` (`vector_note_color()` = `accent()`), `width`, `size`, `gap`, `head`, `head_size`, `head_width`. |
 | `colorbar(fill, labels)` / `(fill, labels, opts)` | A colour scale: a bar filled with `fill` (colours spread as a gradient, `[offset, colour]` stops, or a ready paint) and `labels` spread evenly along it — the ends flush with the bar's ends, the rest centred. Options `direction` (`"horizontal"`: labels below; `"vertical"`: low at the bottom, labels right), `length` (cm or `"fill"`; `colorbar_length()`), `thickness`, `size`, `gap`, `border` (`""` for none), `discrete: true` (one block per colour), `title`. |
-| `cycle_arrows(item)` / `(item, opts)` | Two curved arrows around a panel or a label (a string): a rotation, a reversible switch. Above and below by default (`sides: "left-right"`), both turning `direction` `"cw"` / `"ccw"`, spanning `cycle_arrow_span()` of the side and bulging `cycle_arrow_depth()` out (core `curved_arrow`s in unit viewboxes, so they follow the item). Options `colors: [a, b]` / `color`, `labels: [a, b]` (beside each arc, in its colour), `width`, `depth`, `span`, `gap`, `size`. |
-| `zoom_link(item, copy, opts)` | The magnification inset: the region `region` (`[fx0, fy0, fx1, fy1]` fractions of `item`'s box — of the visible picture for a letterboxed image) outlined, `copy` framed, and two lines from the region's corners to the copy's nearest corners — chosen **after layout** (core connectors, `facing-1` / `facing-2` corners), so the copy may be a panel beside the item, an `inset(..)` or an `overlay(..)` over it. An array of connectors: drop it anywhere in the tree, `col([fill_row([img, detail]), zoom_link(img, detail, #{ region })])`. Options `color` (`zoom_color()` = `accent()`), `width` (`zoom_width()`), `dash` (the lines, `zoom_dash()`), `region_dash` (the outline, `zoom_region_dash()`: solid), `frame` (frame the copy, `zoom_copy_frame()`), `outline` (`"rect"`, `"circle"` — the inscribed ellipse, the lines leaving from its extreme points — or `"none"`; `zoom_outline()`), `style` (`"lines"`, or `"cone"`: a translucent filled quad from the region to the copy, a light / projection cone; `zoom_style()`), `opacity` (the cone's, `zoom_cone_opacity()` = 0.25). |
+| `cycle_arrows(item)` / `(item, opts)` | Two curved arrows around a panel or a label (a string): a rotation, a reversible switch. Above and below by default (`sides: "left-right"`), both turning `direction` `"cw"` / `"ccw"`, spanning `cycle_arrow_span()` of the side and bulging `cycle_arrow_depth()` out (core `curved_arrow`s in unit viewboxes, so they follow the item). The arcs stay inside the box the result gets: beside the item (`"left-right"`) the item shrinks to leave them room (its row is sized to its content, so they hug it when there is room to spare); above and below they add to its height. Options `colors: [a, b]` / `color`, `labels: [a, b]` (beside each arc, in its colour), `width`, `depth`, `span`, `gap`, `size`. |
+| `zoom_link(item, copy, opts)` | The magnification inset: the region `region` (`[fx0, fy0, fx1, fy1]` fractions of `item`'s box — of the visible picture for a letterboxed image) outlined, `copy` framed, and two lines from the region's corners to the copy's nearest corners — chosen **after layout** (core connectors, `facing-1` / `facing-2` corners), so the copy may be a panel beside the item, an `inset(..)` or an `overlay(..)` over it. An array of connectors: drop it anywhere in the tree, `col([fill_row([img, detail]), zoom_link(img, detail, #{ region })])`. Options `color` (`zoom_color()` = `accent()`), `width` (`zoom_width()`), `dash` (the lines, `zoom_dash()`), `region_dash` (the outline, `zoom_region_dash()`: solid), `frame` (frame the copy, `zoom_copy_frame()`), `outline` (`"rect"`, `"circle"` — the inscribed ellipse, the lines leaving from its extreme points — or `"none"`; `zoom_outline()`), `style` (`"lines"`, or `"cone"`: a translucent filled quad from the region to the copy, a light / projection cone; `zoom_style()`), `opacity` (the cone's, `zoom_cone_opacity()` = 0.25), `attach` (`"facing"`, or `"hull"`: the lines / cone along the outer tangents of region and copy together — core `hull-1` / `hull-2` — right for a copy placed diagonally; `zoom_attach()`). `outline: "none"` draws no region at all; the lines / cone still start at it. |
 | `callout_to(item, label)` / `(item, label, opts)` | A label in a free spot with a leader line to a point of the item: `at` (`[fx, fy]` of the item's box, default the middle), `position` — an overlay position over the item (`"top-left"`, `"top"`, …; default `callout_position()` = `"top-right"`, in the overlay text style) or `"left"` / `"right"` / `"above"` / `"below"` beside it (`callout_side_gap()` apart). The leader leaves the label's side facing the point, `gap` (`callout_gap()`) off it, in `callout_color()` (`plot_fg()`), `callout_width()`; `head` (`"none"` / `"end"`), `size` (`callout_size()`), `route`. Nest for several: `callout_to(callout_to(img, "A", ..), "B", ..)`. |
 | `flow_link(a, b)` / `(a, b, opts)` | A flowchart link between two nodes anywhere on the page (other rows, columns): an elbow from the facing sides with an arrow head, corners rounded by `flow_link_radius()`, in `flow_link_color()` (`plot_fg()`), `flow_link_width()`, `flow_link_gap()` off the boxes. `opts` are `connect` options over these (`from: "left", to: "left"` loops round in a U; `dash`, `head: "both"`, `route: "straight"`). |
 | `block_link(a, b)` / `(a, b, opts)` | A wide translucent arrow (a filled band, triangular head) between two nodes: `block_link_width()` wide, `block_link_color()` (a colour or gradient) at `block_link_opacity()`. `connect` options, with `width` the band width and `color` its fill. |
@@ -1375,7 +1430,7 @@ Components (lengths in cm, font sizes in pt):
 | `pile(node, n)` / `(node, n, opts)` | `n` copies of a (sized) node, each behind the one in front shifted by `offset` (`pile_offset()`: up and right) at `opacity` (`pile_opacity()`): stacked discs, sheets, cuvettes. A connector to `node` attaches to the front copy. |
 | `backdrop(node)` / `(node, opts)` | A translucent rounded panel behind a node (over a photo or a busy plot), hugging it: `color` (`backdrop_color()` = `#ffffffcc`), `pad` (`backdrop_pad()`), `radius` (`backdrop_radius()`), `stroke` / `stroke_width`. |
 | `pin(node, corner)` / `pin(node, corner, inset)` | Any node pinned `inset` (default `label_inset()`) in from a corner of the enclosing stack — what `labeled` and `scalebar` use. |
-| `captioned(item, c)` / `captioned(item, c, #{ overhang })` | `item` above caption `c` (a string or rich text becomes `caption(c)`, a node is used as is), `caption_gap()` apart; the item takes the spare height and the caption spans the item's width, so its centered text sits under the middle of the panel whatever the parent's cross alignment. `overhang: true` (default `caption_overhang()`): a caption wider than the item keeps its one-line width, centred, overhanging into the gaps. |
+| `captioned(item, c)` / `captioned(item, c, #{ overhang })` | `item` above caption `c` (a string or rich text becomes `caption(c)`, a node is used as is), `caption_gap()` apart; the item takes the spare height and the caption spans the item's width, so its centered text sits under the middle of the panel whatever the parent's cross alignment. `overhang: true` (default `caption_overhang()`): a caption wider than the item keeps its one-line width, centred, overhanging into the gaps; `"auto"`: into free room only. Labelled / captioned / overlaid / annotated `plot_aspect()` "fill" plots pass the fill on (the wrapper takes the spare height). |
 | `nodes(items)` / `as_node(x)` | Bare-string sugar: a string becomes `body(s)`. Use `col(nodes([...]))` to get it in core containers. |
 
 **Bare strings.** Inside framework containers (`vbox`, `hbox`, `grid`, `panels`)
@@ -1401,8 +1456,10 @@ fn label_halo_width() { 0.05 }      // cm past the glyphs (default label_size() 
 fn label_background() { "#ffffff" } // box behind the label instead of the halo (default "": none)
 fn label_pad() { 0.1 }      // cm between label text and its box (default base_size() * 0.01)
 fn caption_gap() { 0.15 }   // cm between a panel and its caption (default gap() / 2)
-fn caption_overhang() { true }  // captions wider than their panel / step overhang it (default false)
-fn image_dpi() { 300 }      // every image's natural size = pixels / 300 in (default (): none), via page(preset, ..)
+fn caption_overhang() { true }  // captions wider than their panel / step overhang it (default false);
+                            // "auto": only into free room, wrapping otherwise (safe everywhere)
+fn image_dpi() { 300 }      // every image's natural size = pixels / 300 in (default (): none), via page(preset, ..);
+                            // "file": the density each file records (PNG pHYs, JPEG JFIF)
 fn single_width() { 8.9 }   // cm, the "single" page preset (default 8.5)
 fn double_width() { 18.3 }  // cm, the "double" page preset (default 17.5)
 fn accent() { "#ffd400" }   // callout / highlight / spot colour (default "#ff5a3c")
@@ -1449,6 +1506,7 @@ fn shift_arrow_trim() { 0 }         // plot_shift_arrows: fraction left off both
                                     // shift_arrow_min_length() (0), shift_arrow_anchor() ("gap")
 fn zoom_style() { "cone" }          // zoom_link: "lines" (default) or a filled cone; zoom_outline() ("rect"),
                                     // zoom_cone_opacity() (0.25)
+fn zoom_attach() { "hull" }         // zoom_link lines / cone: "facing" (default) or the outer tangents
 fn pile_offset() { [0, -0.1] }      // pile: per copy, cm (default up and right); pile_opacity() (1)
 fn backdrop_color() { "#000000aa" } // backdrop panel (default "#ffffffcc"); backdrop_pad(), backdrop_radius()
 fn label_position() { "outside-top" } // labeled / panels label (default "inside": label_corner())
@@ -1695,6 +1753,25 @@ fill_row([captioned(photo, "overview"), captioned(detail, "the circled spot, mag
          #{ captions: "overhang" })
 zoom_link(photo, detail, #{ region: [0.56, 0.32, 0.74, 0.6], outline: "circle", style: "cone" })
 section("Grow to fit", [scheme([..])], #{ fit: "both" })
+```
+
+**Room that yields.** `style(#{ caption_overhang: "auto" })` lets every
+step caption overhang into free room only — over an arrow drawn at
+mid-height, never into an arrow's label or another caption — and wrap
+otherwise; `styled(map, || ..)` builds one group in its own style;
+`plot_aspect: "fill"` with `section(.., #{ fit: "flex" })` lets plots absorb
+a section's spare (or missing) height while the text keeps its size;
+`.align("center")` centres one natural-size structure in a stretching
+column; tables and labelled panels in "auto" cells keep their own width;
+`zoom_link(.., #{ attach: "hull" })` joins a diagonal copy by its outer
+tangents — see [`examples/flex_fit.figs`](examples/flex_fit.figs):
+
+```rhai
+style(#{ caption_overhang: "auto", plot_aspect: "fill" });
+styled(#{ scheme_label_size: 16 }, || scheme([step(a, "precursor"), arrow_step("hν"), step(b, "product")]))
+section("Data", [body(".."), labeled(curve, "(a)"), labeled(growth, "(b)")], #{ fit: "flex" })
+image("mol.png").align("center")
+zoom_link(photo, zoom, #{ region: [0.1, 0.1, 0.3, 0.3], attach: "hull" })
 ```
 
 **Links.** Lines between parts of a figure attach to the laid-out nodes
@@ -1959,7 +2036,9 @@ fn marker_size() { 0.2 }        // marker diameter, cm (default base_size() * 0.
 fn plot_frame() { "box" }       // "open" (default) / "box" / "none"
 fn legend_corner() { "top-left" }  // "auto" (default) / a corner / "" for none
 fn bar_width() { 0.8 }          // fraction of the bar spacing (default 0.7)
-fn plot_aspect() { 1.0 }        // width / height of a plot panel; 0 = size it yourself (default 4:3)
+fn plot_aspect() { 1.0 }        // width / height of a plot panel; 0 = size it yourself (default 4:3);
+                                // "fill": the spare height of its column (.flex(1)), at least
+                                // plot_min_height() cm (default base_size() * 0.25)
 fn plot_label_room() { 0 }      // band a labelled plot keeps free for its panel label, cm (standalone plots: none)
 fn plot_pad() { 0 }             // clear space between the outermost labels and the plot's box, cm (default base_size() * 0.01)
 fn ylabel_rotated() { false }   // y label horizontal above the axis (default true: turned 90° left of the tick labels)
@@ -2045,9 +2124,9 @@ poster(#{
 | Function | Result |
 |---|---|
 | `poster(header, body)` / `poster(preset, header, body)` | A `poster_size()` page (default `"a0"`; any paper preset, `-landscape` too) on `poster_bg()` (a colour or gradient; default `page_bg()`), the header above the body, `poster_margin()` from the edges. `header` is a node, a map for `poster_header`, or `()`; `body` an array (→ `rows`) or a node. |
-| `poster_header(#{ title, authors, affiliations, logos, number, number_position, number_inset, logo_box })` | Logos (`poster_logo_height()` tall — or, with `logo_box: [w, h]` / `poster_logo_box()`, each fitted and centred in a box of that size, so logos of different shapes line up) on the left; the title (`poster_title_size()`, bold) and the author line (`author_font()`) centred right of them; the poster number bold in the top-right corner — at the right end of the title row, or with `number_position: "above"` (hook `poster_number_position()`) on a right-aligned line of its own above the title, so a long title keeps the full width; `number_inset` (`poster_number_inset()`, cm) keeps it in from the right edge; a `poster_header_rule()` under it all. |
+| `poster_header(#{ title, authors, affiliations, logos, number, number_position, number_inset, logo_box, title_inset })` | Logos (`poster_logo_height()` tall — or, with `logo_box: [w, h]` / `poster_logo_box()`, each fitted and centred in a box of that size, so logos of different shapes line up) on the left; the title (`poster_title_size()`, bold) and the author line (`author_font()`) centred right of them; the poster number bold in the top-right corner — at the right end of the title row, or with `number_position: "above"` (hook `poster_number_position()`) on a right-aligned line of its own above the title, so a long title keeps the full width; `number_inset` (`poster_number_inset()`, cm) keeps it in from the right edge; `title_inset` (`poster_title_inset()`, cm, or `[left, right]`) keeps the title clear of the logos / number so a long title wraps short of them; a `poster_header_rule()` under it all. |
 | `author_line(authors, affiliations)` | Authors are names (strings or rich text: `markup("**A. Author**")`) or `#{ name, aff: [1, 2], presenter: true }`; affiliations are strings or rich text too. With `affiliation_position()` `"before"` (default, the Japanese convention): `（Univ. A¹・Univ. B²）○A. Author¹・B. Author¹,²` on one line; `"below"`: the authors, then the numbered affiliations. The line is one text node of rich-text spans — affiliation numbers are superscript spans — so it wraps like any text; a single affiliation is not numbered. |
-| `section(title, content)` / `section(number, title, content)` / `(…, opts)` | A bar (`section_bar_height()`, `section_bar_fill()`, `section_bar_border()`, square unless `section_bar_radius()`) with the title optically centred on it (by its cap middle — the core [`"cap_middle"` anchor](#optical-middle-cap_middle) — or on a baseline with `section_title_baseline()`), over `content` (an array of items `section_gap()` apart, or one node) padded `section_pad()`. Numbered `section_label_style()` (`"1."` → "1. Title") in the order sections are built; an integer `number` restarts the count from it, a string is used as is (`""` for none). The title is a string, rich text, or a text node used as is (the number goes before it in the bar's title style; `section_title(s)` gives that style to chain setters on). Effects: `section_title_glow()`, `section_title_shadow()`, `section_bar_shadow()`. Options (a map as the last argument): `footer` — item(s) pushed to the bottom of the section (references, a take-home `note`), the content taking the spare height above them; `overflow` — `"visible"`, `"clip"`, `"shrink"` or `"fit"` (default `section_overflow()`, `"visible"`; with a footer `"clip"`, so content that doesn't fit stops above the footer instead of covering it); `fit` — `"both"`: the content scaled up *or* down uniformly until it fills the body on one axis, centred (= overflow `"fit"`), `"shrink"`, `"none"`; `valign` — `"top"`, `"center"`, `"bottom"` or `"spread"` (items spaced out over the height; default `section_valign()`, `"center"` with `fit: "both"`). Every section names itself (`section "Title"`, its parts `(body)` / `(content)` / `(footer)`), so an [overflow warning](#axes-equal-height-rows--overflow) says which section is too long, by how many cm. |
+| `section(title, content)` / `section(number, title, content)` / `(…, opts)` | A bar (`section_bar_height()`, `section_bar_fill()`, `section_bar_border()`, square unless `section_bar_radius()`) with the title optically centred on it (by its cap middle — the core [`"cap_middle"` anchor](#optical-middle-cap_middle) — or on a baseline with `section_title_baseline()`), over `content` (an array of items `section_gap()` apart, or one node) padded `section_pad()` (plus `section_body_inset()` left and right). Numbered `section_label_style()` (`"1."` → "1. Title") in the order sections are built; an integer `number` restarts the count from it, a string is used as is (`""` for none). The title is a string, rich text, or a text node used as is (the number goes before it in the bar's title style; `section_title(s)` gives that style to chain setters on). Effects: `section_title_glow()`, `section_title_shadow()`, `section_bar_shadow()`. Options (a map as the last argument): `footer` — item(s) pushed to the bottom of the section (references, a take-home `note`), the content taking the spare height above them; `overflow` — `"visible"`, `"clip"`, `"shrink"` or `"fit"` (default `section_overflow()`, `"visible"`; with a footer `"clip"`, so content that doesn't fit stops above the footer instead of covering it); `fit` — `"both"`: the content scaled up *or* down uniformly until it fills the body on one axis, centred (= overflow `"fit"`; a rigid item in a flex cell counts by its share, so it is scaled rather than squeezed), `"flex"`: the flexible items — plots with `plot_aspect()` `"fill"` — take the spare height or give it up, down to their minimum, and only past that is the content shrunk uniformly (text keeps its size), `"shrink"`, `"none"`; `valign` — `"top"`, `"center"`, `"bottom"` or `"spread"` (items spaced out over the height; default `section_valign()`, `"center"` with `fit: "both"`). Every section names itself (`section "Title"`, its parts `(body)` / `(content)` / `(footer)`), so an [overflow warning](#axes-equal-height-rows--overflow) says which section is too long, by how many cm. |
 | `block(title, items)` / `block(title, items, opts)` | A `subheading(title)` (a node is used as is; `""` for none) over `items` side by side in equal flex shares, `block_title_gap()` below the heading and `block_gap()` apart. Options `widths` (flex weights, `"4cm"`, `"auto"`), `gap`, `title_gap`, `align` (`"start"` default, `"center"`, `"end"`, `"stretch"`, `"baseline"`). |
 | `columns(items)` / `columns(items, widths)` / `columns(items, widths, opts)` | Side by side, `poster_gutter()` apart, with a dashed `vsep` in each gutter (`separators()`), starting `separator_inset()` down (the middle of the bars). Widths: flex weights, `"12cm"` lengths, `"auto"`. Options (also as the second argument): `gutter` — one length or one per gutter (so each row of a poster can have its own); `separators` — `true` / `false`, or one per gutter: `true`, `false`, a number (a separator ending that many cm below the top of the row) or `#{ start, end, offset }` (cm from the top of the row; `start` defaults to the bar middle, `end` to the bottom; `offset` cm right of the gutter centre, negative left, default `separator_offset()` = 0). |
 | `rows(items)` / `rows(items, heights)` / `rows(items, heights, opts)` | Down the page, `poster_row_gap()` apart (dashed `hsep`s with `row_separators()`); same sizes as `columns`. Options: `gaps` (one or one per gap), `separators` (`true` / `false`, or one per gap). |
@@ -2055,7 +2134,7 @@ poster(#{
 | `frame(content)` / `dashed_frame(content)` / `(…, variant)` | A thin rounded border box (`frame_color()`, `frame_width()`, `frame_radius()`, `frame_pad()`; `frame_dash()`). Square grey boxes are core setters: `frame(..).radius(0).stroke("#7f7f7f")`, or a variant (below). |
 | `note(s)` / `ref(s)` / `subheading(s)` / `(…, variant)` | The highlighted take-home sentence (centred, `note_color()`) / a reference line (`ref_size()`, `ref_color()`, `ref_font()`, centred) / `"■ " + s` (`subheading_mark()`, `subheading_size()`; the mark bold on its own with `subheading_mark_bold()`, sized with `subheading_mark_size()`). |
 | **Variants** | A named bundle of style keys per component, set in the style: `style(#{ frame_variants: #{ box: #{ frame_color: "#7f7f7f", frame_radius: 0 } } })`, then `frame(x, "box")`. Likewise `note_variants` / `note(s, v)`, `ref_variants` / `ref(s, v)`, `subheading_variants` / `subheading(s, v)`, `table_variants` / `table(rows, #{ variant })`, `section_variants` / `section(.., #{ variant })`. A variant may also be a map of style keys given directly; unknown names and keys are errors listing what exists. |
-| `bullets(items)` / `bullets(items, #{ pitch })` | A list with a hanging indent: each item in a cell `bullet_indent()` right of its `bullet_mark()`, so wrapped lines align; an array item is a nested list. Each item is a baseline-aligned row, so the mark — in its own size (`bullet_mark_size()`) and font (`poster_symbol_font()`) — sits exactly on the first line's baseline (a node item: its first text's; one without text sits on it by its bottom edge). `pitch` (cm; default `bullet_pitch()` = `()`, none) puts the items' first baselines exactly that far apart instead of `bullet_gap()` — the core [baseline pitch](#baseline-pitch) — so lists of mixed sizes keep one line grid. |
+| `bullets(items)` / `bullets(items, #{ pitch })` | A list (`bullet_inset()` cm in from the left, default 0) with a hanging indent: each item in a cell `bullet_indent()` right of its `bullet_mark()`, so wrapped lines align; an array item is a nested list. Each item is a baseline-aligned row, so the mark — in its own size (`bullet_mark_size()`) and font (`poster_symbol_font()`) — sits exactly on the first line's baseline (a node item: its first text's; one without text sits on it by its bottom edge). `pitch` (cm; default `bullet_pitch()` = `()`, none) puts the items' first baselines exactly that far apart instead of `bullet_gap()` — the core [baseline pitch](#baseline-pitch) — so lists of mixed sizes keep one line grid. |
 | `table(rows)` / `table(rows, opts)` | Rows of cells (strings, numbers, spans, nodes; `colspan(n, x)` spans n columns); the first row a bold header above a `table_header_rule_width()` rule. Options `header` (false: none), `widths`, `align` (one or per column), `rules` (`"grid"`, `"rows"`, `"booktabs"`, `"none"`), `pad` / `pad_x` / `pad_y`, `font` (every text cell: a family, fallback list or per-script map; default `table_font()`, the header `table_header_font()`), `header_font` (the header row; default `font`), `fonts` (one per column, `""` for the table's; over `font`), `rule_mode` (`"space"` default, `"overlay"`; default `table_rule_mode()`). Node cells keep their own font; string and span cells keep the bold header. Rules are filled rects, so the grid is exact: with `"space"` they lie between the cells and take their width (a spanning cell covers the rules between its columns); with `"overlay"` they are laid over the cell boundaries — inner rules centred on them, the frame just inside the table's edge — and take no room, so rows sit edge to edge and the table is exactly as tall as its cells; cells are padded `table_pad_x()` left and right, `table_pad_y()` top and bottom (both default `table_pad()`), filled `table_fill()` / `table_header_fill()`. |
 
 All sizes derive from `base_size()`, so `style("poster")` (24 pt body) on A0
@@ -2104,7 +2183,7 @@ Hooks: `poster_size`, `poster_bg`, `poster_margin`, `poster_gutter`,
 `table_font`, `table_header_font`, `separator_offset`,
 `section_title_baseline`, `poster_symbol_font`, `block_gap`, `block_title_gap`,
 `bullet_pitch`, `table_rule_mode`, `section_overflow`, `poster_number_position`,
-`author_font`, `ref_font`, `poster_logo_box`, `poster_number_inset`, `section_valign`, `frame_variants`, `note_variants`, `ref_variants`,
+`author_font`, `ref_font`, `poster_logo_box`, `poster_number_inset`, `section_valign`, `poster_title_inset`, `section_body_inset`, `bullet_inset`, `frame_variants`, `note_variants`, `ref_variants`,
 `table_variants`, `subheading_variants`, `section_variants`. Lengths are cm; the section counter is
 fresh for every evaluation. A section title is anchored on the bar's centre
 by its **cap middle** (half the font's cap height above its first baseline:
