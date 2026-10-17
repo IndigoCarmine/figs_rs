@@ -188,3 +188,211 @@ fn section_overflow_option_and_hook() {
         "{e}"
     );
 }
+
+// ---- fill_row -------------------------------------------------------------------------
+
+#[test]
+fn fill_row_shares_one_height_across_the_width() {
+    // Aspects 2 and 1 in 200 pt, fill_row_gap() 8 apart: H = 192 / 3 = 64.
+    let l = lay(r#"style(#{ fill_row_gap: 8 });
+        page(200, 300, col([fill_row([rect().aspect(2), labeled(rect().aspect(1), "(b)")])]).stretch())
+            .unit("pt")"#);
+    let a = l
+        .nodes
+        .iter()
+        .find(|n| (n.rect.w - 128.0).abs() < 1e-2)
+        .unwrap()
+        .rect;
+    approx(a.h, 64.0);
+    approx(a.x, 0.0);
+    let b = l
+        .nodes
+        .iter()
+        .find(|n| (n.rect.w - 64.0).abs() < 1e-2)
+        .unwrap()
+        .rect;
+    approx(b.h, 64.0);
+    approx(b.x, 136.0);
+    let d = raw(r#"page(10, 10, fill_row([rect()], #{ gap: 0.3, align: "center" }))"#);
+    let r = &d.nodes["root"];
+    assert!(r.equal_height);
+    approx(r.spacing, 0.3);
+    let e = fail(r#"page(1, 1, fill_row([rect()], #{ align: "baseline" }))"#);
+    assert!(
+        e.contains(r#"fill_row: unknown align "baseline" (start, center, end)"#),
+        "{e}"
+    );
+    let e = fail(r#"page(1, 1, fill_row([rect()], #{ size: 1 }))"#);
+    assert!(e.contains(r#"unknown option "size""#), "{e}");
+}
+
+// ---- overlay text, insets ------------------------------------------------------------------
+
+#[test]
+fn overlay_text_follows_its_hooks_and_reads_markup() {
+    let d = raw(
+        r##"style(#{ overlay_text_size: 9, overlay_text_color: "#ffffff",
+                    overlay_text_halo: "#000000", overlay_text_halo_width: 0.05 });
+        page(10, 10, overlay(rect(), #{ "top-left": "50 *μ*m", bottom: body("plain") }))"##,
+    );
+    let t = text_node(&d, "50 μm");
+    assert_eq!(t.font_size, Some(9.0));
+    assert_eq!(t.color, Color::parse_hex("#ffffff").ok());
+    assert_eq!(t.stroke, Color::parse_hex("#000000").ok());
+    assert_eq!(t.stroke_width, Some(0.1));
+    assert!(t.spans.iter().any(|s| s.text == "μ"), "markup became spans");
+    // A node passes through untouched.
+    assert_eq!(text_node(&d, "plain").stroke, None);
+    // Defaults: base size, fg(), no halo.
+    let d = raw(r#"page(10, 10, overlay(rect(), #{ center: "x" }))"#);
+    let t = text_node(&d, "x");
+    assert_eq!((t.font_size, t.color, t.stroke), (Some(8.0), None, None));
+}
+
+#[test]
+fn overlay_inset_per_position() {
+    let l = lay(
+        r#"page(100, 100, overlay(rect(), #{ "top-left": "a", "bottom-right": "b" },
+            #{ inset: #{ "top-left": 0, "bottom-right": #{ bottom: 15, right: 5 } } })).unit("pt")"#,
+    );
+    let a = text_rect(&l, "a");
+    approx(a.x, 0.0);
+    approx(a.y, 0.0);
+    let b = text_rect(&l, "b");
+    approx(b.x + b.w, 95.0);
+    approx(b.y + b.h, 85.0);
+    let e = fail(r#"page(1, 1, overlay(rect(), #{}, #{ inset: #{ middle: 1 } }))"#);
+    assert!(
+        e.contains(r#"overlay: inset: unknown position "middle""#),
+        "{e}"
+    );
+}
+
+#[test]
+fn inset_avoid_keeps_off_an_edge_band() {
+    let src = |avoid: &str| {
+        format!(
+            r#"style(#{{ inset_avoid_band: 20 }});
+            page(100, 100, inset(rect(), rect().width(10).height(10),
+                #{{ corner: "bottom-right", width: 10, pad: 2{avoid} }})).unit("pt")"#
+        )
+    };
+    let find = |l: &ComputedLayout| l.nodes.iter().find(|n| n.rect.w == 10.0).unwrap().rect;
+    let plain = find(&lay(&src("")));
+    approx(plain.y + plain.h, 98.0);
+    let banded = find(&lay(&src(r#", avoid: "bottom""#)));
+    approx(banded.y + banded.h, 78.0);
+    approx(banded.x + banded.w, 98.0);
+    let mapped = find(&lay(&src(r#", avoid: #{ right: 7 }"#)));
+    approx(mapped.x + mapped.w, 91.0);
+    let e = fail(r#"page(1, 1, inset(rect(), rect(), #{ avoid: "middle" }))"#);
+    assert!(e.contains(r#"inset: avoid: unknown edge "middle""#), "{e}");
+}
+
+// ---- scale bar on a box ------------------------------------------------------------------------
+
+#[test]
+fn scalebar_on_a_backing_box() {
+    let d = raw(
+        r##"page(10, 10, annotate(rect(), scalebar(2, "5 μm", #{ box: "#0d0d0d", inset: 0, pad: 0.2 })))"##,
+    );
+    let dark = Color::parse_hex("#0d0d0d").unwrap();
+    let boxed = d
+        .nodes
+        .values()
+        .find(|n| matches!(&n.fill, Some(figs_core::geom::Paint::Solid(c)) if *c == dark))
+        .expect("the box");
+    assert_eq!(boxed.padding, figs_core::geom::Edges::all(0.2));
+    // On a box the label and bar need no halo.
+    assert_eq!(text_node(&d, "5 μm").stroke, None);
+    let l = lay(
+        r#"page(100, 100, annotate(rect(), scalebar(20, "s", #{ box: true, inset: 0, pad: 3 }))).unit("pt")"#,
+    );
+    let b = l
+        .nodes
+        .iter()
+        .find(|n| matches!(&n.content, PaintContent::Frame(_)))
+        .expect("box")
+        .rect;
+    approx(b.x + b.w, 100.0);
+    approx(b.y + b.h, 100.0);
+    // Without a box: the old look (haloed label).
+    let d = raw(r#"page(10, 10, annotate(rect(), scalebar(2, "x")))"#);
+    assert!(text_node(&d, "x").stroke.is_some());
+    let e = fail(r#"page(1, 1, scalebar(2, "x", #{ boxed: 1 }))"#);
+    assert!(e.contains(r#"unknown option "boxed""#), "{e}");
+}
+
+// ---- poster header ---------------------------------------------------------------------------------
+
+#[test]
+fn poster_number_above_the_title_and_author_font() {
+    let src = |extra: &str| {
+        format!(
+            r#"style(#{{ author_font: "Georgia" }});
+            page(400, 200, poster_header(#{{ title: "T", number: "P-1", authors: ["A"]{extra} }})).unit("pt")"#
+        )
+    };
+    let l = lay(&src(r#", number_position: "above""#));
+    let num = text_rect(&l, "P-1");
+    let title = text_rect(&l, "T");
+    assert!(num.y + num.h <= title.y + 1e-3, "{num:?} above {title:?}");
+    let l = lay(&src(""));
+    approx(text_rect(&l, "P-1").y, text_rect(&l, "T").y);
+    let d = raw(&src(""));
+    assert_eq!(text_node(&d, "A").font_family.as_deref(), Some("Georgia"));
+    let e = fail(&src(r#", number_position: "below""#));
+    assert!(
+        e.contains(r#"unknown number_position "below" (title, above)"#),
+        "{e}"
+    );
+}
+
+// ---- variants --------------------------------------------------------------------------------------
+
+#[test]
+fn component_variants_from_the_style() {
+    let d = raw(
+        r##"style(#{ frame_variants: #{ box: #{ frame_color: "#7f7f7f", frame_radius: 0 } },
+                    note_variants: #{ quiet: #{ note_color: "#123456" } },
+                    ref_font: "Georgia" });
+        page(10, 10, col([frame("in", "box"), note("n", "quiet"),
+                          frame("plain"), note("m", #{ note_size: 5 }), ref("r")]))"##,
+    );
+    let frames: Vec<&RawNode> = d
+        .nodes
+        .values()
+        .filter(|n| n.corner_radius.is_some())
+        .collect();
+    let grey = Color::parse_hex("#7f7f7f").ok();
+    assert!(frames
+        .iter()
+        .any(|n| n.corner_radius == Some(0.0) && n.stroke == grey));
+    assert!(
+        frames.iter().any(|n| n.corner_radius != Some(0.0)),
+        "the variant doesn't leak"
+    );
+    assert_eq!(text_node(&d, "n").color, Color::parse_hex("#123456").ok());
+    assert_eq!(text_node(&d, "m").font_size, Some(5.0));
+    assert_eq!(text_node(&d, "r").font_family.as_deref(), Some("Georgia"));
+    // table and section take a `variant` option.
+    let d = raw(r##"style(#{ table_variants: #{ big: #{ table_size: 20 } },
+                    section_variants: #{ red: #{ section_title_color: "#ff0000" } } });
+        page(10, 10, col([table([["c"]], #{ header: false, variant: "big" }),
+                          section("S", [], #{ variant: "red" })]))"##);
+    assert_eq!(text_node(&d, "c").font_size, Some(20.0));
+    assert_eq!(
+        text_node(&d, "1. S").color,
+        Color::parse_hex("#ff0000").ok()
+    );
+    let e = fail(r#"page(1, 1, frame("x", "box"))"#);
+    assert!(
+        e.contains(r#"frame: unknown variant "box" (none defined"#),
+        "{e}"
+    );
+    let e = fail(r#"page(1, 1, note("x", #{ colour: 1 }))"#);
+    assert!(
+        e.contains(r#"note: variant key "colour" is not a style key"#),
+        "{e}"
+    );
+}

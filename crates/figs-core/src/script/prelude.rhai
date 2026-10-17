@@ -112,6 +112,11 @@ fn scalebar_halo() { style_get("scalebar_halo", "#000000a0") }
 // Side inset of a field-scaled `scalebar(len, field, s)` as a fraction of the
 // panel width (that form is laid out in fractions, so a cm inset can't apply).
 fn scalebar_frac_inset() { style_get("scalebar_frac_inset", 0.025) }
+// A backing box behind the label and bar (`scalebar(len, s, #{ box })`): its
+// fill ("" = none, the default: a halo instead), padding (cm) and radius.
+fn scalebar_box() { style_get("scalebar_box", "") }
+fn scalebar_box_pad() { style_get("scalebar_box_pad", scalebar_thickness() * 1.5) }
+fn scalebar_box_radius() { style_get("scalebar_box_radius", 0) }
 
 // --- Overlays, schemes, side notes (see "Overlays" and "Schemes" below) ---
 
@@ -120,6 +125,22 @@ fn overlay_inset() { style_get("overlay_inset", label_inset()) }
 
 // Between several nodes at one `overlay` position (cm): 0.08 cm at 8 pt.
 fn overlay_gap() { style_get("overlay_gap", base_size() * 0.01) }
+// Plain text (strings, markup, spans) that `overlay` lays over a panel: its
+// size (pt), colour ("" = `fg()`), and a halo colour ("" = none) reaching
+// `overlay_text_halo_width()` cm past the glyphs — labels over photos need
+// no per-call styling: `style(#{ overlay_text_color: "#ffffff",
+// overlay_text_halo: "#000000" })`.
+fn overlay_text_size() { style_get("overlay_text_size", base_size()) }
+fn overlay_text_color() { style_get("overlay_text_color", fg()) }
+fn overlay_text_halo() { style_get("overlay_text_halo", "") }
+fn overlay_text_halo_width() { style_get("overlay_text_halo_width", overlay_text_size() * 0.0025) }
+// The band an `inset(.., #{ avoid: "bottom" })` keeps clear along an edge
+// (cm): one line of overlay text and its insets — a caption strip.
+fn inset_avoid_band() {
+    style_get("inset_avoid_band", overlay_text_size() * 1.25 * 2.54 / 72.0 + overlay_inset() * 2.0)
+}
+// The gap between the items of `fill_row` (cm).
+fn fill_row_gap() { style_get("fill_row_gap", gap()) }
 
 // Between the items and arrows of a `scheme` (cm): the default gap.
 fn scheme_gap() { style_get("scheme_gap", gap()) }
@@ -268,6 +289,9 @@ fn style_keys() {
         "colorbar_length", "colorbar_thickness", "colorbar_label_size", "colorbar_gap",
         "colorbar_border", "colorbar_border_width", "cycle_arrow_color", "cycle_arrow_width",
         "cycle_arrow_depth", "cycle_arrow_span", "cycle_arrow_gap",
+        "scalebar_box", "scalebar_box_pad", "scalebar_box_radius", "overlay_text_size",
+        "overlay_text_color", "overlay_text_halo", "overlay_text_halo_width", "inset_avoid_band",
+        "fill_row_gap",
         // plots
         "plot_line_width", "series_width", "palette", "tick_length", "tick_direction",
         "minor_ticks", "max_ticks", "marker_size", "marker_open", "marker_stroke_width",
@@ -300,7 +324,10 @@ fn style_keys() {
         "table_pad_y", "subheading_mark_bold", "subheading_mark_size", "bullet_mark_size",
         "table_font", "table_header_font", "separator_offset", "section_title_baseline",
         "poster_symbol_font", "block_gap", "block_title_gap", "bullet_pitch", "table_rule_mode",
-        "section_overflow",
+        "section_overflow", "poster_number_position", "author_font", "ref_font",
+        // component variants: name -> map of style keys (see `variant_push`)
+        "frame_variants", "note_variants", "ref_variants", "table_variants",
+        "subheading_variants", "section_variants",
     ]
 }
 
@@ -1367,22 +1394,37 @@ fn overlay_positions() {
 // `overlay(item, map)` / `overlay(item, map, opts)`: nodes at their natural
 // size over `item` (any panel) by position name — `#{ "top-right": tag,
 // bottom: [a, b] }`. Keys: top-left, top, top-right, left, center, right,
-// bottom-left, bottom, bottom-right; a value is a node, a string (`body`),
-// spans, or an array of those, stacked `overlay_gap()` apart and aligned to
-// the position's side. Each position is a filling column padded
+// bottom-left, bottom, bottom-right; a value is a node, a string (inline
+// markup: "50 *μ*m", "H_2O"), spans, or an array of those, stacked
+// `overlay_gap()` apart and aligned to the position's side. Text is set in
+// the overlay text style (`overlay_text_size()`, `overlay_text_color()`,
+// `overlay_text_halo()`). Each position is a filling column padded
 // `overlay_inset()` (the label inset) and aligned like `pin`, so nothing
-// takes coordinates and it follows the panel's size. `opts`: `inset`, `gap`
-// (cm). The result is a core `stack`: `labeled(overlay(img, ..), "(a)")`.
+// takes coordinates and it follows the panel's size. Options:
+//   inset  cm for every position, or a map position -> inset (the others
+//          keep `overlay_inset()`); an inset is a number, [v, h] or
+//          #{ top, right, bottom, left } (unset sides 0):
+//          `#{ inset: #{ "top-left": 0, bottom: #{ bottom: 0.1 } } }`
+//   gap    cm between the nodes stacked at one position
+// The result is a core `stack`: `labeled(overlay(img, ..), "(a)")`.
 fn overlay(item, map) { overlay(item, map, #{}) }
 fn overlay(item, map, opts) {
     if type_of(map) != "map" {
         throw `overlay(): expected a map of position -> node(s) (got ${type_of(map)})`;
     }
     shape_opts("overlay", opts, ["inset", "gap"]);
-    let inset = plot_opt(opts, "inset", overlay_inset());
-    let g = plot_opt(opts, "gap", overlay_gap());
     let names = [];
     for p in overlay_positions() { names.push(p[0]); }
+    let inset = plot_opt(opts, "inset", overlay_inset());
+    let per = #{};
+    if type_of(inset) == "map" {
+        for k in inset.keys() {
+            if !names.contains(k) { throw `overlay(): inset: unknown position "${k}" (${list_names(names)})`; }
+        }
+        per = inset;
+        inset = overlay_inset();
+    }
+    let g = plot_opt(opts, "gap", overlay_gap());
     for k in map.keys() {
         if !names.contains(k) { throw `overlay(): unknown position "${k}" (${list_names(names)})`; }
     }
@@ -1392,10 +1434,49 @@ fn overlay(item, map, opts) {
         let v = map[p[0]];
         let xs = if type_of(v) == "array" && !poster_is_rich(v) { v } else { [v] };
         let ns = [];
-        for x in xs { ns.push(scheme_text("overlay", x, base_size(), p[2])); }
-        layers.push(col(ns).spacing(g).cross(p[2]).pad(inset).main(p[1]));
+        for x in xs { ns.push(overlay_text("overlay", x, p[2])); }
+        let pi = if per.contains(p[0]) { per[p[0]] } else { inset };
+        layers.push(col(ns).spacing(g).cross(p[2]).pad(pi).main(p[1]));
     }
     stack(layers)
+}
+
+// Overlay text: a string (inline markup) or spans in the overlay text style
+// (`overlay_text_size()`, `overlay_text_color()`, a `overlay_text_halo()`),
+// aligned `align` ("start", "center", "end"); a node passes through.
+fn overlay_text(who, x, align) {
+    let t = type_of(x);
+    if t == "string" || poster_is_rich(x) {
+        let n = text(if t == "string" { markup(x) } else { x }).size(overlay_text_size());
+        let c = overlay_text_color();
+        if c != "" { n = n.color(c); }
+        n = if align == "center" { n.center() } else if align == "end" { n.align("right") } else { n };
+        let h = overlay_text_halo();
+        return if h == "" { n } else { halo(n, h, overlay_text_halo_width()) };
+    }
+    if t != "Node" {
+        throw `${who}(): expected a string, spans or a node (got ${t})`;
+    }
+    x
+}
+
+// `fill_row(items)` / `fill_row(items, opts)`: images, plots and panels
+// built on them (labeled, overlaid, captioned) side by side at ONE shared
+// height that makes the row exactly fill its width — widths in proportion
+// to their aspect ratios, worked out at layout time from the real image
+// sizes (the core `row(..).equal_height()`). Text items keep their natural
+// width. Options:
+//   gap    cm between the items (default `fill_row_gap()`)
+//   align  "start" (default, tops), "center", "end"
+fn fill_row(items) { fill_row(items, #{}) }
+fn fill_row(items, opts) {
+    if type_of(items) != "array" { throw `fill_row(): expected an array of items (got ${type_of(items)})`; }
+    shape_opts("fill_row", opts, ["gap", "align"]);
+    let align = plot_opt(opts, "align", "start");
+    if !["start", "center", "end"].contains(align) {
+        throw `fill_row(): unknown align "${align}" (start, center, end)`;
+    }
+    row(nodes(items)).equal_height().spacing(plot_opt(opts, "gap", fill_row_gap())).cross(align)
 }
 
 // `side(main, note)` / `side(main, note, opts)`: a panel (a plot, an image)
@@ -1476,12 +1557,15 @@ fn scalebar_rect() {
 
 // A scale bar `len` cm long with label `s` centered above it ("" for no label),
 // pinned `scalebar_inset()` in from `scalebar_corner()` of the panel.
-fn scalebar(len, s) {
-    let bar = scalebar_rect().width(len);
-    let parts = if s == "" { [bar] } else { [scalebar_label(s), bar] };
-    let tag = col(parts).cross("center").spacing(scalebar_thickness() * 0.5);
-    pin(tag, scalebar_corner(), scalebar_inset())
-}
+// `scalebar(len, s, opts)`:
+//   box     a fill behind label and bar ("#0d0d0dcc"; true = `scalebar_box()`
+//           or a translucent black), padded `scalebar_box_pad()`, corners
+//           `scalebar_box_radius()`; a boxed bar needs no halo, so it has none
+//   pad, radius  the box's (cm)
+//   inset   cm from the panel edges (default `scalebar_inset()`; 0 = flush)
+//   corner  default `scalebar_corner()`
+//   color   bar and label (default `scalebar_color()`)
+fn scalebar(len, s) { scalebar(len, s, #{}) }
 
 // A scale bar in image/physical units: `len` out of a field `field` wide, in
 // the same unit — `scalebar(1, 12.5, "1 μm")` for a 12.5 μm field of view, or
@@ -1490,7 +1574,36 @@ fn scalebar(len, s) {
 // whatever size the layout gives the panel — provided the image spans the full
 // panel width (natural aspect, as on auto-height pages; not letterboxed).
 // Sideways it sits `scalebar_frac_inset()` of the width in from the edge.
+// (A third argument that is a map is `scalebar(len, s, opts)` above.)
 fn scalebar(len, field, s) {
+    if type_of(s) == "map" { return scalebar_cm(len, field, s); }
+    scalebar_field(len, field, s)
+}
+
+fn scalebar_cm(len, s, opts) {
+    shape_opts("scalebar", opts, ["box", "pad", "radius", "inset", "corner", "color"]);
+    let box = plot_opt(opts, "box", scalebar_box());
+    if type_of(box) == "bool" {
+        box = if !box { "" } else if scalebar_box() != "" { scalebar_box() } else { "#000000b3" };
+    }
+    let corner = plot_opt(opts, "corner", scalebar_corner());
+    let st = #{};
+    if opts.contains("color") { st.scalebar_color = opts.color; }
+    if poster_has_paint(box) { st.scalebar_halo = ""; }
+    style_push(st);
+    let bar = scalebar_rect().width(len);
+    let parts = if s == "" { [bar] } else { [scalebar_label(s), bar] };
+    let tag = col(parts).cross("center").spacing(scalebar_thickness() * 0.5);
+    if poster_has_paint(box) {
+        tag = tag.pad(plot_opt(opts, "pad", scalebar_box_pad())).fill(box);
+        let r = plot_opt(opts, "radius", scalebar_box_radius());
+        if r > 0 { tag = tag.radius(r); }
+    }
+    style_pop();
+    pin_in("scalebar", tag, corner, plot_opt(opts, "inset", scalebar_inset()))
+}
+
+fn scalebar_field(len, field, s) {
     if !(field > 0) || !(len > 0) || len > field {
         throw `scalebar(): need 0 < len <= field (got ${len} of ${field})`;
     }
@@ -1577,16 +1690,17 @@ fn spot(cx, cy, r) {
 // `scheme([a, arrow_step("THF, 60 °C"), b])` lays a sequence out as a row
 // with every item centred on one axis: nodes (molecule images, icons),
 // `step`s (a node with captions) and `arrow_step` arrows with their
-// conditions above / below. Nothing is positioned by hand: a caption is
-// balanced by an invisible copy on the opposite side (opacity 0, which no
-// backend paints), so each node and arrow stays on the centre line however
-// long its texts are. `scheme_v` is the same down the page.
+// conditions above / below. Nothing is positioned by hand: the scheme lines
+// its items up by their *axes* (the core `.cross("axis")`), and a step or an
+// arrow marks its node (`.axis()`) as the axis, so each node and arrow stays
+// on the centre line however long its captions are — and a caption takes
+// only its own room. `scheme_v` is the same down the page.
 
 // `step(node, #{ above, below, left, right })`: `node` with captions (a
 // string, spans or a node each; strings at `scheme_label_size()`, centred),
 // `scheme_label_gap()` from it; `step(node, caption)` puts one below (a
-// string, spans or a node). The node stays centred in the step, so in a
-// scheme it sits on the axis.
+// string, spans or a node). The node is the step's axis, so in a scheme (or
+// any `.cross("axis")` container) it sits on the axis.
 fn step(node) { as_node(node) }
 fn step(node, opts) {
     if type_of(opts) != "map" { opts = #{ below: opts }; }
@@ -1657,7 +1771,8 @@ fn scheme(items, opts) {
         }
     }
     let c = if vertical { col(out) } else { row(out) };
-    c.spacing(plot_opt(opts, "gap", scheme_gap())).cross(align).main("center")
+    c.spacing(plot_opt(opts, "gap", scheme_gap())).cross(if align == "center" { "axis" } else { align })
+        .main("center")
 }
 
 // `scheme` down the page: arrows point down, their labels right / left.
@@ -1677,9 +1792,10 @@ fn scheme_length(who, v) {
 }
 
 // `n` with the captions in `labels` (above, below, left, right; () or
-// missing for none), each balanced by an invisible copy of the opposite one.
-// `stretch`: the column / row around `n` stretches it across (a "fill"
-// arrow) instead of centring it.
+// missing for none): a column (row) of caption, `n`, caption aligned by
+// their axes, `n` marked as the axis (`.axis()`), so whoever lines the
+// result up by `"axis"` puts `n` on the line. `stretch`: the column / row
+// stretches `n` across (a "fill" arrow) instead.
 fn scheme_dress(who, n, labels, stretch) {
     let lab = #{};
     for k in ["above", "below", "left", "right"] {
@@ -1688,26 +1804,25 @@ fn scheme_dress(who, n, labels, stretch) {
         lab[k] = if type_of(v) == "()" { () } else { scheme_text(who, v, scheme_label_size(), al) };
     }
     let g = scheme_label_gap();
-    if type_of(lab.above) != "()" || type_of(lab.below) != "()" {
-        let c = col([scheme_slot(lab.above, lab.below, "end", "center"), n,
-                     scheme_slot(lab.below, lab.above, "start", "center")]).spacing(g);
-        n = if stretch { c.stretch() } else { c.cross("center") };
+    let cross = if stretch { "stretch" } else { "axis" };
+    let ab = type_of(lab.above) != "()" || type_of(lab.below) != "()";
+    let lr = type_of(lab.left) != "()" || type_of(lab.right) != "()";
+    if ab || lr { n = n.axis(); }
+    if ab {
+        let parts = [];
+        if type_of(lab.above) != "()" { parts.push(lab.above); }
+        parts.push(n);
+        if type_of(lab.below) != "()" { parts.push(lab.below); }
+        n = col(parts).spacing(g).cross(cross);
     }
-    if type_of(lab.left) != "()" || type_of(lab.right) != "()" {
-        let r = row([scheme_slot(lab.left, lab.right, "center", "end"), n,
-                     scheme_slot(lab.right, lab.left, "center", "start")]).spacing(g);
-        n = if stretch { r.stretch() } else { r.cross("center") };
+    if lr {
+        let parts = [];
+        if type_of(lab.left) != "()" { parts.push(lab.left); }
+        parts.push(n);
+        if type_of(lab.right) != "()" { parts.push(lab.right); }
+        n = row(parts).spacing(g).cross(cross);
     }
     n
-}
-
-// A caption slot: `x` aligned [main, cross] in it, over an invisible copy of
-// `other` (the caption on the opposite side), so opposite slots are equal.
-fn scheme_slot(x, other, main, cross) {
-    let parts = [];
-    if type_of(other) != "()" { parts.push(other.opacity(0)); }
-    if type_of(x) != "()" { parts.push(col([x]).main(main).cross(cross)); }
-    stack(parts)
 }
 
 // The node of arrow descriptor `a` in a scheme (`vertical`: pointing down),
@@ -2637,6 +2752,9 @@ fn plot_dimension_v(x, y1, y2, s, opts) {
 //   width   cm instead of `size`
 //   height  cm (default: from the node's aspect, else its natural height)
 //   pad     cm between a corner inset and the frame (default `inset_pad()`)
+//   avoid   keep a corner inset off edge bands: an edge ("bottom"), edges
+//           (["bottom", "left"]) — each clear by `inset_avoid_band()`, a
+//           caption strip — or a map edge -> cm (#{ bottom: 1.2 })
 // `inset(main, sub)` / `inset(main, sub, opts)`: the same on any panel that
 // is not a plot (no data coordinates; "auto" means "top-right"):
 // `stack([main, pin(sub, corner, pad)])`.
@@ -2658,18 +2776,51 @@ fn inset(main, sub, opts) {
 // whose flex spacer leaves the inset `a.size` of the width (or a plain `pin`
 // when it has a `width` in cm).
 fn inset_in_corner(a, corner) {
-    if type_of(a.width) != "()" { return pin_in("inset", a.node, corner, a.pad); }
+    let pad = a.pad;
+    if a.avoid.len() > 0 {
+        pad = #{};
+        for e in ["top", "right", "bottom", "left"] { pad[e] = a.pad + plot_opt(a.avoid, e, 0.0); }
+    }
+    if type_of(a.width) != "()" {
+        if type_of(pad) != "map" { return pin_in("inset", a.node, corner, pad); }
+        let v = if corner.starts_with("top") { "start" } else { "end" };
+        let h = if corner.ends_with("right") { "end" } else { "start" };
+        return col([a.node]).pad(pad).main(v).cross(h);
+    }
     let gap = rect().flex(1.0 - a.size);
     let n = a.node.flex(a.size);
     let r = if corner.ends_with("right") { row([gap, n]) } else { row([n, gap]) };
-    r.cross(if corner.starts_with("top") { "start" } else { "end" }).pad(a.pad)
+    r.cross(if corner.starts_with("top") { "start" } else { "end" }).pad(pad)
+}
+
+// The `avoid` option of `inset`: () / an edge / edges / a map edge -> cm,
+// as a map edge -> cm.
+fn inset_avoid(v) {
+    let edges = ["top", "right", "bottom", "left"];
+    let t = type_of(v);
+    if t == "()" { return #{}; }
+    if t == "string" { v = [v]; t = "array"; }
+    let out = #{};
+    if t == "array" {
+        for e in v {
+            if !edges.contains(e) { throw `inset(): avoid: unknown edge "${e}" (${list_names(edges)})`; }
+            out[e] = inset_avoid_band();
+        }
+        return out;
+    }
+    if t != "map" { throw `inset(): avoid is an edge, an array of edges or a map edge -> cm (got ${t})`; }
+    for e in v.keys() {
+        if !edges.contains(e) { throw `inset(): avoid: unknown edge "${e}" (${list_names(edges)})`; }
+        out[e] = v[e];
+    }
+    out
 }
 
 // The descriptor of `inset(sub, opts)`: an annotation (`mark: "inset"`) the
 // plot places once its axes exist, holding the sized node.
 fn inset_spec(sub, opts) {
     if type_of(opts) != "map" { throw `inset(): options must be a map (got ${type_of(opts)})`; }
-    let known = ["corner", "at", "anchor", "size", "width", "height", "pad"];
+    let known = ["corner", "at", "anchor", "size", "width", "height", "pad", "avoid"];
     for k in opts.keys() {
         if !known.contains(k) { throw `inset(): unknown option "${k}" (${list_names(known)})`; }
     }
@@ -2680,7 +2831,8 @@ fn inset_spec(sub, opts) {
     let size = plot_opt(opts, "size", inset_size()).to_float();
     if !(size > 0.0 && size <= 1.0) { throw `inset(): size must be a fraction in (0, 1] (got ${size})`; }
     let a = #{ mark: "inset", node: n, at: (), anchor: [0, 0], size: size, width: width,
-               corner: plot_opt(opts, "corner", inset_corner()), pad: plot_opt(opts, "pad", inset_pad()) };
+               corner: plot_opt(opts, "corner", inset_corner()), pad: plot_opt(opts, "pad", inset_pad()),
+               avoid: inset_avoid(plot_opt(opts, "avoid", ())) };
     if opts.contains("at") {
         a.at = plot_numbers("inset", "`at`", opts.at);
         if a.at.len() != 2 { throw "inset(): `at` must be [x, y]"; }
@@ -3702,6 +3854,7 @@ fn note_font() { style_get("note_font", "") }
 // ("" = `fg()`).
 fn ref_size() { style_get("ref_size", base_size() * 0.835) }
 fn ref_color() { style_get("ref_color", fg()) }
+fn ref_font() { style_get("ref_font", "") }
 
 // What a section does when its content doesn't fit the height it gets (a
 // share of a fixed poster): "visible" (default: it runs on, with a warning
@@ -3709,6 +3862,23 @@ fn ref_color() { style_get("ref_color", fg()) }
 // `overflow`). A section with a footer clips by default, so the footer is
 // never overlapped. `section(.., #{ overflow })` sets it for one section.
 fn section_overflow() { style_get("section_overflow", "visible") }
+
+// Where `poster_header`'s poster number goes: "title" (default: at the right
+// end of the title row) or "above" (a line of its own above the title, right
+// aligned, so a long title keeps the full width).
+fn poster_number_position() { style_get("poster_number_position", "title") }
+
+// The author / affiliation lines' font ("" = the page font).
+fn author_font() { style_get("author_font", "") }
+
+// Named style variants per component (name -> map of style keys; see
+// `variant_push`): `frame(x, "box")`, `note(s, "quiet")`, …
+fn frame_variants() { style_get("frame_variants", #{}) }
+fn note_variants() { style_get("note_variants", #{}) }
+fn ref_variants() { style_get("ref_variants", #{}) }
+fn table_variants() { style_get("table_variants", #{}) }
+fn subheading_variants() { style_get("subheading_variants", #{}) }
+fn section_variants() { style_get("section_variants", #{}) }
 
 // `bullets`: mark, text size (pt), hanging indent (cm; 1.58 cm at 36 pt) and
 // gap between items (cm).
@@ -4124,7 +4294,14 @@ fn section(number, title, content, opts) {
 }
 
 fn section_make(n, title, content, opts) {
-    poster_check_opts("section", opts, ["footer", "overflow"]);
+    poster_check_opts("section", opts, ["footer", "overflow", "variant"]);
+    if opts.contains("variant") {
+        variant_push("section", opts.variant);
+        opts.remove("variant");
+        let s = section_make(n, title, content, opts);
+        style_pop();
+        return s;
+    }
     let node = type_of(title) == "Node";
     if type_of(title) != "string" && !node && !poster_is_rich(title) {
         throw `section(): the title must be a string, spans or a text node (got ${type_of(title)})`;
@@ -4165,6 +4342,33 @@ fn section_make(n, title, content, opts) {
     col([section_bar(s), body]).stretch().name(tag)
 }
 
+// Component variants: `style(#{ frame_variants: #{ box: #{ frame_color:
+// "#7f7f7f", frame_radius: 0 } } })` names a bundle of style keys, and
+// `frame(x, "box")` builds the frame with them in force (likewise
+// `note(s, v)`, `ref(s, v)`, `subheading(s, v)`, `table(rows, #{ variant })`,
+// `section(.., #{ variant })`). `v` is a name from `<who>_variants` or a map
+// of style keys used directly. Pushes the style (`style_pop()` after).
+fn variant_push(who, v) {
+    let m = v;
+    if type_of(v) == "string" {
+        let all = Fn(`${who}_variants`).call();
+        if type_of(all) != "map" { throw `${who}_variants(): must be a map of name -> style map`; }
+        if !all.contains(v) {
+            let known = if all.len() == 0 { "none defined" } else { list_names(all.keys()) };
+            throw `${who}(): unknown variant "${v}" (${known}; define it in style(#{ ${who}_variants: #{ .. } }))`;
+        }
+        m = all[v];
+    }
+    if type_of(m) != "map" {
+        throw `${who}(): a variant is a name from ${who}_variants or a map of style keys (got ${type_of(m)})`;
+    }
+    let keys = style_keys();
+    for k in m.keys() {
+        if !keys.contains(k) { throw `${who}(): variant key "${k}" is not a style key (see style_keys())`; }
+    }
+    style_push(m);
+}
+
 // `block(title, items)` / `block(title, items, opts)`: a `subheading(title)`
 // (a node title is used as is; "" for none) over `items` side by side —
 // equal flex shares by default — `block_title_gap()` below the heading and
@@ -4199,27 +4403,64 @@ fn block(title, items, opts) {
 // `frame_radius()`) around `content` (an array `section_gap()` apart, or one
 // node), padded `frame_pad()`. Square / grey / heavy variants are core
 // setters: `frame(..).radius(0).stroke("#7f7f7f").stroke_width(0.1)`.
+// `frame(content, variant)`: in a style variant (see `variant_push`).
 fn frame(content) {
     let items = if type_of(content) == "array" { nodes(content) } else { [as_node(content)] };
     col(items).spacing(section_gap()).stretch().pad(frame_pad())
         .stroke(frame_color()).stroke_width(frame_width()).radius(frame_radius())
 }
+fn frame(content, variant) {
+    variant_push("frame", variant);
+    let f = frame(content);
+    style_pop();
+    f
+}
 
 // `frame` with a dashed border (`frame_dash()`).
 fn dashed_frame(content) { frame(content).dash(frame_dash()) }
+fn dashed_frame(content, variant) {
+    variant_push("frame", variant);
+    let f = dashed_frame(content);
+    style_pop();
+    f
+}
 
 // The highlighted take-home sentence of a section: centred, `note_color()`.
+// `note(s, variant)`: in a style variant (`note_variants`).
 fn note(s) {
     let t = text(s).size(note_size()).color(note_color()).center();
     let f = note_font();
     if f == "" { t } else { t.font(f) }
 }
+fn note(s, variant) {
+    variant_push("note", variant);
+    let t = note(s);
+    style_pop();
+    t
+}
 
-// A literature reference line: small (`ref_size()`), centred.
+// A literature reference line: small (`ref_size()`), centred, in
+// `ref_color()` and `ref_font()`. `ref(s, variant)`: `ref_variants`.
 fn ref(s) {
     let t = text(s).size(ref_size()).center();
     let c = ref_color();
-    if c == "" { t } else { t.color(c) }
+    if c != "" { t = t.color(c); }
+    let f = ref_font();
+    if f == "" { t } else { t.font(f) }
+}
+fn ref(s, variant) {
+    variant_push("ref", variant);
+    let t = ref(s);
+    style_pop();
+    t
+}
+
+// `subheading(s, variant)`: in a style variant (`subheading_variants`).
+fn subheading(s, variant) {
+    variant_push("subheading", variant);
+    let t = subheading(s);
+    style_pop();
+    t
 }
 
 // A small heading inside a section: "■ " + `s` at `subheading_size()`; the
@@ -4298,7 +4539,14 @@ fn bullets(items, opts) {
 fn table(rows) { table(rows, #{}) }
 fn table(rows, opts) {
     poster_check_opts("table", opts, ["header", "widths", "align", "rules", "pad", "pad_x", "pad_y",
-                                      "font", "header_font", "fonts", "rule_mode"]);
+                                      "font", "header_font", "fonts", "rule_mode", "variant"]);
+    if opts.contains("variant") {
+        variant_push("table", opts.variant);
+        opts.remove("variant");
+        let t = table(rows, opts);
+        style_pop();
+        return t;
+    }
     if type_of(rows) != "array" || rows.len() == 0 { throw "table(): expected a non-empty array of rows"; }
     let nc = 0;
     for r in rows {
@@ -4603,7 +4851,9 @@ fn runs_line(runs, size) {
             spans.push(if r[1] { span(r[0]).sup() } else { span(r[0]) });
         }
     }
-    fg_text(spans).size(size).center()
+    let t = fg_text(spans).size(size).center();
+    let f = author_font();
+    if f == "" { t } else { t.font(f) }
 }
 
 // The author line(s) of a poster header. `affiliation_position()` "before":
@@ -4639,6 +4889,9 @@ fn author_line(authors, affiliations) {
 //   affiliations  affiliation names, numbered from 1
 //   logos         images (or paths) left of the title, `poster_logo_height()` tall
 //   number        the poster number, top-right
+//   number_position  "title" (at the title row's right end) or "above" (a
+//                 right-aligned line above the title); default
+//                 `poster_number_position()`
 // Text (titles, items, cells) may be a string or rich-text spans
 // (`markup("…")`, `[span(..), ..]`) throughout the poster components.
 // The title (with the number at its right end) and the author line are
@@ -4647,8 +4900,8 @@ fn author_line(authors, affiliations) {
 fn poster_header(opts) {
     if type_of(opts) != "map" { throw `poster_header(): expected a map (got ${type_of(opts)})`; }
     for k in opts.keys() {
-        if !["title", "authors", "affiliations", "logos", "number"].contains(k) {
-            throw `poster_header(): unknown key "${k}" (title, authors, affiliations, logos, number)`;
+        if !["title", "authors", "affiliations", "logos", "number", "number_position"].contains(k) {
+            throw `poster_header(): unknown key "${k}" (title, authors, affiliations, logos, number, number_position)`;
         }
     }
     let title = plot_opt(opts, "title", "");
@@ -4663,12 +4916,22 @@ fn poster_header(opts) {
     // before it instead of running under it, while the author line below
     // keeps the full width.
     let num = plot_opt(opts, "number", "");
+    let where = plot_opt(opts, "number_position", poster_number_position());
+    if !["title", "above"].contains(where) {
+        throw `poster_header(): unknown number_position "${where}" (title, above)`;
+    }
+    let above = ();
     if num != "" {
         let n = fg_text(num).size(poster_number_size()).bold();
-        let t = if type_of(tnode) == "()" { rect() } else { tnode };
-        tnode = row([t.flex(1), n]).cross("start").spacing(poster_gutter());
+        if where == "above" {
+            above = n.align("right");
+        } else {
+            let t = if type_of(tnode) == "()" { rect() } else { tnode };
+            tnode = row([t.flex(1), n]).cross("start").spacing(poster_gutter());
+        }
     }
     let main = if type_of(tnode) == "()" { [] } else { [tnode] };
+    if type_of(above) != "()" { main.insert(0, above); }
     let authors = plot_opt(opts, "authors", []);
     if type_of(authors) != "array" || authors.len() > 0 {
         main.push(author_line(authors, plot_opt(opts, "affiliations", [])));

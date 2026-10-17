@@ -1480,21 +1480,21 @@ fn scheme_centres_items_and_balances_captions() {
     );
     let l = lay_fixed(&src);
     let d = raw(&src);
-    // Every item is centred on the row's axis (y = 50): the step's node too,
-    // its caption below balanced by an invisible copy above.
+    // Every item is on the row's axis: the step's node too, its caption
+    // below taking only its own room (no invisible copies: the scheme lines
+    // items up by their axes, `cross("axis")`). The group — 20 above the
+    // axis (the tall rect), 22 below it (step + caption) — is centred in
+    // the 100 pt page, so the axis is at 29 + 20 = 49.
     let up = texts_at(&l, "up");
-    assert_eq!(up.len(), 2, "the label and its invisible copy");
-    let ys: Vec<f32> = up.iter().map(|r| r.y).collect();
-    assert!(ys.contains(&36.0) && ys.contains(&54.0), "{ys:?}");
-    let ys: Vec<f32> = texts_at(&l, "cap").iter().map(|r| r.y).collect();
-    assert!(ys.contains(&28.0) && ys.contains(&62.0), "{ys:?}");
-    let ghosts = d
-        .nodes
-        .values()
-        .filter(|n| matches!(n.content.as_deref(), Some("cap") | Some("up")))
-        .filter(|n| n.opacity == Some(0.0))
-        .count();
-    assert_eq!(ghosts, 2);
+    assert_eq!(up.len(), 1, "just the label");
+    approx(up[0].y, 49.0 - 2.0 - 2.0 - 10.0);
+    let cap = texts_at(&l, "cap");
+    assert_eq!(cap.len(), 1);
+    approx(cap[0].y, 49.0 + 10.0 + 2.0);
+    assert!(
+        d.nodes.values().all(|n| n.opacity != Some(0.0)),
+        "no ghosts"
+    );
     // The arrow: 30 long, its head 4 x the width across, on the axis; the
     // row is centred (10 + 4 + 30 + 4 + 20 = 68 wide).
     let id = d
@@ -1507,7 +1507,7 @@ fn scheme_centres_items_and_balances_captions() {
     approx(a.x, 66.0 + 14.0);
     approx(a.w, 30.0);
     approx(a.h, 4.0);
-    approx(a.y + a.h / 2.0, 50.0);
+    approx(a.y + a.h / 2.0, 49.0);
     approx(up[0].x, 66.0 + 14.0 + 5.0);
 }
 

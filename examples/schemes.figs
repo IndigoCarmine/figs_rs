@@ -2,8 +2,10 @@
 // lays items out in a row, all centred on one axis; `step(node, ..)` adds
 // captions to a node and `arrow_step(..)` draws an arrow with its conditions
 // above / below (a fixed length, "fill" to share the spare width, or the ⇌
-// pair). A caption is balanced by an invisible copy on the other side, so
-// every node and arrow stays on the axis. `scheme_v` runs down the page.
+// pair). The scheme lines its items up by their axes (each step's node, each
+// arrow), so every node and arrow stays on one line however long its
+// captions are, and a caption takes only its own room. `scheme_v` runs down
+// the page.
 // The "molecules" are drawn shapes, the icons `labware(..)`; an image works the same
 // (`image("compound_a.png").height(1.5)`: its width follows its aspect).
 // All names and conditions are fictional.

@@ -1,0 +1,81 @@
+// Fitting and overlaying without coordinates or trial-and-error sizes:
+//   scheme / step        process flows on one axis (the core `.cross("axis")`):
+//                        captions take only their own room
+//   fill_row(items)      images and plots at ONE height that fills the width
+//                        (widths from their aspect ratios, at layout time)
+//   overlay(.., opts)    labels over photos in the overlay text style, a
+//                        per-position inset
+//   inset(.., avoid)     an inset kept off the caption strip
+//   scalebar(.., box)    a scale bar on a backing box
+//   section overflow     "shrink" scales a too-long section into its share;
+//                        a footer is never overlapped
+//   variants             frame(x, "box"), note(s, "quiet")
+// Everything is fictional placeholder content and synthetic data.
+style("poster", #{
+    base_size: 12, title_size: 30, gap: 0.5, poster_margin: 0.8, poster_gutter: 0.6,
+    section_title_size: 20, author_size: 14,
+    // Labels over photos: white with a dark halo, without per-call styling.
+    overlay_text_color: "#ffffff", overlay_text_halo: "#000000",
+    poster_number_position: "above",
+    frame_variants: #{ box: #{ frame_color: "#7f7f7f", frame_radius: 0, frame_width: 0.05 } },
+    note_variants: #{ quiet: #{ note_color: "#3a6ea5", note_size: 11 } },
+});
+let h = csv("data/heating.csv");
+let g = csv("data/growth.csv");
+
+let flask = labware("flask", #{ level: 0.5 });
+let funnel = labware("funnel");
+let dish = labware("dish", #{ level: 0.3, liquid: "#d9c7a3" });
+
+let curve = plot(#{ xlabel: "T [°C]", ylabel: "α", x: [20, 100], y: [0, 1.1] }, [
+    scatter(h.T, h.a10, "10 μM"), scatter(h.T, h.a100, "100 μM"),
+]);
+let growth = plot(#{ xlabel: "t [h]", ylabel: "OD", legend: "text" }, [
+    line_plot(g.time_h, g.wt, "wild type"), line_plot(g.time_h, g.mutant, "mutant"),
+]);
+
+// A photo with labels, a boxed scale bar and an inset kept off the caption.
+let photo = overlay(
+    inset(image("img/sunlit.png"), image("img/tile.png"),
+          #{ corner: "bottom-right", size: 0.3, avoid: "bottom" }),
+    #{ "top-left": "Sample *A*", bottom: "25 °C, 10 min" },
+    #{ inset: #{ bottom: 0.1 } });
+let tile = annotate(overlay(image("img/tile.png"), #{ "top-right": "×10" }),
+                    scalebar(1.5, "50 μm", #{ box: "#0d0d0dcc", inset: 0 }));
+
+poster("a3-landscape", #{
+    title: "Fitting rows and captions without coordinates",
+    authors: [#{ name: "A. Author", aff: 1, presenter: true }, #{ name: "B. Author", aff: 2 }],
+    affiliations: ["Fictional Institute", "Imaginary University"],
+    number: "P-042",
+}, columns([
+    section("Process", [
+        // Captions of very different lengths: every icon stays on the axis,
+        // and the step is only as tall as its own captions.
+        scheme([
+            step(flask, #{ above: "monomer + linker", below: "mix" }),
+            arrow_step(#{ above: "N₂", below: "60 °C, 2 h" }),
+            step(funnel, rich("wash ×3 (H_2O)")),
+            arrow_step(#{ below: "dry" }),
+            step(dish, "gel"),
+        ]),
+        frame(rich("Each step is a *node with captions*; the scheme lines up their **axes**."), "box"),
+        block("Photos at one height", [
+            fill_row([photo, tile, image("img/sunlit.png")]),
+        ]),
+    ], #{ footer: note("Rows fill the width; nobody tuned an image height.", "quiet") }),
+    section("Data", [
+        fill_row([curve, growth]),
+        fill_row([image("img/tile.png"), growth]),
+        bullets(["Plots and images mix in one row.",
+                 "The shared height follows from the column width."]),
+    ], #{ footer: ref("C. Author et al., J. Fict. Chem. 2025, 3, 33.") }),
+    section("Overflow", [
+        body("This section holds more than its share of the height; with overflow \"shrink\" it is scaled down to fit instead of running into the footer or off the page."),
+        image("img/sunlit.png"),
+        fill_row([image("img/tile.png"), image("img/sunlit.png")]),
+        image("img/tile.png"),
+        image("img/sunlit.png"),
+        bullets(["A first point.", "A second point.", "A third point."]),
+    ], #{ overflow: "shrink", footer: ref("D. Author, Fict. Lett. 2026, 1, 1.") }),
+], [4, 3, 2]))
