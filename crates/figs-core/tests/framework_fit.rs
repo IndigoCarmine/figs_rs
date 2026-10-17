@@ -184,7 +184,7 @@ fn section_overflow_option_and_hook() {
     assert_eq!(l.overflows[0].action, OverflowAction::Clipped);
     let e = fail(&section_page("[]", r#"#{ overflow: "hide" }"#));
     assert!(
-        e.contains(r#"section: unknown overflow "hide" (visible, clip, shrink)"#),
+        e.contains(r#"section: unknown overflow "hide" (visible, clip, shrink, fit)"#),
         "{e}"
     );
 }

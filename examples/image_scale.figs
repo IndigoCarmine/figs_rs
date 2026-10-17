@@ -1,0 +1,77 @@
+// One scale for every picture, captions that overhang, content that grows to
+// fit — still no coordinates and no image heights in this file:
+//   style(#{ image_dpi })        every image at its natural size (pixels /
+//                                dpi), so structures cut from one drawing
+//                                keep one scale
+//   step(img, cap, #{ overhang })  a caption wider than its picture
+//   fill_row(.., #{ captions })  long captions under a row of photos that
+//                                neither widen nor wrap
+//   section(.., #{ fit, valign })  content scaled up (or down) to fill
+//   zoom_link(.., #{ outline: "circle", style: "cone" })  a round region
+//                                and a light cone to its magnified copy
+//   overlay(.., #{ size, color })  one call's label style
+//   poster_header logo_box / number_inset
+// Everything is fictional placeholder content and synthetic pictures.
+style("poster", #{
+    base_size: 12, title_size: 30, gap: 0.5, poster_margin: 0.8, poster_gutter: 0.6,
+    section_title_size: 20, author_size: 14,
+    // The structures were drawn at one scale and exported at 300 dpi.
+    image_dpi: 300,
+    poster_logo_box: [2.4, 1.6], poster_number_inset: 0.4,
+});
+
+let a = image("img/mol_a.png");
+let b = image("img/mol_b.png");
+let c = image("img/mol_c.png");
+
+// A three-step route, every structure at its natural size.
+fn route(a, b, c) {
+    scheme([
+        step(a, "precursor with a long side chain", #{ overhang: true }),
+        arrow_step(#{ above: "step 1", below: "2 h" }),
+        step(b, "fused intermediate", #{ overhang: true }),
+        arrow_step("step 2"),
+        step(c, "final product (an oxidised trimer)", #{ overhang: true }),
+    ], #{ gap: 0.4 })
+}
+
+// Photos: their captions are longer than the narrow photo is wide.
+let photo = image("img/particles.png");
+let detail = image("img/particles_zoom.png");
+let cones = col([
+    fill_row([
+        captioned(photo, "overview of the whole film"),
+        captioned(detail, "the circled spot, magnified ×8 (a single cluster)"),
+    ], #{ captions: "overhang", gap: 1.2 }),
+    zoom_link(photo, detail, #{ region: [0.56, 0.32, 0.74, 0.6], outline: "circle", style: "cone" }),
+]);
+
+// One overlay in a larger, coloured style; the others keep the default.
+let tagged = overlay(image("img/sunlit.png").dpi(0), #{
+    "top-left": "dawn", "bottom-right": "*T* = 25 °C",
+}, #{ size: 22, color: "#d64541" });
+
+poster("a3-landscape", #{
+    title: "One scale for every structure",
+    authors: [#{ name: "A. Author", aff: 1, presenter: true }, #{ name: "B. Author", aff: 2 }],
+    affiliations: ["Fictional Institute", "Imaginary University"],
+    logos: ["img/logo_round.png", "img/logo_wide.png"],
+    number: "P-117",
+}, columns([
+    section("One scale", [
+        body("Each structure is shown at its natural size (pixels / 300 dpi): bonds have one length across the scheme, and nobody set an image height."),
+        route(a, b, c),
+        subheading("Long captions"),
+        cones,
+    ], #{ footer: ref("C. Author et al., J. Fict. Chem. 2025, 3, 33.") }),
+    section("Grow to fit", [
+        // Small at its natural size: scaled up until it fills the section.
+        scheme([step(image("img/mol_a.png"), "A"), arrow_step("hν"), step(image("img/mol_b.png"), "B")]),
+        rich("*the same structures, enlarged*").center(),
+    ], #{ fit: "both" }),
+    section("Labels", [
+        tagged,
+        bullets(["The overlay above sets its own text size and colour.",
+                 "The section's items are spread over its height."]),
+    ], #{ valign: "spread" }),
+], [3.2, 1.8, 1.6]))

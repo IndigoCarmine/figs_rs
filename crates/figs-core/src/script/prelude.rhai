@@ -71,6 +71,16 @@ fn label_halo_width() { style_get("label_halo_width", label_size() * 0.0035) }
 // `gap()` so a caption reads as belonging to the panel above it.
 fn caption_gap() { style_get("caption_gap", gap() * 0.5) }
 
+// Captions (`captioned`, `panels(.., captions)`, `step`) wider than their
+// item overhang it into the gaps — centred, in one line — instead of
+// widening the item or wrapping to its width (the core `.overhang()`).
+fn caption_overhang() { style_get("caption_overhang", false) }
+
+// Pixel density of every image without its own `.dpi(n)` (its natural size
+// = pixels / dpi inches), set on the page by `page(preset, root)` /
+// `poster(..)`; () = none (images fill the room they get).
+fn image_dpi() { style_get("image_dpi", ()) }
+
 // Widths (cm) of the "single" (one journal column) and "double" (full page
 // width) page presets.
 fn single_width() { style_get("single_width", 8.5) }
@@ -220,6 +230,13 @@ fn zoom_width() { style_get("zoom_width", annotation_width()) }
 fn zoom_dash() { style_get("zoom_dash", annotation_dash()) }
 fn zoom_region_dash() { style_get("zoom_region_dash", []) }
 fn zoom_copy_frame() { style_get("zoom_copy_frame", true) }
+// The region's outline: "rect" (default), "circle" (the inscribed ellipse;
+// the lines leave from its extreme points) or "none"; the link itself:
+// "lines" (default: two lines) or "cone" (a translucent filled quad from
+// the region to the copy, `zoom_cone_opacity()` of the colour).
+fn zoom_outline() { style_get("zoom_outline", "rect") }
+fn zoom_style() { style_get("zoom_style", "lines") }
+fn zoom_cone_opacity() { style_get("zoom_cone_opacity", 0.25) }
 
 // `callout_to`: where the label goes (an overlay position inside the item,
 // or "left" / "right" / "above" / "below" beside it), the leader's colour,
@@ -248,6 +265,11 @@ fn block_link_opacity() { style_get("block_link_opacity", 0.35) }
 // `plot_shift_arrows`: the part of each arrow's length left off at both
 // ends (a fraction), so heads stop short of the curves.
 fn shift_arrow_trim() { style_get("shift_arrow_trim", 0.06) }
+// Arrows shorter than this (data units of y) are left out (default 0: all
+// drawn); where they start: "gap" (default: `trim` off both ends) or
+// "curve" (on the first series, only the head end trimmed).
+fn shift_arrow_min_length() { style_get("shift_arrow_min_length", 0) }
+fn shift_arrow_anchor() { style_get("shift_arrow_anchor", "gap") }
 
 // `pile`: offset of each copy behind the one in front ([dx, dy] cm; up and
 // to the right by default) and the opacity of the copies behind.
@@ -350,9 +372,11 @@ fn style_keys() {
         "cycle_arrow_depth", "cycle_arrow_span", "cycle_arrow_gap",
         "scalebar_box", "scalebar_box_pad", "scalebar_box_radius", "overlay_text_size",
         "overlay_text_color", "overlay_text_halo", "overlay_text_halo_width", "inset_avoid_band",
-        "fill_row_gap",
+        "fill_row_gap", "caption_overhang", "image_dpi",
         // links, piles, backdrops
         "zoom_color", "zoom_width", "zoom_dash", "zoom_region_dash", "zoom_copy_frame",
+        "zoom_outline", "zoom_style", "zoom_cone_opacity",
+        "shift_arrow_min_length", "shift_arrow_anchor",
         "callout_position", "callout_color", "callout_width", "callout_gap", "callout_size",
         "callout_side_gap", "flow_link_color", "flow_link_width", "flow_link_radius",
         "flow_link_gap", "block_link_width", "block_link_color", "block_link_opacity",
@@ -391,6 +415,7 @@ fn style_keys() {
         "table_font", "table_header_font", "separator_offset", "section_title_baseline",
         "poster_symbol_font", "block_gap", "block_title_gap", "bullet_pitch", "table_rule_mode",
         "section_overflow", "poster_number_position", "author_font", "ref_font",
+        "poster_logo_box", "poster_number_inset", "section_valign",
         // component variants: name -> map of style keys (see `variant_push`)
         "frame_variants", "note_variants", "ref_variants", "table_variants",
         "subheading_variants", "section_variants",
@@ -1386,11 +1411,20 @@ fn labeled_in(item, s, corner, who) {
     stack([item, tag])
 }
 
-// `item` with caption `c` (a string becomes `caption(c)`) below it, `caption_gap()`
-// apart. The item takes the cell's spare height; the caption spans its width.
-fn captioned(item, c) {
-    let cap = if type_of(c) == "string" { caption(c) } else { c };
+// `item` with caption `c` (a string or spans become `caption(c)`) below it,
+// `caption_gap()` apart. The item takes the cell's spare height; the
+// caption spans its width — or, with `caption_overhang()` (or
+// `captioned(item, c, #{ overhang: true })`), keeps its one-line width,
+// centred, overhanging into the gaps. The result remembers its parts, so
+// `fill_row(.., #{ captions: "overhang" })` can rebuild it.
+fn captioned(item, c) { captioned(item, c, #{}) }
+fn captioned(item, c, opts) {
+    shape_opts("captioned", opts, ["overhang"]);
+    let over = plot_opt(opts, "overhang", caption_overhang());
+    let cap = if type_of(c) == "string" || poster_is_rich(c) { caption(c) } else { c };
+    if over { cap = cap.overhang(); }
     col([as_node(item).flex(1), cap]).spacing(caption_gap()).stretch()
+        .meta("captioned", [item, c])
 }
 
 // Label each item in order with `label_style()` ("(a)", "(b)", …).
@@ -1467,12 +1501,15 @@ fn paper_size(name) {
 
 // A page sized by preset name, in cm: `page("double", root)`, in the style's
 // `font_family()` when one is set (chain `.font(name)` to override), on the
-// style's `page_bg()` background when one is set.
+// style's `page_bg()` background when one is set, its images at the style's
+// `image_dpi()` when one is set.
 fn page(preset, root) {
     let s = paper_size(preset);
     let d = page(s[0], s[1], root).unit("cm");
     let bg = page_bg();
     if bg != "" { d = d.background(bg); }
+    let dpi = image_dpi();
+    if type_of(dpi) != "()" { d = d.image_dpi(dpi); }
     let f = font_family();
     if f == "" { d } else { d.font(f) }
 }
@@ -1543,13 +1580,27 @@ fn overlay_positions() {
 //          #{ top, right, bottom, left } (unset sides 0):
 //          `#{ inset: #{ "top-left": 0, bottom: #{ bottom: 0.1 } } }`
 //   gap    cm between the nodes stacked at one position
+//   size, color, halo  the overlay text style of this call (pt, colours;
+//          default `overlay_text_size()` / `_color()` / `_halo()`)
 // The result is a core `stack`: `labeled(overlay(img, ..), "(a)")`.
 fn overlay(item, map) { overlay(item, map, #{}) }
 fn overlay(item, map, opts) {
     if type_of(map) != "map" {
         throw `overlay(): expected a map of position -> node(s) (got ${type_of(map)})`;
     }
-    shape_opts("overlay", opts, ["inset", "gap"]);
+    shape_opts("overlay", opts, ["inset", "gap", "size", "color", "halo"]);
+    let look = #{};
+    for k in ["size", "color", "halo"] {
+        if opts.contains(k) { look[`overlay_text_${k}`] = opts[k]; }
+    }
+    if look.len() > 0 {
+        // This call's text style, in force while its text is built.
+        for k in ["size", "color", "halo"] { opts.remove(k); }
+        style_push(look);
+        let s = overlay(item, map, opts);
+        style_pop();
+        return s;
+    }
     let names = [];
     for p in overlay_positions() { names.push(p[0]); }
     let inset = plot_opt(opts, "inset", overlay_inset());
@@ -1604,17 +1655,51 @@ fn overlay_text(who, x, align) {
 // to their aspect ratios, worked out at layout time from the real image
 // sizes (the core `row(..).equal_height()`). Text items keep their natural
 // width. Options:
-//   gap    cm between the items (default `fill_row_gap()`)
-//   align  "start" (default, tops), "center", "end"
+//   gap       cm between the items (default `fill_row_gap()`)
+//   align     "start" (default, tops), "center", "end"
+//   captions  "overhang": the captions of `captioned` / `panels(..,
+//             captions)` / `step` items keep their one-line width, centred
+//             on their item and overhanging into the gaps, so a long
+//             caption neither widens its item nor wraps; "wrap": they wrap
+//             to the item's width (default: as each item was built, see
+//             `caption_overhang()`)
 fn fill_row(items) { fill_row(items, #{}) }
 fn fill_row(items, opts) {
     if type_of(items) != "array" { throw `fill_row(): expected an array of items (got ${type_of(items)})`; }
-    shape_opts("fill_row", opts, ["gap", "align"]);
+    shape_opts("fill_row", opts, ["gap", "align", "captions"]);
     let align = plot_opt(opts, "align", "start");
     if !["start", "center", "end"].contains(align) {
         throw `fill_row(): unknown align "${align}" (start, center, end)`;
     }
-    row(nodes(items)).equal_height().spacing(plot_opt(opts, "gap", fill_row_gap())).cross(align)
+    let ns = nodes(items);
+    let caps = plot_opt(opts, "captions", ());
+    if type_of(caps) != "()" {
+        if caps != "overhang" && caps != "wrap" {
+            throw `fill_row(): unknown captions "${caps}" (overhang, wrap)`;
+        }
+        let over = caps == "overhang";
+        let out = [];
+        for n in ns { out.push(recaption(n, over)); }
+        ns = out;
+    }
+    row(ns).equal_height().spacing(plot_opt(opts, "gap", fill_row_gap())).cross(align)
+}
+
+// `n` rebuilt with its captions overhanging (`over`) or wrapping, when it
+// was built by `captioned` or `step` (which remember their parts); any
+// other node as is.
+fn recaption(n, over) {
+    if type_of(n) != "Node" { return n; }
+    let c = n.meta("captioned");
+    if type_of(c) == "array" { return captioned(c[0], c[1], #{ overhang: over }); }
+    let s = n.meta("step");
+    if type_of(s) == "array" {
+        let o = s[1];
+        if type_of(o) != "map" { o = #{ below: o }; }
+        o.overhang = over;
+        return step(s[0], o);
+    }
+    n
 }
 
 // `side(main, note)` / `side(main, note, opts)`: a panel (a plot, an image)
@@ -1842,8 +1927,20 @@ fn spot(cx, cy, r) {
 fn step(node) { as_node(node) }
 fn step(node, opts) {
     if type_of(opts) != "map" { opts = #{ below: opts }; }
-    shape_opts("step", opts, ["above", "below", "left", "right"]);
-    scheme_dress("step", as_node(node), opts, false)
+    shape_opts("step", opts, ["above", "below", "left", "right", "overhang"]);
+    let o = opts;
+    let over = plot_opt(o, "overhang", caption_overhang());
+    if type_of(over) != "bool" { throw `step(): overhang is true or false (got ${type_of(over)})`; }
+    o.overhang = over;
+    scheme_dress("step", as_node(node), o, false).meta("step", [node, opts])
+}
+// `step(node, caption, opts)`: one caption below, with options
+// (`overhang`; `above`, `left`, `right` too).
+fn step(node, caption, opts) {
+    if type_of(opts) != "map" { throw `step(): options must be a map (got ${type_of(opts)})`; }
+    let o = opts;
+    o.below = caption;
+    step(node, o)
 }
 
 // `arrow_step(label)` / `arrow_step(opts)`: an arrow for `scheme` with
@@ -1944,6 +2041,13 @@ fn scheme_dress(who, n, labels, stretch) {
         let v = plot_opt(labels, k, ());
         let al = if k == "left" { "end" } else if k == "right" { "start" } else { "center" };
         lab[k] = if type_of(v) == "()" { () } else { scheme_text(who, v, scheme_label_size(), al) };
+    }
+    // Captions above / below wider than the node overhang it (one line,
+    // centred on it) instead of widening the column.
+    if plot_opt(labels, "overhang", false) {
+        for k in ["above", "below"] {
+            if type_of(lab[k]) != "()" { lab[k] = lab[k].overhang(); }
+        }
     }
     let g = scheme_label_gap();
     let cross = if stretch { "stretch" } else { "axis" };
@@ -2500,22 +2604,54 @@ fn link_opts(who, defaults, opts) {
 //   dash         the lines' dash (default `zoom_dash()`; [] solid)
 //   region_dash  the outline's dash (default `zoom_region_dash()`: solid)
 //   frame        frame the copy too (default `zoom_copy_frame()`)
+//   outline      the region's outline: "rect", "circle" (the inscribed
+//                ellipse; the lines leave from its top and bottom — or
+//                left and right — points) or "none" (default
+//                `zoom_outline()`)
+//   style        "lines" (two lines) or "cone": a translucent filled quad
+//                from the region to the copy, a light / projection cone
+//                (default `zoom_style()`)
+//   opacity      of the cone's fill (default `zoom_cone_opacity()`)
 fn zoom_link(item, copy) { zoom_link(item, copy, #{}) }
 fn zoom_link(item, copy, opts) {
     let who = "zoom_link";
-    shape_opts(who, opts, ["region", "color", "width", "dash", "region_dash", "frame"]);
+    shape_opts(who, opts, ["region", "color", "width", "dash", "region_dash", "frame",
+                           "outline", "style", "opacity"]);
     let r = plot_numbers(who, "`region`", plot_opt(opts, "region", [0.4, 0.4, 0.6, 0.6]));
     if r.len() != 4 || !(r[2] > r[0]) || !(r[3] > r[1]) {
         throw `${who}(): region is [fx0, fy0, fx1, fy1] fractions of the item's box (fx0 < fx1, fy0 < fy1)`;
     }
-    let base = #{ stroke: plot_opt(opts, "color", zoom_color()), width: plot_opt(opts, "width", zoom_width()) };
-    let out = link_box(item, r, base + #{ dash: plot_opt(opts, "region_dash", zoom_region_dash()) });
-    if plot_opt(opts, "frame", zoom_copy_frame()) {
-        out += link_box(copy, (), base + #{ dash: plot_opt(opts, "region_dash", zoom_region_dash()) });
+    let shape = plot_opt(opts, "outline", zoom_outline());
+    if !["rect", "circle", "none"].contains(shape) {
+        throw `${who}(): unknown outline "${shape}" (rect, circle, none)`;
     }
-    let d = plot_opt(opts, "dash", zoom_dash());
-    for k in ["facing-1", "facing-2"] {
-        out.push(connect(item, copy, base + #{ from_box: r, from: k, to: k, dash: d }));
+    let st = plot_opt(opts, "style", zoom_style());
+    if !["lines", "cone"].contains(st) {
+        throw `${who}(): unknown style "${st}" (lines, cone)`;
+    }
+    let color = plot_opt(opts, "color", zoom_color());
+    let base = #{ stroke: color, width: plot_opt(opts, "width", zoom_width()) };
+    let rd = plot_opt(opts, "region_dash", zoom_region_dash());
+    let fs = if shape == "circle" { "ellipse" } else { "box" };
+    let out = [];
+    // The cone first: drawn under the outlines.
+    if st == "cone" {
+        out.push(connect(item, copy, #{ route: "cone", from_box: r, from_shape: fs, fill: color,
+                                        opacity: plot_opt(opts, "opacity", zoom_cone_opacity()) }));
+    }
+    if shape == "rect" {
+        out += link_box(item, r, base + #{ dash: rd });
+    } else if shape == "circle" {
+        out.push(connect(item, item, base + #{ route: "outline", from_box: r, from_shape: "ellipse", dash: rd }));
+    }
+    if plot_opt(opts, "frame", zoom_copy_frame()) {
+        out += link_box(copy, (), base + #{ dash: rd });
+    }
+    if st == "lines" {
+        let d = plot_opt(opts, "dash", zoom_dash());
+        for k in ["facing-1", "facing-2"] {
+            out.push(connect(item, copy, base + #{ from_box: r, from_shape: fs, from: k, to: k, dash: d }));
+        }
     }
     out
 }
@@ -3120,7 +3256,11 @@ fn plot_dimension_v(x, y1, y2, s, opts) {
 // among the series (`plot(opts, [a, b, plot_shift_arrows(a, b, [420, 480])])`)
 // or in `marks`. Options: `color` (or a palette index; default `plot_fg()`),
 // `width` (cm), `head` ("end" default, "both", "start"), `dash`, `trim` (the
-// fraction of each arrow left off at both ends, default `shift_arrow_trim()`).
+// fraction of each arrow left off at both ends, default `shift_arrow_trim()`),
+// `min_length` (leave out arrows shorter than this, y data units; default
+// `shift_arrow_min_length()`: 0), `anchor` ("gap": `trim` off both ends;
+// "curve": start on the first series, only the head end trimmed; default
+// `shift_arrow_anchor()`).
 fn plot_shift_arrows(a, b, xs) { plot_shift_arrows(a, b, xs, #{}) }
 fn plot_shift_arrows(a, b, xs, opts) {
     let who = "plot_shift_arrows";
@@ -3129,18 +3269,25 @@ fn plot_shift_arrows(a, b, xs, opts) {
             throw `${who}(): from and to must be series (line_plot / scatter / bars), got ${type_of(sr)}`;
         }
     }
-    shape_opts(who, opts, ["color", "width", "head", "dash", "trim"]);
+    shape_opts(who, opts, ["color", "width", "head", "dash", "trim", "min_length", "anchor"]);
     if type_of(xs) != "array" { xs = [xs]; }
     let trim = plot_opt(opts, "trim", shift_arrow_trim()).to_float();
     if !(trim >= 0.0 && trim < 0.5) { throw `${who}(): trim is a fraction from 0 to 0.5 (got ${trim})`; }
+    let min = plot_opt(opts, "min_length", shift_arrow_min_length());
+    if !plot_finite(min) || min < 0 { throw `${who}(): min_length is a length in y data units >= 0 (got ${min})`; }
+    let anchor = plot_opt(opts, "anchor", shift_arrow_anchor());
+    if !["gap", "curve"].contains(anchor) { throw `${who}(): unknown anchor "${anchor}" (gap, curve)`; }
     let o = #{};
     for k in ["color", "width", "head", "dash"] { if opts.contains(k) { o[k] = opts[k]; } }
     let out = [];
     for x in plot_numbers(who, "x", xs) {
         let y0 = plot_interp(who, a, x);
         let y1 = plot_interp(who, b, x);
+        let dy = (y1 - y0).to_float();
+        if dy == 0.0 || dy.abs() < min.to_float() { continue; }
         let d = (y1 - y0) * trim;
-        if y1 != y0 { out.push(plot_arrow(x, y0 + d, x, y1 - d, o)); }
+        let s = if anchor == "curve" { y0 } else { y0 + d };
+        out.push(plot_arrow(x, s, x, y1 - d, o));
     }
     out
 }
@@ -4184,6 +4331,12 @@ fn poster_number_size() { style_get("poster_number_size", author_size()) }
 
 // Height of the header logos (cm): 8 cm at 24 pt.
 fn poster_logo_height() { style_get("poster_logo_height", base_size() * 0.33) }
+// Logos in boxes of one size ([w, h] cm), each fitted and centred in its
+// box, so logos of different shapes line up (() = each at
+// `poster_logo_height()`, its own width).
+fn poster_logo_box() { style_get("poster_logo_box", ()) }
+// The poster number's distance in from the right edge of the header (cm).
+fn poster_number_inset() { style_get("poster_number_inset", 0) }
 
 // The rule under the header ("" for none) and its width (cm, 1 pt at 24 pt).
 fn poster_header_rule() {
@@ -4289,10 +4442,13 @@ fn ref_font() { style_get("ref_font", "") }
 
 // What a section does when its content doesn't fit the height it gets (a
 // share of a fixed poster): "visible" (default: it runs on, with a warning
-// naming the section), "clip" or "shrink" (scaled down to fit; the core
-// `overflow`). A section with a footer clips by default, so the footer is
+// naming the section), "clip", "shrink" (scaled down to fit; the core
+// `overflow`) or "fit" (scaled down to fit, or up to fill the body). A section with a footer clips by default, so the footer is
 // never overlapped. `section(.., #{ overflow })` sets it for one section.
 fn section_overflow() { style_get("section_overflow", "visible") }
+// Where a section's content sits in the height it gets: "top" (default),
+// "center", "bottom" or "spread" (the items spaced out to fill it).
+fn section_valign() { style_get("section_valign", "top") }
 
 // Where `poster_header`'s poster number goes: "title" (default: at the right
 // end of the title row) or "above" (a line of its own above the title, right
@@ -4715,6 +4871,14 @@ fn section_number(n) {
 //   footer  item(s) pushed to the bottom of the section (references, a
 //           take-home `note`), below the content's spare height and at least
 //           `section_gap()` under it
+//   overflow  "visible", "clip", "shrink" or "fit" (default
+//           `section_overflow()`; see there)
+//   fit     "both": the content is scaled up — or down — uniformly to fill
+//           the body on one axis, centred (= overflow "fit"); "shrink":
+//           only down (= overflow "shrink"); "none"
+//   valign  where the content sits in the body: "top", "center", "bottom",
+//           "spread" (default `section_valign()`; "center" with fit "both")
+//   variant a style variant (`section_variants`)
 fn section(title, content) { section_make(section_number(()), title, content, #{}) }
 fn section(a, b, c) {
     if type_of(c) == "map" { return section_make(section_number(()), a, b, c); }
@@ -4729,7 +4893,7 @@ fn section(number, title, content, opts) {
 }
 
 fn section_make(n, title, content, opts) {
-    poster_check_opts("section", opts, ["footer", "overflow", "variant"]);
+    poster_check_opts("section", opts, ["footer", "overflow", "variant", "fit", "valign"]);
     if opts.contains("variant") {
         variant_push("section", opts.variant);
         opts.remove("variant");
@@ -4755,9 +4919,27 @@ fn section_make(n, title, content, opts) {
     let tag = if type_of(title) == "string" { `section "${title}"` }
               else if label != "" { `section ${label}` } else { "section" };
     let ov = plot_opt(opts, "overflow", section_overflow());
-    if !["visible", "clip", "shrink"].contains(ov) {
-        throw `section(): unknown overflow "${ov}" (visible, clip, shrink)`;
+    if !["visible", "clip", "shrink", "fit"].contains(ov) {
+        throw `section(): unknown overflow "${ov}" (visible, clip, shrink, fit)`;
     }
+    if opts.contains("fit") {
+        let f = opts.fit;
+        let modes = #{ both: "fit", shrink: "shrink", none: "visible" };
+        if type_of(f) != "string" || !modes.contains(f) {
+            throw `section(): unknown fit "${f}" (both, shrink, none)`;
+        }
+        if opts.contains("overflow") {
+            throw "section(): give fit or overflow, not both";
+        }
+        ov = modes[f];
+        opts.overflow = ov;
+    }
+    let va = plot_opt(opts, "valign", if ov == "fit" && !opts.contains("valign") && section_valign() == "top" { "center" } else { section_valign() });
+    let valigns = #{ top: "start", center: "center", bottom: "end", spread: "space_between" };
+    if type_of(va) != "string" || !valigns.contains(va) {
+        throw `section(): unknown valign "${va}" (top, center, bottom, spread)`;
+    }
+    let main = valigns[va];
     let items = if type_of(content) == "array" { nodes(content) } else { [as_node(content)] };
     let footer = plot_opt(opts, "footer", ());
     let body_ov = ov;
@@ -4768,12 +4950,14 @@ fn section_make(n, title, content, opts) {
         let fs = if type_of(footer) == "array" && !poster_is_rich(footer) { nodes(footer) }
                  else { [scheme_text("section", footer, base_size(), "start")] };
         let cov = if ov == "visible" && !opts.contains("overflow") { "clip" } else { ov };
-        items = [col(items).spacing(section_gap()).stretch().flex(1).name(`${tag} (content)`).overflow(cov),
+        items = [col(items).spacing(section_gap()).stretch().flex(1).name(`${tag} (content)`).overflow(cov)
+                     .main(main),
                  col(fs).spacing(section_gap()).stretch().name(`${tag} (footer)`)];
         body_ov = "visible";
+        main = "start";
     }
     let body = col(items).spacing(section_gap()).stretch().pad(section_pad()).flex(1)
-        .name(`${tag} (body)`).overflow(body_ov);
+        .name(`${tag} (body)`).overflow(body_ov).main(main);
     col([section_bar(s), body]).stretch().name(tag)
 }
 
@@ -5329,6 +5513,11 @@ fn author_line(authors, affiliations) {
 //   number_position  "title" (at the title row's right end) or "above" (a
 //                 right-aligned line above the title); default
 //                 `poster_number_position()`
+//   number_inset  the number's distance in from the right edge, cm (default
+//                 `poster_number_inset()`)
+//   logo_box      [w, h] cm: every logo fitted and centred in a box of that
+//                 size, so logos of different shapes line up (default
+//                 `poster_logo_box()`; () = each `poster_logo_height()` tall)
 // Text (titles, items, cells) may be a string or rich-text spans
 // (`markup("…")`, `[span(..), ..]`) throughout the poster components.
 // The title (with the number at its right end) and the author line are
@@ -5337,8 +5526,10 @@ fn author_line(authors, affiliations) {
 fn poster_header(opts) {
     if type_of(opts) != "map" { throw `poster_header(): expected a map (got ${type_of(opts)})`; }
     for k in opts.keys() {
-        if !["title", "authors", "affiliations", "logos", "number", "number_position"].contains(k) {
-            throw `poster_header(): unknown key "${k}" (title, authors, affiliations, logos, number, number_position)`;
+        let keys = ["title", "authors", "affiliations", "logos", "number", "number_position",
+                    "number_inset", "logo_box"];
+        if !keys.contains(k) {
+            throw `poster_header(): unknown key "${k}" (${list_names(keys)})`;
         }
     }
     let title = plot_opt(opts, "title", "");
@@ -5360,6 +5551,9 @@ fn poster_header(opts) {
     let above = ();
     if num != "" {
         let n = fg_text(num).size(poster_number_size()).bold();
+        let ni = plot_opt(opts, "number_inset", poster_number_inset());
+        if !plot_finite(ni) || ni < 0 { throw `poster_header(): number_inset is a length in cm >= 0 (got ${ni})`; }
+        if ni > 0 { n = n.margin(#{ right: ni }); }
         if where == "above" {
             above = n.align("right");
         } else {
@@ -5374,9 +5568,20 @@ fn poster_header(opts) {
         main.push(author_line(authors, plot_opt(opts, "affiliations", [])));
     }
     let parts = [];
+    let lb = plot_opt(opts, "logo_box", poster_logo_box());
+    if type_of(lb) != "()" {
+        lb = plot_numbers("poster_header", "`logo_box`", lb);
+        if lb.len() != 2 || !(lb[0] > 0.0) || !(lb[1] > 0.0) {
+            throw "poster_header(): logo_box is [w, h] in cm";
+        }
+    }
     for l in plot_opt(opts, "logos", []) {
         let n = if type_of(l) == "string" { image(l) } else { l };
-        parts.push(n.height(poster_logo_height()));
+        parts.push(if type_of(lb) == "()" { n.height(poster_logo_height()) } else {
+            // A fixed box, the logo contained and centred in it.
+            if n.kind() == "image" { n = n.fit("contain"); }
+            col([n.flex(1)]).width(lb[0]).height(lb[1]).stretch()
+        });
     }
     parts.push(col(main).main("center").stretch().spacing(author_size() * 0.008).flex(1));
     let head = row(parts).stretch().spacing(poster_gutter());
