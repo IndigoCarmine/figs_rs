@@ -208,9 +208,25 @@ pub(crate) struct Ctx<'a, M: LeafMeasure> {
     pub parents: Vec<Option<usize>>,
     /// Overflows found while arranging (see [`OverflowReport`]).
     pub overflows: std::cell::RefCell<Vec<OverflowReport>>,
+    /// How many equal-height rows the current measure / arrange is inside:
+    /// there the row decides every item's size, so natural sizes (images
+    /// with a `dpi`) yield to it (see `measure::keeps_natural`).
+    pub scaling: std::cell::Cell<u32>,
 }
 
 impl<M: LeafMeasure> Ctx<'_, M> {
+    /// Run `f` inside an equal-height row's subtree when `on` (see
+    /// [`Ctx::scaling`]).
+    pub fn scaled<R>(&self, on: bool, f: impl FnOnce() -> R) -> R {
+        if !on {
+            return f();
+        }
+        self.scaling.set(self.scaling.get() + 1);
+        let r = f();
+        self.scaling.set(self.scaling.get() - 1);
+        r
+    }
+
     /// Whether node `idx` takes its measured height (unbounded vertical axis).
     pub fn is_content_h(&self, idx: usize) -> bool {
         self.content_h.get(idx).copied().unwrap_or(false)
@@ -306,6 +322,7 @@ pub fn layout<M: LeafMeasure>(doc: &Document, measurer: &M) -> ComputedLayout {
         content_h: Vec::new(),
         parents,
         overflows: Default::default(),
+        scaling: Default::default(),
     };
     let height_pt = match doc.page.height_pt {
         Some(h) => h,

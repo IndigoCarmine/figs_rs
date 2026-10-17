@@ -116,12 +116,13 @@ fn an_overhanging_caption_takes_no_room_across() {
     let k = rect_of(&l, "k");
     assert!((k.w - 40.0).abs() < 1e-2, "{k:?}");
     approx(rect_of(&l, "c"), k.x - 30.0, 20.0, 100.0, 10.0);
-    // In a stretched column it isn't stretched (or wrapped) either.
+    // In a stretched column it isn't stretched (or wrapped) either (and the
+    // row keeps room for it at its left end: the column starts at 30).
     let l = lay(
         r#"page(400, "auto", row([col([rect().width(40).height(20), text("0123456789").overhang().id("c")])
             .stretch().width(40).id("k")])).unit("pt")"#,
     );
-    approx(rect_of(&l, "c"), -30.0, 20.0, 100.0, 10.0);
+    approx(rect_of(&l, "c"), 0.0, 20.0, 100.0, 10.0);
     // By the axis: centred on the marked node.
     let l = lay(
         r#"page(400, "auto", row([col([rect().width(40).height(20).axis(), text("0123456789").overhang().id("c")])
@@ -129,7 +130,7 @@ fn an_overhanging_caption_takes_no_room_across() {
     );
     let k = rect_of(&l, "k");
     assert!((k.w - 40.0).abs() < 1e-2, "{k:?}");
-    approx(rect_of(&l, "c"), -30.0, 20.0, 100.0, 10.0);
+    approx(rect_of(&l, "c"), 0.0, 20.0, 100.0, 10.0);
 }
 
 /// Node `id`'s box corners on the page, through its transform.
@@ -172,4 +173,50 @@ fn overflow_fit_scales_up_and_down() {
         .unwrap_err()
         .to_string();
     assert!(e.contains("visible, clip, shrink, fit"), "{e}");
+}
+
+#[test]
+fn a_row_keeps_room_for_its_edge_captions() {
+    // The first item's caption reaches 30 pt past its left edge: the row
+    // starts it 30 pt in (and is that much wider), so the caption stays
+    // inside the row's box.
+    let l = lay(
+        r#"page(400, "auto", col([row([col([rect().width(40).height(20).id("r"), text("0123456789").overhang().id("c")])
+            .cross("center"), rect().width(20).height(20)]).id("row")])).unit("pt")"#,
+    );
+    approx(rect_of(&l, "r"), 30.0, 0.0, 40.0, 20.0);
+    approx(rect_of(&l, "c"), 0.0, 20.0, 100.0, 10.0);
+    let row = rect_of(&l, "row");
+    assert!((row.w - 90.0).abs() < 1e-2, "{row:?}");
+}
+
+#[test]
+fn overflow_fit_shrinks_what_is_too_wide() {
+    // A row of fixed 300 pt in a 100 pt column: scaled to a third.
+    let l = lay(
+        r#"page(100, 100, col([row([rect().width(300).height(30).id("r")])]).overflow("fit")).unit("pt")"#,
+    );
+    let (s, p, q) = page_corners(&l, "r");
+    assert!((s - 1.0 / 3.0).abs() < 1e-3, "{s}");
+    assert!(
+        p.x.abs() < 1e-2 && (q.x - 100.0).abs() < 1e-2,
+        "{p:?} {q:?}"
+    );
+}
+
+#[test]
+fn an_equal_height_row_scales_wrapped_natural_images_too() {
+    // Captioned natural-size images (a column each) still share one height
+    // that fills the row; outside such a row they keep their size.
+    let l = lay(r#"page(300, "auto", col([
+            row([col([image("a.png").dpi(150).id("a"), text("x")]).stretch(),
+                 col([image("b.png").dpi(75).id("b"), text("y")]).stretch()]).equal_height(),
+            col([image("c.png").dpi(150).id("c"), text("z")]).stretch(),
+        ]).stretch()).unit("pt")"#);
+    let (a, b) = (rect_of(&l, "a"), rect_of(&l, "b"));
+    assert!(
+        (a.w + b.w - 300.0).abs() < 0.5 && (a.h - b.h).abs() < 0.5,
+        "{a:?} {b:?}"
+    );
+    approx(rect_of(&l, "c"), 0.0, a.h + 10.0, 144.0, 72.0);
 }

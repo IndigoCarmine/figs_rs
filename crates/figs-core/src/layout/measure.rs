@@ -192,6 +192,10 @@ fn loose_aspect(common: &Common, c: Constraints) -> Option<f32> {
 /// intrinsic size — in particular under an unbounded main axis. An
 /// `equal_height` row with a bounded width fills it (see
 /// [`equal_height_widths`]).
+///
+/// A row whose first (last) child has an overhanging caption reaching past
+/// its left (right) edge keeps that much room at that end (see
+/// [`overhang_reach`]): its items are measured in what is left.
 pub(super) fn measure_container<M: LeafMeasure>(
     ctx: &Ctx<M>,
     axis: Axis,
@@ -201,6 +205,46 @@ pub(super) fn measure_container<M: LeafMeasure>(
     common: &Common,
     c: Constraints,
 ) -> Size {
+    let args = ((spacing, pitch), (cross_align, equal_height));
+    ctx.scaled(equal_height, || {
+        measure_container_edges(ctx, axis, children, args, common, c)
+    })
+}
+
+/// [`measure_container`] keeping room for edge captions.
+#[allow(clippy::type_complexity)]
+fn measure_container_edges<M: LeafMeasure>(
+    ctx: &Ctx<M>,
+    axis: Axis,
+    children: &[usize],
+    args: ((f32, Option<f32>), (CrossAxisAlign, bool)),
+    common: &Common,
+    c: Constraints,
+) -> Size {
+    let (s, edge) = measure_container_in(ctx, axis, children, args, common, c);
+    if edge <= 0.01 {
+        return s;
+    }
+    let c2 = Constraints {
+        min_w: (c.min_w - edge).max(0.0),
+        max_w: (c.max_w - edge).max(0.0),
+        ..c
+    };
+    let (s2, _) = measure_container_in(ctx, axis, children, args, common, c2);
+    Size::new(s2.w + edge, s2.h)
+}
+
+/// [`measure_container`] in `c`, and the room a row's edge children's
+/// overhanging captions reach out past its ends (0 for a column).
+#[allow(clippy::type_complexity)]
+fn measure_container_in<M: LeafMeasure>(
+    ctx: &Ctx<M>,
+    axis: Axis,
+    children: &[usize],
+    ((spacing, pitch), (cross_align, equal_height)): ((f32, Option<f32>), (CrossAxisAlign, bool)),
+    common: &Common,
+    c: Constraints,
+) -> (Size, f32) {
     let inner_max_w = (c.max_w - common.padding.horizontal()).max(0.0);
     let inner_max_h = (c.max_h - common.padding.vertical()).max(0.0);
     let base = Constraints::loose(inner_max_w, inner_max_h);
@@ -338,10 +382,65 @@ pub(super) fn measure_container<M: LeafMeasure>(
         Axis::Vertical => (cross_max, main_sum),
         Axis::Horizontal => (main_sum, cross_max),
     };
-    Size::new(
-        w + common.padding.horizontal(),
-        h + common.padding.vertical(),
+    let edge = match (axis, children.first(), children.last()) {
+        (Axis::Horizontal, Some(&first), Some(&last)) => {
+            let w_of = |i: usize| sizes[i].map_or(0.0, |s| s.w);
+            overhang_reach(ctx, first, w_of(0)).0
+                + overhang_reach(ctx, last, w_of(children.len() - 1)).1
+        }
+        _ => 0.0,
+    };
+    (
+        Size::new(
+            w + common.padding.horizontal(),
+            h + common.padding.vertical(),
+        ),
+        edge,
     )
+}
+
+/// How far node `idx`, `w` wide, has overhanging children (see
+/// `Common::overhang`) reaching past its left and right edges: a column's
+/// direct children laid out at their natural width (centred unless the
+/// column aligns to an edge), or those of a stack's base layer (a labelled
+/// captioned panel).
+pub(super) fn overhang_reach<M: LeafMeasure>(ctx: &Ctx<M>, idx: usize, w: f32) -> (f32, f32) {
+    let node = &ctx.doc.nodes[idx];
+    match &node.kind {
+        NodeType::Container {
+            axis: Axis::Vertical,
+            children,
+            cross_axis,
+            ..
+        } => {
+            let inner = w - node.common.padding.horizontal();
+            let (mut l, mut r) = (0.0f32, 0.0f32);
+            for &ch in children {
+                let cc = &ctx.doc.nodes[ch].common;
+                if !cc.overhang {
+                    continue;
+                }
+                let nat = measure(ctx, ch, Constraints::loose(f32::INFINITY, f32::INFINITY)).w
+                    + cc.margin.horizontal();
+                let extra = nat - inner;
+                if extra <= 0.0 {
+                    continue;
+                }
+                let (a, b) = match cross_axis {
+                    CrossAxisAlign::Start => (0.0, extra),
+                    CrossAxisAlign::End => (extra, 0.0),
+                    _ => (extra / 2.0, extra / 2.0),
+                };
+                l = l.max(a);
+                r = r.max(b);
+            }
+            (l, r)
+        }
+        NodeType::Stack { children, .. } => children
+            .first()
+            .map_or((0.0, 0.0), |&c| overhang_reach(ctx, c, w)),
+        _ => (0.0, 0.0),
+    }
 }
 
 /// Distance from the leading cross edge of a child's margin box (top in a
@@ -712,7 +811,13 @@ fn measure_natural(common: &Common, nat: Size, c: Constraints) -> Size {
 /// (see [`natural_size`]), or a stack without an explicit size whose base
 /// layer (first child) does (an overlay, a label over such an image) — so
 /// a stretching parent leaves it at that size.
+///
+/// Not inside an equal-height row, which scales its items (and what they
+/// hold) to share one height.
 pub(super) fn keeps_natural<M: LeafMeasure>(ctx: &Ctx<M>, idx: usize) -> bool {
+    if ctx.scaling.get() > 0 {
+        return false;
+    }
     let node = &ctx.doc.nodes[idx];
     match &node.kind {
         NodeType::Image(props) => {
@@ -730,6 +835,61 @@ pub(super) fn keeps_natural<M: LeafMeasure>(ctx: &Ctx<M>, idx: usize) -> bool {
                 })
         }
         _ => false,
+    }
+}
+
+/// The width node `idx`'s border box can't go below by wrapping or
+/// shrinking (a min-content width, approximated): explicit widths, natural
+/// sizes of images, unwrapped text and path extents; rows add their
+/// children up, columns and stacks take the widest. Wrapping text, images
+/// without a natural size, equal-height rows and overhanging nodes count 0.
+pub(super) fn min_content_width<M: LeafMeasure>(ctx: &Ctx<M>, idx: usize) -> f32 {
+    let node = &ctx.doc.nodes[idx];
+    let common = &node.common;
+    if common.overhang {
+        return 0.0;
+    }
+    if common.swaps_axes() {
+        return common.height.unwrap_or(0.0);
+    }
+    if let Some(w) = common.width {
+        return w;
+    }
+    let pad = common.padding.horizontal();
+    let of = |c: usize| min_content_width(ctx, c) + ctx.doc.nodes[c].common.margin.horizontal();
+    match &node.kind {
+        NodeType::Image(props) => {
+            match (common.height, common.aspect_ratio, natural_size(ctx, props)) {
+                (Some(h), Some(ar), _) if ar > 0.0 => h * ar,
+                (Some(h), None, Some(n)) => h * n.w / n.h.max(1e-6),
+                (None, _, Some(n)) => n.w,
+                _ => 0.0,
+            }
+        }
+        NodeType::Text(props) if !props.wrap => {
+            ctx.measurer.measure_text(props, f32::INFINITY).w + pad
+        }
+        NodeType::Path(props) if props.viewbox.is_none() => {
+            crate::path::bounds(&props.segments).map_or(0.0, |(_, hi)| hi.x.max(0.0)) + pad
+        }
+        // An equal-height row scales its items to whatever width it gets.
+        NodeType::Container {
+            equal_height: true, ..
+        } => pad,
+        NodeType::Container {
+            axis: Axis::Horizontal,
+            children,
+            spacing,
+            ..
+        } => {
+            children.iter().map(|&c| of(c)).sum::<f32>()
+                + spacing * children.len().saturating_sub(1) as f32
+                + pad
+        }
+        NodeType::Container { children, .. } | NodeType::Stack { children, .. } => {
+            children.iter().map(|&c| of(c)).fold(0.0, f32::max) + pad
+        }
+        _ => 0.0,
     }
 }
 

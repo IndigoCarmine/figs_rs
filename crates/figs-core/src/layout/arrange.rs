@@ -17,7 +17,8 @@ use super::computed::{
 };
 use super::measure::{
     axis_line, cross_axis, cross_margin, equal_height_widths, keeps_cross_size, measure,
-    measure_container, stack_child_avail, stack_child_constraints, stack_child_size, tighten,
+    measure_container, min_content_width, overhang_reach, stack_child_avail,
+    stack_child_constraints, stack_child_size, tighten,
 };
 use super::{cross_of, main_of, Constraints, Ctx, LeafMeasure};
 
@@ -430,9 +431,23 @@ fn layout_children<M: LeafMeasure>(
     xf: Option<Affine>,
     out: &mut Vec<ComputedNode>,
 ) -> bool {
+    ctx.scaled(flex.equal_height, || {
+        layout_children_in(ctx, idx, flex, content, overflow, xf, out)
+    })
+}
+
+/// [`layout_children`] (inside the equal-height scope when it applies).
+fn layout_children_in<M: LeafMeasure>(
+    ctx: &Ctx<M>,
+    idx: usize,
+    flex: &Flex,
+    content: Rect,
+    overflow: Overflow,
+    xf: Option<Affine>,
+    out: &mut Vec<ComputedNode>,
+) -> bool {
     let have = main_of(flex.axis, content.size());
-    let scales = matches!(overflow, Overflow::Shrink | Overflow::Fit) && !flex.content_h;
-    if scales {
+    if overflow == Overflow::Shrink && !flex.content_h {
         if let Some((s, need)) = shrink_scale(ctx, flex, content) {
             // Laid out as usual in a box as wide (tall, for a row) as the
             // content box and long enough along the main axis, then scaled
@@ -476,10 +491,10 @@ fn layout_children<M: LeafMeasure>(
         }
     }
     if overflow == Overflow::Fit && !flex.content_h {
-        if let Some((s, virt, shift)) = grow_scale(ctx, flex, content) {
-            // Laid out in a box `1 / s` of the content box (as wide across
-            // as the children are), then scaled up by `s` about the content
-            // box's top-left and centred across.
+        if let Some((s, virt, shift, need)) = fit_scale(ctx, flex, content) {
+            // Laid out in a box `1 / s` of the content box along the main
+            // axis (as wide across as the children are), then scaled by `s`
+            // about the content box's top-left and centred across.
             let scale = Affine {
                 a: s,
                 b: 0.0,
@@ -493,6 +508,17 @@ fn layout_children<M: LeafMeasure>(
                 None => scale,
             });
             let slots = flex_slots(ctx, flex, virt);
+            if s < 1.0 && need > have + 0.01 {
+                report_overflow(
+                    ctx,
+                    idx,
+                    flex,
+                    &slots,
+                    need,
+                    have,
+                    OverflowAction::Shrunk(s),
+                );
+            }
             arrange_in_order(ctx, flex.children, flex.overlays, slots, virt, cxf, out);
             return false;
         }
@@ -558,44 +584,71 @@ fn shrink_scale<M: LeafMeasure>(ctx: &Ctx<M>, flex: &Flex, content: Rect) -> Opt
     Some(((have / need).max(0.01), need))
 }
 
-/// `overflow = "fit"` with room to spare: the scale `s` (> 1) at which the
-/// children's natural extent (measured loose in `content`) fills `content`
-/// on one axis, the box `1 / s` of it to lay them out in (as wide across as
-/// they are, so they don't stretch into the spare room), and the shift
-/// that centres them across; `None` when they fill an axis already.
-fn grow_scale<M: LeafMeasure>(
+/// `overflow = "fit"`: the scale `s` that makes the children fill
+/// `content` on one axis — up when they have room to spare both ways, down
+/// when they overflow either way — the box to lay them out in before
+/// scaling (as wide across as they are, the main axis `1 / s` of the
+/// content box's, so alignment places them along it), the shift that
+/// centres them across, and the main extent they need; `None` at scale 1.
+///
+/// Their extent across is the larger of their loose wrap-content size and
+/// the width nothing in them can go below (see [`min_content_width`]: a row
+/// of natural-size images doesn't shrink by wrapping like text does).
+fn fit_scale<M: LeafMeasure>(
     ctx: &Ctx<M>,
     flex: &Flex,
     content: Rect,
-) -> Option<(f32, Rect, (f32, f32))> {
-    let nat = measure_container(
-        ctx,
-        flex.axis,
-        flex.children,
-        (flex.spacing, flex.pitch),
-        (flex.cross_align, flex.equal_height),
-        &Common::default(),
-        Constraints::loose(content.w, content.h),
-    );
-    if !(nat.w > 0.01 && nat.h > 0.01 && nat.w.is_finite() && nat.h.is_finite()) {
+) -> Option<(f32, Rect, (f32, f32), f32)> {
+    let measure_in = |c: Constraints| {
+        measure_container(
+            ctx,
+            flex.axis,
+            flex.children,
+            (flex.spacing, flex.pitch),
+            (flex.cross_align, flex.equal_height),
+            &Common::default(),
+            c,
+        )
+    };
+    let nat = measure_in(Constraints::loose(content.w, content.h));
+    let rigid = flex
+        .children
+        .iter()
+        .map(|&c| min_content_width(ctx, c) + ctx.doc.nodes[c].common.margin.horizontal());
+    let rigid = match flex.axis {
+        Axis::Vertical => rigid.fold(0.0, f32::max),
+        Axis::Horizontal => {
+            rigid.sum::<f32>() + flex.spacing * flex.children.len().saturating_sub(1) as f32
+        }
+    };
+    let w0 = nat.w.max(rigid);
+    // The height they need at that width (a column's children stretched
+    // to it, as they will be).
+    let c0 = Constraints::loose(w0, f32::INFINITY);
+    let h0 = match flex.axis {
+        Axis::Vertical => measure_in(c0.with_tight_w(w0)).h,
+        Axis::Horizontal => measure_in(c0).h,
+    };
+    if !(w0 > 0.01 && h0 > 0.01 && w0.is_finite() && h0.is_finite()) {
         return None;
     }
-    let s = (content.w / nat.w).min(content.h / nat.h);
-    if !(s > 1.001 && s.is_finite()) {
+    let s = (content.w / w0).min(content.h / h0);
+    if !s.is_finite() || (s - 1.0).abs() < 1e-3 {
         return None;
     }
-    // Along the main axis the box keeps the content's length (alignment
-    // places the children in it); across, the children's own extent.
+    let s = s.max(0.01);
     Some(match flex.axis {
         Axis::Vertical => (
             s,
-            Rect::new(content.x, content.y, nat.w, content.h / s),
-            ((content.w - nat.w * s) / 2.0, 0.0),
+            Rect::new(content.x, content.y, w0, content.h / s),
+            ((content.w - w0 * s) / 2.0, 0.0),
+            h0,
         ),
         Axis::Horizontal => (
             s,
-            Rect::new(content.x, content.y, content.w / s, nat.h),
-            (0.0, (content.h - nat.h * s) / 2.0),
+            Rect::new(content.x, content.y, content.w / s, h0),
+            (0.0, (content.h - h0 * s) / 2.0),
+            w0,
         ),
     })
 }
@@ -640,7 +693,37 @@ fn report_overflow<M: LeafMeasure>(
 
 /// The slot (border box in the container's frame) of each child of a
 /// column/row whose content box is `content`.
+///
+/// A row keeps room at its ends for overhanging captions of its first and
+/// last child (see [`overhang_reach`]), so they stay inside its box.
 pub(super) fn flex_slots<M: LeafMeasure>(ctx: &Ctx<M>, flex: &Flex, content: Rect) -> Vec<Rect> {
+    ctx.scaled(flex.equal_height, || flex_slots_edges(ctx, flex, content))
+}
+
+/// [`flex_slots`] keeping room for edge captions.
+fn flex_slots_edges<M: LeafMeasure>(ctx: &Ctx<M>, flex: &Flex, content: Rect) -> Vec<Rect> {
+    let slots = flex_slots_in(ctx, flex, content);
+    let (Axis::Horizontal, Some(&first), Some(&last)) =
+        (flex.axis, flex.children.first(), flex.children.last())
+    else {
+        return slots;
+    };
+    let lead = overhang_reach(ctx, first, slots[0].w).0;
+    let trail = overhang_reach(ctx, last, slots[slots.len() - 1].w).1;
+    if lead + trail <= 0.01 {
+        return slots;
+    }
+    let inner = Rect::new(
+        content.x + lead,
+        content.y,
+        (content.w - lead - trail).max(0.0),
+        content.h,
+    );
+    flex_slots_in(ctx, flex, inner)
+}
+
+/// [`flex_slots`] without the room for overhanging captions.
+fn flex_slots_in<M: LeafMeasure>(ctx: &Ctx<M>, flex: &Flex, content: Rect) -> Vec<Rect> {
     let Flex {
         axis,
         children,
