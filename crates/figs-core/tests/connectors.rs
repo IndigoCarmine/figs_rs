@@ -410,3 +410,86 @@ fn renders_in_every_backend() {
         .unwrap()
         .is_empty());
 }
+
+#[test]
+fn facing_corners_join_a_region_to_its_magnified_copy() {
+    // The region [0.25, 0.25, 0.5, 0.75] of a 40 x 20 image is (10, 5) to
+    // (20, 15); the copy (10 x 10) sits right of it at (60, 0): the links
+    // join the region's right corners to the copy's left ones.
+    let l = lay(r##"
+        let img = rect().width(40).height(20);
+        let copy = rect().width(10).height(10);
+        let r = [0.25, 0.25, 0.5, 0.75];
+        page(100, 100, stack([
+            img.at(0, 0), copy.at(60, 0),
+            [connect(img, copy, #{ from_box: r, from: "facing-1", to: "facing-1" }),
+             connect(img, copy, #{ from_box: r, from: "facing-2", to: "facing-2" })],
+        ])).unit("pt")"##);
+    let p = paths(&l);
+    assert_eq!(p.len(), 2, "an array among the children is spliced in");
+    let (s, e) = first_last(p[0]);
+    approx_pt(s, 20.0, 5.0);
+    approx_pt(e, 60.0, 0.0);
+    let (s, e) = first_last(p[1]);
+    approx_pt(s, 20.0, 15.0);
+    approx_pt(e, 60.0, 10.0);
+    // Below instead: the bottom corners to the top ones, left first.
+    let l = lay(r##"
+        let img = rect().width(40).height(20);
+        let copy = rect().width(10).height(10);
+        page(100, 100, stack([
+            img.at(0, 0), copy.at(30, 50),
+            connect(img, copy, #{ from_box: [0, 0, 0.5, 0.5], from: "facing-2", to: "facing-2" }),
+        ])).unit("pt")"##);
+    let (s, e) = first_last(paths(&l)[0]);
+    approx_pt(s, 20.0, 10.0);
+    approx_pt(e, 40.0, 50.0);
+}
+
+#[test]
+fn elbow_between_sides_facing_the_same_way_is_a_u() {
+    // left -> left: out 8 pt (+ radius 0) past the outer end, then back in.
+    let l = lay(r##"
+        let a = rect().width(10).height(10);
+        let b = rect().width(10).height(10);
+        page(100, 100, stack([
+            a.at(20, 0), b.at(30, 40),
+            connect(a, b, #{ from: "left", to: "left", route: "elbow" }),
+        ])).unit("pt")"##);
+    let pts: Vec<Point> = paths(&l)[0].segments.iter().map(end_point).collect();
+    assert_eq!(pts.len(), 4, "{pts:?}");
+    approx_pt(pts[1], 12.0, 5.0);
+    approx_pt(pts[2], 12.0, 45.0);
+    approx_pt(pts[3], 30.0, 45.0);
+}
+
+/// Images measure as their natural aspect (2:1) and nothing else.
+struct WideImages;
+impl figs_core::LeafMeasure for WideImages {
+    fn measure_text(&self, _t: &figs_core::schema::TextProps, _w: f32) -> figs_core::geom::Size {
+        figs_core::geom::Size::default()
+    }
+    fn measure_image(&self, _i: &figs_core::schema::ImageProps) -> figs_core::geom::Size {
+        figs_core::geom::Size::default()
+    }
+    fn image_aspect(&self, _i: &figs_core::schema::ImageProps) -> Option<f32> {
+        Some(2.0)
+    }
+}
+
+#[test]
+fn fractions_of_a_letterboxed_image_are_of_the_picture() {
+    // A 2:1 image in a 40 x 40 box ("contain"): the picture is 40 x 20 at
+    // y = 10; its top-left corner is (0, 10), not (0, 0).
+    let d = Document::from_script(
+        r##"
+        let img = image("x.png").width(40).height(40);
+        let b = rect().width(4).height(4);
+        page(100, 100, stack([img, b.at(80, 0),
+            connect(img, b, #{ from: "top-left", to: "center" })])).unit("pt")"##,
+    )
+    .unwrap();
+    let l = layout(&d, &WideImages);
+    let (s, _) = first_last(paths(&l)[0]);
+    approx_pt(s, 0.0, 10.0);
+}

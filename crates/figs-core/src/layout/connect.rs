@@ -12,11 +12,18 @@
 //!   the other end (boxes apart horizontally → left/right sides, else
 //!   vertically → top/bottom, else by the larger centre offset). Two `auto`
 //!   ends whose boxes overlap across the chosen direction meet at the middle
-//!   of the overlap, so the link runs straight.
+//!   of the overlap, so the link runs straight. `facing-1` / `facing-2` are
+//!   the first / second corner (top or left first) of that facing side —
+//!   two connectors so attached join a region to its magnified copy. The
+//!   box may be narrowed to a sub-box of the node (`from_box` / `to_box`).
 //! - **Route**: `straight`; `elbow` — horizontal/vertical runs leaving each
 //!   end along its side's normal (both horizontal: H-V-H through the middle;
 //!   both vertical: V-H-V; mixed: one corner), corners rounded by `radius`;
 //!   `curve` — a cubic leaving and entering along the normals.
+//!   Two sides facing the same way (left → left) get a U running
+//!   [`U_REACH`] (plus the radius) past the outer end.
+//! - **Images**: on an image fitted with `contain`, fractions and sides are
+//!   those of the visible picture, not of the (letterboxed) box.
 //! - **Gap**: each end is pulled back by its gap (along the line for a
 //!   straight route, along the normal otherwise).
 //! - **Band**: a filled outline `band` wide around the route (curves
@@ -29,7 +36,8 @@ use crate::schema::{Attach, ConnectorProps, ConnectorRoute, Document, NodeType};
 
 use super::computed::{ComputedNode, PaintContent, PathPaint};
 
-/// A placed end: its local box and local → page transform.
+/// A placed end: its local box (the part of it the connector attaches to)
+/// and local → page transform.
 #[derive(Clone, Copy)]
 struct End {
     rect: Rect,
@@ -37,9 +45,21 @@ struct End {
 }
 
 impl End {
-    fn of(n: &ComputedNode) -> End {
+    /// The end on node `n`, narrowed to the sub-box `sub` (fractions
+    /// `[fx0, fy0, fx1, fy1]` of its box).
+    fn of(n: &ComputedNode, sub: Option<[f32; 4]>) -> End {
+        let r = n.rect;
+        let rect = match sub {
+            Some([x0, y0, x1, y1]) => Rect::new(
+                r.x + x0 * r.w,
+                r.y + y0 * r.h,
+                (x1 - x0) * r.w,
+                (y1 - y0) * r.h,
+            ),
+            None => r,
+        };
         End {
-            rect: n.rect,
+            rect,
             xf: n.transform,
         }
     }
@@ -69,34 +89,46 @@ impl End {
     /// The outward normal (page space, unit) of the side a fraction lies
     /// on; `None` inside the box.
     fn normal(&self, f: [f32; 2]) -> Option<Point> {
-        const EPS: f32 = 1e-4;
-        let local = if f[0] <= EPS {
-            (-1.0, 0.0)
-        } else if f[0] >= 1.0 - EPS {
-            (1.0, 0.0)
-        } else if f[1] <= EPS {
-            (0.0, -1.0)
-        } else if f[1] >= 1.0 - EPS {
-            (0.0, 1.0)
-        } else {
-            return None;
-        };
+        let local = side_normal(f)?;
         let n = match self.xf {
             Some(t) => {
                 let o = t.apply(Point::new(0.0, 0.0));
-                let q = t.apply(Point::new(local.0, local.1));
-                (q.x - o.x, q.y - o.y)
+                let q = t.apply(local);
+                Point::new(q.x - o.x, q.y - o.y)
             }
             None => local,
         };
-        let len = (n.0 * n.0 + n.1 * n.1).sqrt();
-        (len > 0.0).then(|| Point::new(n.0 / len, n.1 / len))
+        unit(n)
     }
 }
 
+/// The outward normal of the side of a box that fractions `f` lie on (left
+/// and right before top and bottom); `None` inside.
+fn side_normal(f: [f32; 2]) -> Option<Point> {
+    const EPS: f32 = 1e-4;
+    Some(if f[0] <= EPS {
+        Point::new(-1.0, 0.0)
+    } else if f[0] >= 1.0 - EPS {
+        Point::new(1.0, 0.0)
+    } else if f[1] <= EPS {
+        Point::new(0.0, -1.0)
+    } else if f[1] >= 1.0 - EPS {
+        Point::new(0.0, 1.0)
+    } else {
+        return None;
+    })
+}
+
 /// Which side of `a` faces `b` (both page boxes), as a fraction of `a`'s
-/// box (for an unrotated `a`) — see the module docs.
+/// box — see the module docs (boxes apart both ways: the axis with the
+/// wider gap).
 fn facing_side(a: Rect, b: Rect) -> [f32; 2] {
+    // Apart both ways: the axis with the wider gap.
+    let gap_x = (b.x - (a.x + a.w)).max(a.x - (b.x + b.w));
+    let gap_y = (b.y - (a.y + a.h)).max(a.y - (b.y + b.h));
+    if gap_x >= 0.0 && gap_y > gap_x {
+        return [0.5, if b.y >= a.y + a.h { 1.0 } else { 0.0 }];
+    }
     if b.x >= a.x + a.w {
         [1.0, 0.5]
     } else if b.x + b.w <= a.x {
@@ -116,75 +148,53 @@ fn facing_side(a: Rect, b: Rect) -> [f32; 2] {
     }
 }
 
+/// Where one end attaches: a page point and the outward normal there.
+fn attach_end(at: Attach, me: &End, other: Rect) -> (Point, Option<Point>, Option<[f32; 2]>) {
+    match at {
+        Attach::Frac(f) => (me.point(f), me.normal(f), None),
+        Attach::Auto | Attach::Facing(_) => {
+            // Chosen on the page box, so the point lies on it.
+            let r = me.bounds();
+            let side = facing_side(r, other);
+            let f = match at {
+                Attach::Facing(k) => {
+                    let second = if k == 2 { 1.0 } else { 0.0 };
+                    if side[1] == 0.5 {
+                        [side[0], second]
+                    } else {
+                        [second, side[1]]
+                    }
+                }
+                _ => side,
+            };
+            let p = Point::new(r.x + f[0] * r.w, r.y + f[1] * r.h);
+            (p, side_normal(side), Some(side))
+        }
+    }
+}
+
 /// Where both ends of a connector lie and their outward normals.
 fn endpoints(c: &ConnectorProps, a: End, b: End) -> [(Point, Option<Point>); 2] {
     let (ba, bb) = (a.bounds(), b.bounds());
-    let fa = match c.from_at {
-        Attach::Frac(f) => f,
-        Attach::Auto => {
-            let other = match c.to_at {
-                Attach::Frac(f) => {
-                    let p = b.point(f);
-                    Rect::new(p.x, p.y, 0.0, 0.0)
-                }
-                Attach::Auto => bb,
-            };
-            facing_side(ba, other)
+    // An end that is not chosen by side faces the other end's point.
+    let toward = |at: Attach, e: &End, r: Rect| match at {
+        Attach::Frac(f) => {
+            let p = e.point(f);
+            Rect::new(p.x, p.y, 0.0, 0.0)
         }
+        _ => r,
     };
-    let fb = match c.to_at {
-        Attach::Frac(f) => f,
-        Attach::Auto => {
-            let p = a.point(fa);
-            let other = match c.from_at {
-                Attach::Frac(_) => Rect::new(p.x, p.y, 0.0, 0.0),
-                Attach::Auto => ba,
-            };
-            facing_side(bb, other)
-        }
-    };
-    // Auto sides are chosen on the page boxes, so they lie on them.
-    let side_point = |e: &End, r: Rect, f: [f32; 2], auto: bool| {
-        if auto {
-            Point::new(r.x + f[0] * r.w, r.y + f[1] * r.h)
-        } else {
-            e.point(f)
-        }
-    };
-    let auto_a = c.from_at == Attach::Auto;
-    let auto_b = c.to_at == Attach::Auto;
-    let mut pa = side_point(&a, ba, fa, auto_a);
-    let mut pb = side_point(&b, bb, fb, auto_b);
-    let page_normal = |f: [f32; 2]| -> Option<Point> {
-        Some(match f {
-            [x, _] if x <= 0.0 => Point::new(-1.0, 0.0),
-            [x, _] if x >= 1.0 => Point::new(1.0, 0.0),
-            [_, y] if y <= 0.0 => Point::new(0.0, -1.0),
-            [_, y] if y >= 1.0 => Point::new(0.0, 1.0),
-            _ => return None,
-        })
-    };
-    let na = if auto_a {
-        page_normal(fa)
-    } else {
-        a.normal(fa)
-    };
-    let nb = if auto_b {
-        page_normal(fb)
-    } else {
-        b.normal(fb)
-    };
+    let (mut pa, na, sa) = attach_end(c.from_at, &a, toward(c.to_at, &b, bb));
+    let (mut pb, nb, sb) = attach_end(c.to_at, &b, toward(c.from_at, &a, ba));
     // Two auto ends on facing sides: meet in the middle of the overlap.
-    if auto_a && auto_b {
-        let horizontal = fa[1] == 0.5 && fb[1] == 0.5;
-        let vertical = fa[0] == 0.5 && fb[0] == 0.5;
-        if horizontal {
+    if let (Attach::Auto, Attach::Auto, Some(fa), Some(fb)) = (c.from_at, c.to_at, sa, sb) {
+        if fa[1] == 0.5 && fb[1] == 0.5 {
             let (lo, hi) = (ba.y.max(bb.y), (ba.y + ba.h).min(bb.y + bb.h));
             if hi >= lo {
                 pa.y = (lo + hi) / 2.0;
                 pb.y = pa.y;
             }
-        } else if vertical {
+        } else if fa[0] == 0.5 && fb[0] == 0.5 {
             let (lo, hi) = (ba.x.max(bb.x), (ba.x + ba.w).min(bb.x + bb.w));
             if hi >= lo {
                 pa.x = (lo + hi) / 2.0;
@@ -194,6 +204,10 @@ fn endpoints(c: &ConnectorProps, a: End, b: End) -> [(Point, Option<Point>); 2] 
     }
     [(pa, na), (pb, nb)]
 }
+
+/// How far (points, plus the corner radius) an elbow between two sides
+/// facing the same way runs out past the outer end.
+const U_REACH: f32 = 8.0;
 
 fn sub(a: Point, b: Point) -> Point {
     Point::new(a.x - b.x, a.y - b.y)
@@ -246,6 +260,28 @@ fn route(c: &ConnectorProps, a: End, b: End) -> Vec<PathSegment> {
             let h1 = n1.y == 0.0;
             let mut pts = vec![p0];
             match (h0, h1) {
+                // Both ends facing the same way (left -> left): a U round
+                // the outer end.
+                (true, true) if n0.x == n1.x => {
+                    let reach = U_REACH + c.radius;
+                    let mx = if n0.x < 0.0 {
+                        p0.x.min(p1.x) - reach
+                    } else {
+                        p0.x.max(p1.x) + reach
+                    };
+                    pts.push(Point::new(mx, p0.y));
+                    pts.push(Point::new(mx, p1.y));
+                }
+                (false, false) if n0.y == n1.y => {
+                    let reach = U_REACH + c.radius;
+                    let my = if n0.y < 0.0 {
+                        p0.y.min(p1.y) - reach
+                    } else {
+                        p0.y.max(p1.y) + reach
+                    };
+                    pts.push(Point::new(p0.x, my));
+                    pts.push(Point::new(p1.x, my));
+                }
                 (true, true) => {
                     let mx = (p0.x + p1.x) / 2.0;
                     pts.push(Point::new(mx, p0.y));
@@ -494,7 +530,11 @@ fn band_outline(
 /// Draw every connector in `nodes` (the arranged layout of `doc`) between
 /// its ends' final boxes. A connector whose end was not laid out (not on the
 /// page) paints nothing, with a warning.
-pub(crate) fn place_connectors(doc: &Document, nodes: &mut [ComputedNode]) {
+pub(crate) fn place_connectors(
+    doc: &Document,
+    nodes: &mut [ComputedNode],
+    image_aspect: impl Fn(&crate::schema::ImageProps) -> Option<f32>,
+) {
     if !doc
         .nodes
         .iter()
@@ -515,8 +555,27 @@ pub(crate) fn place_connectors(doc: &Document, nodes: &mut [ComputedNode]) {
         let Some(&me) = by_id.get(&node.id) else {
             continue;
         };
-        let end = |i: usize| by_id.get(&doc.nodes[i].id).map(|&k| End::of(&nodes[k]));
-        let (Some(a), Some(b)) = (end(c.from), end(c.to)) else {
+        let end = |i: usize, sub| {
+            by_id.get(&doc.nodes[i].id).map(|&k| {
+                let mut n = nodes[k].clone();
+                // An image fitted inside its box ("contain"): its fractions
+                // are those of the visible picture.
+                if let NodeType::Image(img) = &doc.nodes[i].kind {
+                    if img.fit == crate::geom::ImageFit::Contain {
+                        if let Some(a) = image_aspect(img).filter(|a| *a > 0.0) {
+                            n.rect = crate::render::geometry::image_placement(
+                                n.rect,
+                                a,
+                                1.0,
+                                crate::geom::ImageFit::Contain,
+                            );
+                        }
+                    }
+                }
+                End::of(&n, sub)
+            })
+        };
+        let (Some(a), Some(b)) = (end(c.from, c.from_box), end(c.to, c.to_box)) else {
             tracing::warn!(
                 node = %node.id,
                 "connector: an end is not on the page; nothing drawn"

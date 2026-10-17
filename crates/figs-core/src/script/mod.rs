@@ -331,6 +331,8 @@ fn blank_node(kind: NodeKind) -> RawNode {
         to: None,
         from_at: None,
         to_at: None,
+        from_box: None,
+        to_box: None,
         route: None,
         gap: None,
         band: None,
@@ -361,13 +363,19 @@ fn set_doc(mut d: ScriptDoc, f: impl FnOnce(&mut RawPage)) -> ScriptDoc {
     d
 }
 
+/// Container children: nodes; an array among them is spliced in (a helper
+/// may return several nodes, e.g. connectors).
 fn cast_children(children: Array) -> Result<Vec<ScriptNode>, Box<EvalAltResult>> {
     let mut out = Vec::with_capacity(children.len());
     for child in children {
+        if child.is_array() {
+            out.extend(cast_children(child.cast::<Array>())?);
+            continue;
+        }
         let node = child
             .try_cast::<ScriptNode>()
             .ok_or_else(|| {
-                err("container children must be nodes (col/row/stack/text/rect/image/line/arrow/ellipse/path/connect)")
+                err("container children must be nodes (col/row/stack/text/rect/image/line/arrow/ellipse/path/connect) or arrays of nodes")
             })?;
         out.push(node);
     }
@@ -542,8 +550,25 @@ fn cast_attach(key: &str, v: Dynamic) -> Result<RawAttach, Box<EvalAltResult>> {
     }
 }
 
+/// A sub-box option of `connect`: `[fx0, fy0, fx1, fy1]`.
+fn cast_box(key: &str, v: Dynamic) -> Result<[f32; 4], Box<EvalAltResult>> {
+    let bad = || err(format!("connect(): `{key}` must be [fx0, fy0, fx1, fy1]"));
+    let a = v.try_cast::<Array>().ok_or_else(bad)?;
+    let mut out = [0.0f32; 4];
+    if a.len() != 4 {
+        return Err(bad());
+    }
+    for (o, d) in out.iter_mut().zip(&a) {
+        *o = dyn_to_f32(d).ok_or_else(bad)?;
+    }
+    if out[2] < out[0] || out[3] < out[1] {
+        return Err(bad());
+    }
+    Ok(out)
+}
+
 /// The options `connect(a, b, opts)` accepts.
-const CONNECT_KEYS: &str = "from, to, route, head, head_style, head_size, head_width, stroke, color, width, dash, cap, band, fill, radius, gap, opacity";
+const CONNECT_KEYS: &str = "from, to, from_box, to_box, route, head, head_style, head_size, head_width, stroke, color, width, dash, cap, band, fill, radius, gap, opacity";
 
 /// `connect(a, b[, opts])`: a connector node from `a` to `b`.
 fn connect_fn(a: Dynamic, b: Dynamic, opts: Map) -> NodeResult {
@@ -561,6 +586,8 @@ fn connect_fn(a: Dynamic, b: Dynamic, opts: Map) -> NodeResult {
         let k = k.as_str();
         match k {
             "from" => r.from_at = Some(cast_attach(k, v)?),
+            "from_box" => r.from_box = Some(cast_box(k, v)?),
+            "to_box" => r.to_box = Some(cast_box(k, v)?),
             "to" => r.to_at = Some(cast_attach(k, v)?),
             "route" => {
                 let s = string(k, v)?;

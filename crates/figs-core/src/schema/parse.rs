@@ -493,6 +493,14 @@ pub struct RawNode {
     /// Connector: where on `to`'s box it ends (as `from_at`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub to_at: Option<RawAttach>,
+    /// Connector: attach to this part of `from`'s box, `[fx0, fy0, fx1,
+    /// fy1]` fractions (a region of an image): `from_at` is then relative
+    /// to it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_box: Option<[f32; 4]>,
+    /// Connector: the part of `to`'s box `to_at` refers to (as `from_box`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to_box: Option<[f32; 4]>,
     /// Connector: `straight` (default), `elbow` (horizontal / vertical runs,
     /// corners rounded by `corner_radius`) or `curve` (a cubic leaving and
     /// entering along the sides' normals).
@@ -514,7 +522,8 @@ pub struct RawNode {
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum RawAttach {
-    /// `"auto"`, `"center"`, a side (`"left"`, …) or a corner (`"top-left"`, …).
+    /// `"auto"`, `"facing-1"` / `"facing-2"`, `"center"`, a side (`"left"`,
+    /// …) or a corner (`"top-left"`, …).
     Named(String),
     /// `[fx, fy]`: fractions of the box (`[0, 0]` top-left, `[1, 0.5]` right middle).
     Frac([f32; 2]),

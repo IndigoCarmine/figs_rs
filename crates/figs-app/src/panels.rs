@@ -1440,6 +1440,8 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
                     "to",
                     "from_at",
                     "to_at",
+                    "from_box",
+                    "to_box",
                     "route",
                     "gap",
                     "band",
@@ -1536,6 +1538,8 @@ fn enum_values(key: &str) -> Vec<&'static str> {
         "route" => vec!["straight", "elbow", "curve"],
         "from_at" | "to_at" => vec![
             "auto",
+            "facing-1",
+            "facing-2",
             "center",
             "left",
             "right",

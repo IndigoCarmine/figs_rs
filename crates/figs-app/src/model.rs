@@ -78,6 +78,8 @@ fn blank(kind: NodeKind) -> RawNode {
         to: None,
         from_at: None,
         to_at: None,
+        from_box: None,
+        to_box: None,
         route: None,
         gap: None,
         band: None,

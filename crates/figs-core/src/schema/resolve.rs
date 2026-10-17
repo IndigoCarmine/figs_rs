@@ -286,11 +286,13 @@ pub enum Attach {
     Auto,
     /// Fractions `[fx, fy]` of the node's (unrotated) box.
     Frac([f32; 2]),
+    /// Corner 1 or 2 (top or left first) of the side facing the other end.
+    Facing(u8),
 }
 
 impl Attach {
     /// The names `parse` accepts.
-    pub const NAMES: &'static str = "auto, center, left, right, top, bottom, top-left, top-right, bottom-left, bottom-right, or [fx, fy]";
+    pub const NAMES: &'static str = "auto, facing-1, facing-2, center, left, right, top, bottom, top-left, top-right, bottom-left, bottom-right, or [fx, fy]";
 
     /// A named point: `auto`, `center`, a side or a corner (`top-left`;
     /// `_` works as well as `-`).
@@ -298,6 +300,8 @@ impl Attach {
         let f = |x: f32, y: f32| Some(Attach::Frac([x, y]));
         match s.replace('_', "-").as_str() {
             "auto" => Some(Attach::Auto),
+            "facing-1" => Some(Attach::Facing(1)),
+            "facing-2" => Some(Attach::Facing(2)),
             "center" | "centre" | "middle" => f(0.5, 0.5),
             "left" => f(0.0, 0.5),
             "right" => f(1.0, 0.5),
@@ -320,6 +324,10 @@ pub struct ConnectorProps {
     pub to: usize,
     pub from_at: Attach,
     pub to_at: Attach,
+    /// The part of `from`'s / `to`'s box the attachment refers to,
+    /// `[fx0, fy0, fx1, fy1]` (`None`: the whole box).
+    pub from_box: Option<[f32; 4]>,
+    pub to_box: Option<[f32; 4]>,
     pub route: ConnectorRoute,
     /// How far each end stays off its attachment point `[start, end]`.
     pub gap: [f32; 2],
@@ -1210,6 +1218,8 @@ fn check_connector_fields(id: &str, raw: &RawNode) -> Result<(), ResolveError> {
         ("to", raw.to.is_some()),
         ("from_at", raw.from_at.is_some()),
         ("to_at", raw.to_at.is_some()),
+        ("from_box", raw.from_box.is_some()),
+        ("to_box", raw.to_box.is_some()),
         ("route", raw.route.is_some()),
         ("gap", raw.gap.is_some()),
         ("band", raw.band.is_some()),
@@ -1264,6 +1274,19 @@ fn connector(
     };
     let from_at = attach("from_at", &raw.from_at)?;
     let to_at = attach("to_at", &raw.to_at)?;
+    let sub_box = |field, v: Option<[f32; 4]>| -> Result<Option<[f32; 4]>, ResolveError> {
+        match v {
+            Some(b) if !b.iter().all(|x| x.is_finite()) || b[2] < b[0] || b[3] < b[1] => {
+                Err(invalid(
+                    field,
+                    "[fx0, fy0, fx1, fy1]: finite fractions, fx0 <= fx1, fy0 <= fy1".into(),
+                ))
+            }
+            v => Ok(v),
+        }
+    };
+    let from_box = sub_box("from_box", raw.from_box)?;
+    let to_box = sub_box("to_box", raw.to_box)?;
     let gap = raw.gap.map_or([0.0, 0.0], |g| g.ends());
     if !gap.iter().all(|g| g.is_finite()) {
         return Err(invalid("gap", "must be finite lengths".into()));
@@ -1323,6 +1346,8 @@ fn connector(
         to,
         from_at,
         to_at,
+        from_box,
+        to_box,
         route: raw.route.unwrap_or_default(),
         gap: [gap[0] * factor, gap[1] * factor],
         radius,

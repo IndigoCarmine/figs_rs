@@ -328,7 +328,7 @@ pub fn layout<M: LeafMeasure>(doc: &Document, measurer: &M) -> ComputedLayout {
 
     let mut nodes = Vec::with_capacity(doc.nodes.len());
     arrange::arrange(&ctx, doc.root, root_box, None, &mut nodes);
-    connect::place_connectors(doc, &mut nodes);
+    connect::place_connectors(doc, &mut nodes, |img| measurer.image_aspect(img));
 
     let overflows = ctx.overflows.into_inner();
     for o in &overflows {
