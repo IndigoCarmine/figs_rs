@@ -2059,7 +2059,9 @@ fn scheme_dress(who, n, labels, stretch) {
         if type_of(lab.above) != "()" { parts.push(lab.above); }
         parts.push(n);
         if type_of(lab.below) != "()" { parts.push(lab.below); }
-        n = col(parts).spacing(g).cross(cross);
+        // Centred on the node's box, not on an axis inside it (a step
+        // around a row holding steps): the node still gives the axis.
+        n = col(parts).spacing(g).cross(if stretch { "stretch" } else { "center" });
     }
     if lr {
         let parts = [];
@@ -2507,7 +2509,9 @@ fn colorbar(fill, labels, opts) {
 //   gap        arrow to label, cm (default `cycle_arrow_gap()`)
 //   size       label size, pt (default `base_size()`)
 // The arcs are core `curved_arrow`s in unit viewboxes, so they follow the
-// item's size.
+// item's size. They stay inside the box the result is given: beside the
+// item ("left-right") it shrinks to leave them room; above and below it
+// they add to its height.
 fn cycle_arrows(item) { cycle_arrows(item, #{}) }
 fn cycle_arrows(item, opts) {
     shape_opts("cycle_arrows", opts, ["direction", "sides", "colors", "color", "labels", "width",
@@ -2561,9 +2565,13 @@ fn cycle_arrows(item, opts) {
     let parts = [];
     if lr {
         if type_of(labs[0]) != "()" { parts.push(col([labs[0]]).main("center")); parts.push(rect().width(g)); }
-        parts += [bands[0], col([n]).main("center").cross("center"), bands[1]];
+        // The item takes what the arcs and labels leave: it shrinks to
+        // keep them inside the box.
+        parts += [bands[0], col([n]).main("center").cross("center").flex(1), bands[1]];
         if type_of(labs[1]) != "()" { parts.push(rect().width(g)); parts.push(col([labs[1]]).main("center")); }
-        return col([row(parts).stretch()]).main("center").cross("center");
+        // In a row of its own the arcs' row is sized to its content: the
+        // item cell (flex) is its own width, at most what the box leaves.
+        return col([row([row(parts).stretch()])]).main("center").cross("center");
     }
     if type_of(labs[0]) != "()" { parts.push(col([labs[0]]).cross("center")); parts.push(rect().height(g)); }
     parts += [bands[0], row([n]).main("center").cross("center"), bands[1]];
