@@ -1113,6 +1113,7 @@ fn cross_align_combo(ui: &mut egui::Ui, label: &str, v: &mut Option<CrossAxisAli
                     CrossAxisAlign::Stretch,
                     CrossAxisAlign::Baseline,
                     CrossAxisAlign::CapMiddle,
+                    CrossAxisAlign::Axis,
                 ] {
                     if ui.selectable_label(cur == a, cross_label(a)).clicked() {
                         *v = Some(a);
@@ -1143,6 +1144,7 @@ fn cross_label(a: CrossAxisAlign) -> &'static str {
         CrossAxisAlign::Stretch => "stretch",
         CrossAxisAlign::Baseline => "baseline",
         CrossAxisAlign::CapMiddle => "cap_middle",
+        CrossAxisAlign::Axis => "axis",
     }
 }
 
@@ -1340,6 +1342,8 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
                     "children",
                     "spacing",
                     "baseline_pitch",
+                    "equal_height",
+                    "overflow",
                     "main_axis_alignment",
                     "cross_axis_alignment",
                     "fill",
@@ -1464,6 +1468,8 @@ fn key_candidates(ctx: BlockCtx) -> Vec<&'static str> {
                 "y",
                 "anchor",
                 "rotate",
+                "axis",
+                "name",
                 "shadow",
                 "glow",
                 "opacity",
@@ -1501,7 +1507,9 @@ fn enum_values(key: &str) -> Vec<&'static str> {
             "stretch",
             "baseline",
             "cap_middle",
+            "axis",
         ],
+        "overflow" => vec!["visible", "clip", "shrink"],
         "stroke_align" => vec!["inside", "center", "outside"],
         _ => vec![],
     }

@@ -34,13 +34,14 @@
 //!   a 4:3 (width × 3/4) height with a warning; layout never panics.
 
 pub mod arrange;
+mod axis;
 mod baseline;
 pub mod computed;
 pub mod measure;
 
 pub use computed::{
-    ClipRegion, ComputedLayout, ComputedNode, FramePaint, PageGeom, PaintContent, PathPaint,
-    TextBox,
+    ClipRegion, ComputedLayout, ComputedNode, FramePaint, OverflowAction, OverflowReport, PageGeom,
+    PaintContent, PathPaint, TextBox,
 };
 
 use crate::geom::{Axis, BaselineKind, Size};
@@ -196,12 +197,28 @@ pub(crate) struct Ctx<'a, M: LeafMeasure> {
     /// Per node index: is this node's height content-derived (an auto-height
     /// root, or a child of a content-sized column)? Empty on fixed-height pages.
     pub content_h: Vec<bool>,
+    /// Per node index: its parent's index (`None` for the root).
+    pub parents: Vec<Option<usize>>,
+    /// Overflows found while arranging (see [`OverflowReport`]).
+    pub overflows: std::cell::RefCell<Vec<OverflowReport>>,
 }
 
 impl<M: LeafMeasure> Ctx<'_, M> {
     /// Whether node `idx` takes its measured height (unbounded vertical axis).
     pub fn is_content_h(&self, idx: usize) -> bool {
         self.content_h.get(idx).copied().unwrap_or(false)
+    }
+
+    /// The `name` of node `idx`'s nearest named ancestor.
+    pub fn named_ancestor(&self, idx: usize) -> Option<String> {
+        let mut at = self.parents.get(idx).copied().flatten();
+        while let Some(p) = at {
+            if let Some(n) = &self.doc.nodes[p].name {
+                return Some(n.clone());
+            }
+            at = self.parents[p];
+        }
+        None
     }
 }
 
@@ -267,10 +284,18 @@ pub fn layout<M: LeafMeasure>(doc: &Document, measurer: &M) -> ComputedLayout {
     let root = &doc.nodes[doc.root];
     let auto = doc.page.height_pt.is_none();
 
+    let mut parents = vec![None; doc.nodes.len()];
+    for (i, n) in doc.nodes.iter().enumerate() {
+        for &c in n.kind.children() {
+            parents[c] = Some(i);
+        }
+    }
     let mut ctx = Ctx {
         doc,
         measurer,
         content_h: Vec::new(),
+        parents,
+        overflows: Default::default(),
     };
     let height_pt = match doc.page.height_pt {
         Some(h) => h,
@@ -300,7 +325,15 @@ pub fn layout<M: LeafMeasure>(doc: &Document, measurer: &M) -> ComputedLayout {
     let mut nodes = Vec::with_capacity(doc.nodes.len());
     arrange::arrange(&ctx, doc.root, root_box, None, &mut nodes);
 
-    ComputedLayout { page, nodes }
+    let overflows = ctx.overflows.into_inner();
+    for o in &overflows {
+        tracing::warn!("{}", o.message(doc.page.unit));
+    }
+    ComputedLayout {
+        page,
+        nodes,
+        overflows,
+    }
 }
 
 /// Page height (points) that fits the root: measure it with the page width

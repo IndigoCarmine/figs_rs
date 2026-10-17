@@ -103,7 +103,7 @@ fn own_baseline<M: LeafMeasure>(
         }
         NodeType::Container { children, .. } => {
             let flex = Flex::of(ctx, idx)?;
-            (children, flex_slots(ctx, &flex, content, false))
+            (children, flex_slots(ctx, &flex, content))
         }
         NodeType::Stack {
             children,

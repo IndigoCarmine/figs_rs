@@ -34,6 +34,17 @@ impl Unit {
         }
     }
 
+    /// The unit's name as written in a document: `"cm"`, `"mm"`, …
+    pub fn name(self) -> &'static str {
+        match self {
+            Unit::Cm => "cm",
+            Unit::Mm => "mm",
+            Unit::In => "in",
+            Unit::Pt => "pt",
+            Unit::Px => "px",
+        }
+    }
+
     /// Convert a value expressed in this unit into points.
     pub fn convert(self, value: f32) -> f32 {
         value * self.to_pt()

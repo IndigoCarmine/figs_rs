@@ -63,13 +63,18 @@ You provide: hierarchy, style, content, and constraints (`flex`, `aspect_ratio`,
   below); under `column`/`row` and on the root they are ignored. A text's
   (or a column/row/stack's) `anchor` may name its baseline:
   `anchor = [0, "baseline"]`, and any node's its optical middle:
-  `anchor = [0.5, "cap_middle"]` (see [Baselines](#baselines)).
+  `anchor = [0.5, "cap_middle"]` (see [Baselines](#baselines)). `axis`
+  (`true` or `[fx, fy]`) marks the node's axis for a parent aligned by
+  `"axis"`, and `name` labels it in diagnostics (see
+  [Axes, equal-height rows & overflow](#axes-equal-height-rows--overflow)).
 - **Container** (`column`/`row`): `children`, `spacing`, `main_axis_alignment`
   (`start`/`center`/`end`/`space_between`/`space_around`/`space_evenly`),
   `cross_axis_alignment` (`start`/`center`/`end`/`stretch`/`baseline`/`cap_middle` —
-  the last two rows only, see [Baselines](#baselines)), `baseline_pitch`
+  the last two rows only, see [Baselines](#baselines) — and `axis`), `baseline_pitch`
   (columns: first baselines exactly that far apart, see
-  [Baseline pitch](#baseline-pitch)). `stretch` fills the cross axis only
+  [Baseline pitch](#baseline-pitch)), `equal_height` (rows) and `overflow`
+  (`visible`/`clip`/`shrink`; see
+  [Axes, equal-height rows & overflow](#axes-equal-height-rows--overflow)). `stretch` fills the cross axis only
   for children whose cross size is unconstrained: a child with its own
   `width` (in a column; `height` in a row) keeps it and sits at the start,
   after its margin, as with CSS `align-items: stretch`.
@@ -1021,6 +1026,56 @@ outer container): both default to zero, so content reaches the page border. The
 GUI's starter document no longer adds an outer inset. See
 [`examples/grid_4panel.toml`](examples/grid_4panel.toml) for both at once.
 
+### Axes, equal-height rows & overflow
+
+**Axis alignment.** `cross_axis_alignment = "axis"` (script:
+`.cross("axis")`) lines a row's children up by their horizontal **axis**
+lines (a column's by their vertical ones) instead of their box centres, and
+centres the aligned group across the container. A node's axis is the point
+it declares — `axis = [fx, fy]` (script `.axis(fx, fy)`), fractions of its
+box — else, for a column/row/stack, that of its first child that is
+*marked* (has an `axis`, or a marked node inside), offset by where layout
+puts it, else its box middle; `axis = true` (`.axis()`) just marks a node
+as its container's axis provider. It propagates through any nesting like a
+first baseline does, and turns with quarter-turned nodes. So an icon with a
+caption above and a longer one below stays on a reaction scheme's centre
+line without padding the shorter side:
+
+```text
+row([col([text("major"), image("c.png").height(2).axis(), text("Product C, 92 %")]),
+     arrow(..), image("d.png").height(2)]).cross("axis")
+```
+
+**Equal-height rows.** `equal_height = true` on a row (script
+`.equal_height()`) gives the children whose height follows their width —
+images, `aspect_ratio` nodes, plots, and panels built on them (labelled,
+overlaid, captioned) — **one shared height** that makes the row exactly fill
+its width; other children (text, explicit sizes) keep their natural width,
+and `flex` is ignored. Widths come out proportional to the aspect ratios,
+computed at layout time from the real image sizes: each child's height is
+measured at two widths (an affine `h = s·w + c`, so a fixed caption under an
+image is fine — the *items* then share one height) and refined once at the
+solution.
+
+**Overflow.** When a column's (row's) children need more room along its main
+axis than its content box has, layout records an `OverflowReport`
+(`ComputedLayout::overflows`) and logs a warning naming the container — its
+`name` (any node may have one: `name = "Results"`, script `.name(..)`), or
+its id and nearest named ancestor — with the amounts in the page unit and the
+named children's extents:
+
+```text
+column section "Results" (content) (node37): content is 1.61 cm too tall (needs 14.20 cm, has 12.59 cm); clipped at the box
+```
+
+`overflow` says what the page shows: `visible` (default: the children run
+on), `clip` (clipped to the box — only when they overflow, so a fitting
+container is unaffected) or `shrink` (laid out at the box's width and
+scaled down uniformly into it, centred across; nothing changes when they
+fit). A single child taller than its box is clamped to it (it is given a box
+of that size), so the report comes from the level where the children add
+up.
+
 ## Scripting with Rhai (`.figs`)
 
 For variables, arithmetic and reusable components, author a
@@ -1941,7 +1996,8 @@ Modeled on Flutter's `BoxConstraints`/`RenderFlex`:
 - **arrange** (top-down): fixed children take their measured size, flex children
   split the remainder by weight; alignment distributes any leftover;
   `aspect_ratio` derives the cross axis from the (possibly flex-imposed) main
-  axis. Overflow clamps and warns — it never panics. A `stack` instead places
+  axis. Overflow is reported (named, in the page unit) and, per `overflow`,
+  left visible, clipped or shrunk — it never panics. A `stack` instead places
   each child at its `x`/`y` offset, filling un-offset, unsized axes.
 - **tight constraints**: when a container's size on an axis is already known, a
   stretched cross axis or a flex share is handed to the child during measure

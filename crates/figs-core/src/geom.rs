@@ -383,6 +383,68 @@ pub enum CrossAxisAlign {
     /// [`BaselineKind::CapMiddle`]); a child with no text inside is centred
     /// on that line by its box. In a column it acts as `start`.
     CapMiddle,
+    /// Line up the children's **axes** (see [`AxisMark`]): in a row their
+    /// horizontal axis lines, in a column their vertical ones. A child's axis
+    /// is the one it declares (`axis`), else that of its first child that
+    /// has one somewhere inside, else its box middle. The aligned group is
+    /// centred across the container.
+    Axis,
+}
+
+/// A node's **axis**: the point its parent's `cross_axis_alignment = "axis"`
+/// lines up (a horizontal line through it in a row, a vertical one in a
+/// column). `Auto` (`axis = true`) marks the node as its container's axis
+/// provider without moving the point: a leaf's box middle, a container's
+/// own axis (its first marked child's, else its box middle). `At([fx, fy])`
+/// puts it at those fractions of the node's (unrotated) box.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AxisMark {
+    Auto,
+    At([f32; 2]),
+}
+
+impl Serialize for AxisMark {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            AxisMark::Auto => s.serialize_bool(true),
+            AxisMark::At(f) => f.serialize(s),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for AxisMark {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Flag(bool),
+            At([f32; 2]),
+        }
+        match Raw::deserialize(d)? {
+            Raw::Flag(true) => Ok(AxisMark::Auto),
+            Raw::Flag(false) => Err(serde::de::Error::custom(
+                "axis = false: leave `axis` out instead (true or [fx, fy])",
+            )),
+            Raw::At(f) => Ok(AxisMark::At(f)),
+        }
+    }
+}
+
+/// What a `column` / `row` does when its children don't fit its box along
+/// the main axis. Every overflow is reported (see
+/// [`crate::layout::OverflowReport`]); this says what happens on the page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Overflow {
+    /// The children run past the box (the default).
+    #[default]
+    Visible,
+    /// The children are clipped to the box — only when they overflow, so a
+    /// container that fits paints exactly as a `visible` one.
+    Clip,
+    /// The children are laid out in a box enlarged by `1 / s` and scaled by
+    /// `s` (< 1) so they just fit; nothing changes when they fit already.
+    Shrink,
 }
 
 /// How a node distributes its children. Determines the main/cross axes.

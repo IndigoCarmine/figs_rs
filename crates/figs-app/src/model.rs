@@ -13,6 +13,7 @@ use serde::Serialize;
 fn blank(kind: NodeKind) -> RawNode {
     RawNode {
         kind,
+        name: None,
         flex: None,
         width: None,
         height: None,
@@ -23,6 +24,7 @@ fn blank(kind: NodeKind) -> RawNode {
         y: None,
         anchor: None,
         rotate: None,
+        axis: None,
         viewbox: None,
         contain: false,
         clip: false,
@@ -34,6 +36,8 @@ fn blank(kind: NodeKind) -> RawNode {
         main_axis_alignment: None,
         cross_axis_alignment: None,
         baseline_pitch: None,
+        equal_height: false,
+        overflow: None,
         content: None,
         font_size: None,
         font_family: None,

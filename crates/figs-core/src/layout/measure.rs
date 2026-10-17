@@ -17,6 +17,7 @@
 use crate::geom::{Axis, CrossAxisAlign, Edges, Size};
 use crate::schema::{Common, NodeType};
 
+use super::axis::axis_offset;
 use super::baseline::{anchor_shift, pitch_gaps, row_baseline, row_line};
 use super::{cross_of, main_of, Constraints, Ctx, LeafMeasure, FALLBACK_IMAGE_ASPECT};
 
@@ -55,13 +56,14 @@ fn measure_own<M: LeafMeasure>(ctx: &Ctx<M>, idx: usize, c: Constraints) -> Size
             spacing,
             baseline_pitch,
             cross_axis,
+            equal_height,
             ..
         } => measure_container(
             ctx,
             *axis,
             children,
             (*spacing, baseline_pitch.filter(|_| *axis == Axis::Vertical)),
-            *cross_axis,
+            (*cross_axis, *equal_height && *axis == Axis::Horizontal),
             &node.common,
             c,
         ),
@@ -160,13 +162,15 @@ fn measure_own<M: LeafMeasure>(ctx: &Ctx<M>, idx: usize, c: Constraints) -> Size
 /// With a tight cross axis and `stretch`, children are measured at the tight
 /// cross size; with a tight main axis, flex children are measured at their flex
 /// share (as arrange will size them). Otherwise flex children contribute their
-/// intrinsic size — in particular under an unbounded main axis.
-fn measure_container<M: LeafMeasure>(
+/// intrinsic size — in particular under an unbounded main axis. An
+/// `equal_height` row with a bounded width fills it (see
+/// [`equal_height_widths`]).
+pub(super) fn measure_container<M: LeafMeasure>(
     ctx: &Ctx<M>,
     axis: Axis,
     children: &[usize],
     (spacing, pitch): (f32, Option<f32>),
-    cross_align: CrossAxisAlign,
+    (cross_align, equal_height): (CrossAxisAlign, bool),
     common: &Common,
     c: Constraints,
 ) -> Size {
@@ -195,24 +199,32 @@ fn measure_container<M: LeafMeasure>(
         cc
     };
 
-    let flex_of = |child: usize| {
-        ctx.doc.nodes[child]
-            .common
-            .flex
-            .filter(|w| *w > 0.0 && main_tight)
-    };
     let gaps = if children.is_empty() {
         0.0
     } else {
         spacing * (children.len() as f32 - 1.0)
     };
+    // An equal-height row fills its width: the widths of the children that
+    // scale with it (no bounded width: measured as usual).
+    let shared = (equal_height && inner_max_w.is_finite())
+        .then(|| equal_height_widths(ctx, children, inner_max_w, gaps, base));
+    let flex_of = |child: usize| {
+        ctx.doc.nodes[child]
+            .common
+            .flex
+            .filter(|w| *w > 0.0 && main_tight && shared.is_none())
+    };
 
     // Non-flex children (all of them when the main axis isn't tight) first.
     let mut sizes: Vec<Option<Size>> = children
         .iter()
-        .map(|&child| match flex_of(child) {
+        .enumerate()
+        .map(|(i, &child)| match flex_of(child) {
             Some(_) => None,
-            None => Some(measure(ctx, child, child_c(child, None))),
+            None => {
+                let w = shared.as_ref().and_then(|ws| ws[i]);
+                Some(measure(ctx, child, child_c(child, w)))
+            }
         })
         .collect();
 
@@ -249,7 +261,9 @@ fn measure_container<M: LeafMeasure>(
     let mut cross_max = 0.0f32;
     // Baseline rows: the tallest part above the shared baseline plus the
     // tallest part below it (likewise the shared cap middle).
+    // Axis alignment likewise, across either kind of container.
     let row_kind = row_line(axis, cross_align);
+    let by_axis = cross_align == CrossAxisAlign::Axis;
     let (mut above, mut below) = (0.0f32, 0.0f32);
     for (&child, sz) in children.iter().zip(&sizes) {
         let sz = sz.unwrap_or_default();
@@ -261,9 +275,13 @@ fn measure_container<M: LeafMeasure>(
             let b = row_baseline(ctx, child, sz, margin, kind);
             above = above.max(b);
             below = below.max(outer.h - b);
+        } else if by_axis {
+            let b = axis_line(ctx, axis, child, sz, margin);
+            above = above.max(b);
+            below = below.max(cross_of(axis, outer) - b);
         }
     }
-    if row_kind.is_some() {
+    if row_kind.is_some() || by_axis {
         cross_max = cross_max.max(above + below);
     }
     main_sum += gaps;
@@ -276,6 +294,107 @@ fn measure_container<M: LeafMeasure>(
         w + common.padding.horizontal(),
         h + common.padding.vertical(),
     )
+}
+
+/// Distance from the leading cross edge of a child's margin box (top in a
+/// row, left in a column) to its axis line, its border box being `fp`.
+pub(super) fn axis_line<M: LeafMeasure>(
+    ctx: &Ctx<M>,
+    axis: Axis,
+    child: usize,
+    fp: Size,
+    margin: Edges,
+) -> f32 {
+    let lead = match axis {
+        Axis::Horizontal => margin.top,
+        Axis::Vertical => margin.left,
+    };
+    lead + axis_offset(ctx, child, fp, cross_axis(axis))
+}
+
+/// The border-box width of each child of an `equal_height` row whose
+/// content box is `avail` wide (`gaps`: the total spacing): `Some(w)` for a
+/// child whose height follows its width — all of them then end up one
+/// height, and with the rest at their natural width the row is exactly
+/// full — `None` for a child that keeps its natural width (text, explicit
+/// sizes: anything whose height doesn't grow with its width).
+///
+/// Each child's height is taken as an affine function of its width, `h =
+/// s·w + c` (an image: `c = 0`, `s = 1/aspect`; a captioned panel: `c` = the
+/// caption), measured at two widths and refined once at the solution, so
+/// the shared height `H` solves `Σ (H - c_i) / s_i = room`.
+pub(super) fn equal_height_widths<M: LeafMeasure>(
+    ctx: &Ctx<M>,
+    children: &[usize],
+    avail: f32,
+    gaps: f32,
+    base: Constraints,
+) -> Vec<Option<f32>> {
+    let n = children.len();
+    let mut out = vec![None; n];
+    if n == 0 || !avail.is_finite() {
+        return out;
+    }
+    let height_at = |child: usize, w: f32| {
+        let c = Constraints::loose(w, f32::INFINITY).with_tight_w(w);
+        measure(ctx, child, c).h
+    };
+    // (slope, intercept) of h(w) between widths a and b; None when flat.
+    let line = |child: usize, a: f32, b: f32| {
+        let (ha, hb) = (height_at(child, a), height_at(child, b));
+        let s = (ha - hb) / (a - b);
+        (s.is_finite() && s > 1e-3).then_some((s, ha - s * a))
+    };
+    let margins: Vec<f32> = children
+        .iter()
+        .map(|&c| ctx.doc.nodes[c].common.margin.horizontal())
+        .collect();
+    let probe = ((avail - gaps) / n as f32).max(1.0);
+    let mut lines: Vec<Option<(f32, f32)>> = children
+        .iter()
+        .map(|&c| line(c, probe, probe * 0.5))
+        .collect();
+    if lines.iter().all(Option::is_none) {
+        return out;
+    }
+    // The fixed children's natural widths, and every margin, come off the top.
+    let fixed: f32 = (0..n)
+        .map(|i| match lines[i] {
+            Some(_) => margins[i],
+            None => measure(ctx, children[i], base).w + margins[i],
+        })
+        .sum();
+    let room = avail - gaps - fixed;
+    if room <= 0.0 {
+        return out;
+    }
+    let solve = |lines: &[Option<(f32, f32)>]| {
+        let (mut num, mut den) = (room, 0.0f32);
+        for (s, c) in lines.iter().flatten() {
+            num += c / s;
+            den += 1.0 / s;
+        }
+        let h = num / den;
+        lines
+            .iter()
+            .map(|l| l.map(|(s, c)| ((h - c) / s).max(0.0)))
+            .collect::<Vec<_>>()
+    };
+    let first = solve(&lines);
+    // Refine each line around its solution (wrapping captions, clamps).
+    for i in 0..n {
+        if let (Some(w), Some(_)) = (first[i], lines[i]) {
+            if w > 1.0 {
+                if let Some(l) = line(children[i], w, w * 0.8) {
+                    lines[i] = Some(l);
+                }
+            }
+        }
+    }
+    for (o, w) in out.iter_mut().zip(solve(&lines)) {
+        *o = w;
+    }
+    out
 }
 
 /// Wrap-content size of a stack: the furthest extent of any child

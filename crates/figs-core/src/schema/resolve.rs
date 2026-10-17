@@ -13,9 +13,9 @@
 use std::collections::HashMap;
 
 use crate::geom::{
-    AnchorValue, ArcSweep, ArrowHead, Axis, Color, CrossAxisAlign, Edges, Effects, HeadStyle,
-    HeadWidth, ImageFit, LineJoin, MainAxisAlign, Paint, PathSegment, Point, Shadow, StrokeAlign,
-    StrokeStyle, TextAlign, ViewBox,
+    AnchorValue, ArcSweep, ArrowHead, Axis, AxisMark, Color, CrossAxisAlign, Edges, Effects,
+    HeadStyle, HeadWidth, ImageFit, LineJoin, MainAxisAlign, Overflow, Paint, PathSegment, Point,
+    Shadow, StrokeAlign, StrokeStyle, TextAlign, ViewBox,
 };
 use crate::path::arc_to_cubics;
 
@@ -72,6 +72,9 @@ pub enum ResolveError {
 /// Page geometry and presentation, with all lengths converted to points.
 #[derive(Debug, Clone)]
 pub struct PageInfo {
+    /// The unit the document was written in (lengths here are points; this
+    /// is for messages, e.g. an overflow reported in cm).
+    pub unit: crate::units::Unit,
     pub width_pt: f32,
     /// Fixed page height in points, or `None` for `height = "auto"`: layout
     /// then derives it from the content ([`crate::layout::ComputedLayout`]'s
@@ -138,6 +141,8 @@ impl Document {
 #[derive(Debug)]
 pub struct Node {
     pub id: String,
+    /// The node's human-readable `name`, for diagnostics.
+    pub name: Option<String>,
     pub common: Common,
     pub kind: NodeType,
     /// Shadows / glow / group opacity (default: none). Visual only.
@@ -168,6 +173,9 @@ pub struct Common {
     /// node's own (unrotated) box; `margin`, `flex`, `x`/`y` and `anchor` act
     /// in the parent's frame, on the footprint.
     pub rotate: f32,
+    /// The node's axis for a parent aligning children by `"axis"` (see
+    /// [`AxisMark`]).
+    pub axis: Option<AxisMark>,
 }
 
 impl Common {
@@ -207,6 +215,11 @@ pub enum NodeType {
         baseline_pitch: Option<f32>,
         main_axis: MainAxisAlign,
         cross_axis: CrossAxisAlign,
+        /// Row: children whose height follows their width share one height
+        /// and fill the row (see `RawNode::equal_height`).
+        equal_height: bool,
+        /// What an overflow along the main axis does (see [`Overflow`]).
+        overflow: Overflow,
         /// Background / border / clip (`None` = a plain container).
         decoration: Option<Box<Decoration>>,
     },
@@ -488,6 +501,7 @@ pub fn resolve(raw: RawDocument) -> Result<Document, ResolveError> {
         });
     }
     let page = PageInfo {
+        unit: raw.page.unit,
         min_stroke_px,
         width_pt: factor * raw.page.width,
         height_pt: raw.page.height.fixed().map(|h| factor * h),
@@ -732,7 +746,31 @@ fn convert_node(
         y: raw.y.map(|y| y * factor),
         anchor: raw.anchor,
         rotate: raw.rotate.unwrap_or(0.0),
+        axis: raw.axis,
     };
+    if let Some(AxisMark::At(f)) = raw.axis {
+        if !f.iter().all(|v| v.is_finite()) {
+            return Err(ResolveError::InvalidField {
+                node: id.to_string(),
+                field: "axis",
+                reason: "true, or [fx, fy]: finite fractions of the box".into(),
+            });
+        }
+    }
+    if raw.equal_height && raw.kind != NodeKind::Row {
+        return Err(ResolveError::InvalidField {
+            node: id.to_string(),
+            field: "equal_height",
+            reason: "only a row shares one height among its children".into(),
+        });
+    }
+    if raw.overflow.is_some() && !matches!(raw.kind, NodeKind::Column | NodeKind::Row) {
+        return Err(ResolveError::InvalidField {
+            node: id.to_string(),
+            field: "overflow",
+            reason: "only a column/row handles an overflow (visible, clip, shrink)".into(),
+        });
+    }
     if !common.rotate.is_finite() {
         return Err(ResolveError::InvalidField {
             node: id.to_string(),
@@ -854,6 +892,8 @@ fn convert_node(
                 baseline_pitch: raw.baseline_pitch.map(|p| p * factor),
                 main_axis: raw.main_axis_alignment.unwrap_or_default(),
                 cross_axis: raw.cross_axis_alignment.unwrap_or_default(),
+                equal_height: raw.equal_height,
+                overflow: raw.overflow.unwrap_or_default(),
                 decoration: decoration()?,
             }
         }
@@ -1017,6 +1057,7 @@ fn convert_node(
     }
     Ok(Node {
         id: id.to_string(),
+        name: raw.name.clone(),
         common,
         kind,
         effects,

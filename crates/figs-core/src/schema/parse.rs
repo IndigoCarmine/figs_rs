@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::geom::{
-    AnchorValue, ArcSweep, ArrowHead, Color, CrossAxisAlign, Edges, HeadStyle, HeadWidth, ImageFit,
-    LineCap, LineJoin, MainAxisAlign, Paint, StrokeAlign, TextAlign,
+    AnchorValue, ArcSweep, ArrowHead, AxisMark, Color, CrossAxisAlign, Edges, HeadStyle, HeadWidth,
+    ImageFit, LineCap, LineJoin, MainAxisAlign, Overflow, Paint, StrokeAlign, TextAlign,
 };
 use crate::units::Unit;
 
@@ -193,6 +193,10 @@ pub enum NodeKind {
 pub struct RawNode {
     #[serde(rename = "type")]
     pub kind: NodeKind,
+    /// A human-readable name for diagnostics (an overflow warning names the
+    /// container by it: `section "Results"`); no effect on layout or paint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 
     // ---- shared layout properties (all node types) ----
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -247,6 +251,12 @@ pub struct RawNode {
     /// paint-only: layout uses the unrotated box and the drawing may overhang.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rotate: Option<f32>,
+    /// The node's axis for a parent with `cross_axis_alignment = "axis"`:
+    /// `true` marks it as its container's axis provider (its box middle, or
+    /// for a container its own axis), `[fx, fy]` puts the axis point at those
+    /// fractions of its box (see [`AxisMark`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub axis: Option<AxisMark>,
 
     /// User coordinates `[x0, y0, x1, y1]` laid over the content box (`x0` ->
     /// left, `x1` -> right, `y0` -> top, `y1` -> bottom; reversing a pair flips
@@ -298,6 +308,18 @@ pub struct RawNode {
     /// inside) keeps `spacing`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub baseline_pitch: Option<f32>,
+    /// Row only: the children whose height follows their width (images,
+    /// aspect-ratio nodes, panels built on them) share **one height**, and
+    /// together with the other children (at their natural width) and the
+    /// spacing fill the row's width — widths in proportion to the aspect
+    /// ratios. `flex` is ignored in such a row.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub equal_height: bool,
+    /// Column / row: what happens when the children overflow the box along
+    /// the main axis — `visible` (default), `clip` or `shrink` (see
+    /// [`Overflow`]). Every overflow is reported either way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overflow: Option<Overflow>,
 
     // ---- text ----
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -5,15 +5,19 @@
 //! paint on top).
 
 use crate::geom::{
-    quarter_turns, Affine, Axis, CrossAxisAlign, Edges, MainAxisAlign, Rect, Size, ViewBox,
+    quarter_turns, Affine, Axis, CrossAxisAlign, Edges, MainAxisAlign, Overflow, Rect, Size,
+    ViewBox,
 };
 use crate::schema::{Common, NodeType, RectProps, TextProps};
 
 use super::baseline::{anchor_shift, pitch_gaps, row_baseline, row_line};
-use super::computed::{ClipRegion, ComputedNode, FramePaint, PaintContent, PathPaint, TextBox};
+use super::computed::{
+    ClipRegion, ComputedNode, FramePaint, OverflowAction, OverflowReport, PaintContent, PathPaint,
+    TextBox,
+};
 use super::measure::{
-    cross_axis, cross_margin, has_cross_size, measure, stack_child_avail, stack_child_constraints,
-    stack_child_size, tighten,
+    axis_line, cross_axis, cross_margin, equal_height_widths, has_cross_size, measure,
+    measure_container, stack_child_avail, stack_child_constraints, stack_child_size, tighten,
 };
 use super::{cross_of, main_of, Constraints, Ctx, LeafMeasure};
 
@@ -53,13 +57,14 @@ pub(crate) fn arrange<M: LeafMeasure>(
     let subtree_start = out.len();
     let self_index = subtree_start - 1;
 
+    let mut overflow_clip = false;
     match &node.kind {
-        NodeType::Container { .. } => {
+        NodeType::Container { overflow, .. } => {
             let content = rect.inset(node.common.padding);
             // A column whose height is content-derived (auto-height page) gives
             // every child its measured height; flex is ignored on that axis.
             if let Some(flex) = Flex::of(ctx, idx) {
-                layout_children(ctx, &flex, content, xf, out);
+                overflow_clip = layout_children(ctx, idx, &flex, content, *overflow, xf, out);
             }
         }
         NodeType::Stack {
@@ -87,6 +92,17 @@ pub(crate) fn arrange<M: LeafMeasure>(
         for n in &mut out[subtree_start..] {
             // Ancestors finish later, so inserting at the front keeps the
             // list outermost-first.
+            n.clips.insert(0, region.clone());
+        }
+    }
+    if overflow_clip {
+        // `overflow = "clip"` and the children overflowed: keep them in the box.
+        let region = ClipRegion {
+            rect,
+            radius: node.kind.decoration().map_or(0.0, |d| d.corner_radius),
+            transform: xf,
+        };
+        for n in &mut out[subtree_start..] {
             n.clips.insert(0, region.clone());
         }
     }
@@ -322,6 +338,9 @@ pub(super) struct Flex<'a> {
     /// axis — children are measured with unbounded height and keep their
     /// measured height, flex or not (auto-height pages).
     pub content_h: bool,
+    /// Row: the children that scale with their width share one height and
+    /// fill the row (see [`equal_height_widths`]).
+    pub equal_height: bool,
 }
 
 impl<'a> Flex<'a> {
@@ -334,6 +353,7 @@ impl<'a> Flex<'a> {
             baseline_pitch,
             main_axis,
             cross_axis,
+            equal_height,
             ..
         } = &ctx.doc.nodes[idx].kind
         else {
@@ -347,34 +367,175 @@ impl<'a> Flex<'a> {
             main_align: *main_axis,
             cross_align: *cross_axis,
             content_h: *axis == Axis::Vertical && ctx.is_content_h(idx),
+            equal_height: *equal_height && *axis == Axis::Horizontal,
         })
     }
 }
 
-/// Lay a column's/row's children out in `content` and arrange each in its
-/// slot.
+/// Lay a column's/row's (node `idx`) children out in `content` and arrange
+/// each in its slot. An overflow along the main axis is reported; under
+/// `overflow = "shrink"` the children are laid out in an enlarged box and
+/// scaled into `content` instead. Returns whether the subtree must be
+/// clipped to the node's box (`overflow = "clip"` and an overflow).
 fn layout_children<M: LeafMeasure>(
     ctx: &Ctx<M>,
+    idx: usize,
     flex: &Flex,
     content: Rect,
+    overflow: Overflow,
     xf: Option<Affine>,
     out: &mut Vec<ComputedNode>,
-) {
-    let slots = flex_slots(ctx, flex, content, true);
+) -> bool {
+    let have = main_of(flex.axis, content.size());
+    if overflow == Overflow::Shrink && !flex.content_h {
+        if let Some((s, need)) = shrink_scale(ctx, flex, content) {
+            // Laid out as usual in a box as wide (tall, for a row) as the
+            // content box and long enough along the main axis, then scaled
+            // by `s` into the content box, centred across.
+            let (virt, dx, dy) = match flex.axis {
+                Axis::Vertical => (
+                    Rect::new(content.x, content.y, content.w, content.h / s),
+                    content.w * (1.0 - s) / 2.0,
+                    0.0,
+                ),
+                Axis::Horizontal => (
+                    Rect::new(content.x, content.y, content.w / s, content.h),
+                    0.0,
+                    content.h * (1.0 - s) / 2.0,
+                ),
+            };
+            let scale = Affine {
+                a: s,
+                b: 0.0,
+                c: 0.0,
+                d: s,
+                e: content.x * (1.0 - s) + dx,
+                f: content.y * (1.0 - s) + dy,
+            };
+            let cxf = Some(match xf {
+                Some(p) => scale.then(p),
+                None => scale,
+            });
+            let slots = flex_slots(ctx, flex, virt);
+            report_overflow(
+                ctx,
+                idx,
+                flex,
+                &slots,
+                need,
+                have,
+                OverflowAction::Shrunk(s),
+            );
+            for (&child, slot) in flex.children.iter().zip(slots) {
+                arrange(ctx, child, slot, cxf, out);
+            }
+            return false;
+        }
+    }
+    let slots = flex_slots(ctx, flex, content);
+    // How far the last margin box runs past the content box.
+    let end = match flex.axis {
+        Axis::Vertical => content.y + content.h,
+        Axis::Horizontal => content.x + content.w,
+    };
+    let reach = flex
+        .children
+        .iter()
+        .zip(&slots)
+        .map(|(&c, s)| {
+            let m = ctx.doc.nodes[c].common.margin;
+            match flex.axis {
+                Axis::Vertical => s.y + s.h + m.bottom,
+                Axis::Horizontal => s.x + s.w + m.right,
+            }
+        })
+        .fold(f32::NEG_INFINITY, f32::max);
+    let over = reach - end;
+    let clip = over > 0.01;
+    if clip {
+        let action = match overflow {
+            Overflow::Clip => OverflowAction::Clipped,
+            _ => OverflowAction::Visible,
+        };
+        report_overflow(ctx, idx, flex, &slots, have + over, have, action);
+    }
     for (&child, slot) in flex.children.iter().zip(slots) {
         arrange(ctx, child, slot, xf, out);
     }
+    clip && overflow == Overflow::Clip
+}
+
+/// The scale `s` (< 1) that fits a column's/row's children, laid out at
+/// the content box's cross size, into `content` along the main axis — a
+/// uniform scale of the layout, so images and text shrink alike — with the
+/// unscaled extent they need; `None` when they fit as they are.
+fn shrink_scale<M: LeafMeasure>(ctx: &Ctx<M>, flex: &Flex, content: Rect) -> Option<(f32, f32)> {
+    let axis = flex.axis;
+    let have = main_of(axis, content.size());
+    let cross = cross_of(axis, content.size());
+    let c = match axis {
+        Axis::Vertical => Constraints::loose(cross, f32::INFINITY).with_tight_w(cross),
+        Axis::Horizontal => Constraints::loose(f32::INFINITY, cross).with_tight_h(cross),
+    };
+    let need = main_of(
+        axis,
+        measure_container(
+            ctx,
+            axis,
+            flex.children,
+            (flex.spacing, flex.pitch),
+            (flex.cross_align, flex.equal_height),
+            &Common::default(),
+            c,
+        ),
+    );
+    if need <= have + 0.01 || need.is_nan() || have <= 0.0 {
+        return None;
+    }
+    Some(((have / need).max(0.01), need))
+}
+
+/// Record (once per node) that node `idx`'s children need `need` points
+/// along its main axis where it has `have`, naming it and its named
+/// children (with their extent in `slots`) for the message.
+fn report_overflow<M: LeafMeasure>(
+    ctx: &Ctx<M>,
+    idx: usize,
+    flex: &Flex,
+    slots: &[Rect],
+    need: f32,
+    have: f32,
+    action: OverflowAction,
+) {
+    let node = &ctx.doc.nodes[idx];
+    let mut reports = ctx.overflows.borrow_mut();
+    if reports.iter().any(|r| r.node == node.id) {
+        return;
+    }
+    let children = flex
+        .children
+        .iter()
+        .zip(slots)
+        .filter_map(|(&c, s)| {
+            let name = ctx.doc.nodes[c].name.clone()?;
+            Some((name, main_of(flex.axis, s.size())))
+        })
+        .collect();
+    reports.push(OverflowReport {
+        node: node.id.clone(),
+        name: node.name.clone(),
+        within: ctx.named_ancestor(idx),
+        axis: flex.axis,
+        need_pt: need,
+        room_pt: have,
+        action,
+        children,
+    });
 }
 
 /// The slot (border box in the container's frame) of each child of a
-/// column/row whose content box is `content`; `warn`: report a main-axis
-/// overflow (off for baseline queries, which lay out again).
-pub(super) fn flex_slots<M: LeafMeasure>(
-    ctx: &Ctx<M>,
-    flex: &Flex,
-    content: Rect,
-    warn: bool,
-) -> Vec<Rect> {
+/// column/row whose content box is `content`.
+pub(super) fn flex_slots<M: LeafMeasure>(ctx: &Ctx<M>, flex: &Flex, content: Rect) -> Vec<Rect> {
     let Flex {
         axis,
         children,
@@ -383,6 +544,7 @@ pub(super) fn flex_slots<M: LeafMeasure>(
         main_align,
         cross_align,
         content_h,
+        equal_height,
     } = *flex;
     let n = children.len();
     if n == 0 {
@@ -412,16 +574,28 @@ pub(super) fn flex_slots<M: LeafMeasure>(
         cc
     };
 
+    // An equal-height row: the widths of the children that scale with it.
+    let shared: Option<Vec<Option<f32>>> = equal_height.then(|| {
+        let gaps = spacing * (n as f32 - 1.0);
+        equal_height_widths(ctx, children, content_main, gaps, base_c)
+    });
+
     // Measure each child's border box and record its flex weight + margins.
     let mut measured: Vec<Size> = Vec::with_capacity(n);
     let mut margins: Vec<Edges> = Vec::with_capacity(n);
     let mut flex: Vec<Option<f32>> = Vec::with_capacity(n);
-    for &child in children {
+    for (i, &child) in children.iter().enumerate() {
         let common = &ctx.doc.nodes[child].common;
-        measured.push(measure(ctx, child, child_c(child, None)));
+        let w = shared.as_ref().and_then(|ws| ws[i]);
+        measured.push(measure(ctx, child, child_c(child, w)));
         margins.push(common.margin);
-        // No free space to share along an unbounded axis: flex is ignored.
-        flex.push(common.flex.filter(|w| *w > 0.0 && !content_h));
+        // No free space to share along an unbounded axis (or in an
+        // equal-height row): flex is ignored.
+        flex.push(
+            common
+                .flex
+                .filter(|w| *w > 0.0 && !content_h && shared.is_none()),
+        );
     }
 
     // The gap after each child: `spacing`, or what puts the first baselines
@@ -448,13 +622,6 @@ pub(super) fn flex_slots<M: LeafMeasure>(
         .sum();
     let total_flex: f32 = flex.iter().filter_map(|f| *f).sum();
     let free = (content_main - fixed_main - gaps).max(0.0);
-
-    if warn && content_main - fixed_main - gaps < -0.01 {
-        tracing::warn!(
-            overflow = fixed_main + gaps - content_main,
-            "children overflow container main axis; clamping"
-        );
-    }
 
     // Final border-box main size for each child.
     let mut main_size: Vec<f32> = Vec::with_capacity(n);
@@ -527,6 +694,25 @@ pub(super) fn flex_slots<M: LeafMeasure>(
     let shared_baseline = baselines
         .as_ref()
         .map_or(0.0, |b| b.iter().copied().fold(0.0, f32::max));
+    // An axis-aligned container puts every child's axis on one line, and
+    // centres the group (tallest part before the line + after it) across.
+    let axes: Option<(Vec<f32>, f32)> = (cross_align == CrossAxisAlign::Axis).then(|| {
+        let b: Vec<f32> = (0..n)
+            .map(|i| {
+                let fp = match axis {
+                    Axis::Horizontal => Size::new(main_size[i], cross_size[i]),
+                    Axis::Vertical => Size::new(cross_size[i], main_size[i]),
+                };
+                axis_line(ctx, axis, children[i], fp, margins[i])
+            })
+            .collect();
+        let before = b.iter().copied().fold(0.0, f32::max);
+        let after = (0..n)
+            .map(|i| cross_size[i] + margin_cross(i) - b[i])
+            .fold(0.0, f32::max);
+        let line = ((content_cross - before - after) / 2.0).max(0.0) + before;
+        (b, line)
+    });
 
     let mut cursor = main_start + start_offset;
     let mut slots = Vec::with_capacity(n);
@@ -534,9 +720,10 @@ pub(super) fn flex_slots<M: LeafMeasure>(
         let bmain = main_size[i];
         let bcross = cross_size[i];
 
-        let cross_off = match &baselines {
-            Some(b) => shared_baseline - b[i],
-            None => cross_axis_offset(cross_align, content_cross, bcross + margin_cross(i)),
+        let cross_off = match (&baselines, &axes) {
+            (Some(b), _) => shared_baseline - b[i],
+            (None, Some((b, line))) => line - b[i],
+            (None, None) => cross_axis_offset(cross_align, content_cross, bcross + margin_cross(i)),
         };
 
         let main_pos = cursor + margin_leading_main(axis, margins[i]);
@@ -605,7 +792,8 @@ fn cross_axis_offset(align: CrossAxisAlign, content_cross: f32, child_cross: f32
         CrossAxisAlign::Start
         | CrossAxisAlign::Stretch
         | CrossAxisAlign::Baseline
-        | CrossAxisAlign::CapMiddle => 0.0,
+        | CrossAxisAlign::CapMiddle
+        | CrossAxisAlign::Axis => 0.0,
         CrossAxisAlign::Center => slack / 2.0,
         CrossAxisAlign::End => slack,
     }

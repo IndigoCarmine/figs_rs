@@ -14,6 +14,84 @@ use crate::geom::{
 pub struct ComputedLayout {
     pub page: PageGeom,
     pub nodes: Vec<ComputedNode>,
+    /// Every column/row whose children didn't fit along its main axis, in
+    /// layout order (each is also logged as a warning).
+    pub overflows: Vec<OverflowReport>,
+}
+
+/// A column/row whose children need more room along its main axis than its
+/// content box has (see [`crate::geom::Overflow`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct OverflowReport {
+    /// The container's id.
+    pub node: String,
+    /// Its `name`, if it has one.
+    pub name: Option<String>,
+    /// The nearest named ancestor (when the container has no name itself).
+    pub within: Option<String>,
+    /// Its main axis (`Vertical`: a column, too tall).
+    pub axis: crate::geom::Axis,
+    /// The extent the children need, and the content box's (points).
+    pub need_pt: f32,
+    pub room_pt: f32,
+    /// What layout did about it.
+    pub action: OverflowAction,
+    /// The named children and their extent along the main axis (points).
+    pub children: Vec<(String, f32)>,
+}
+
+/// What happened to an overflow.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum OverflowAction {
+    /// The children run past the box (`overflow = "visible"`).
+    Visible,
+    /// They are clipped to it (`overflow = "clip"`).
+    Clipped,
+    /// They are scaled by this factor to fit (`overflow = "shrink"`).
+    Shrunk(f32),
+}
+
+impl OverflowReport {
+    /// How much more room the children need (points).
+    pub fn excess_pt(&self) -> f32 {
+        self.need_pt - self.room_pt
+    }
+
+    /// A one-line description in the page `unit`, e.g. `section "Results":
+    /// content is 1.61 cm too tall (needs 14.20 cm, has 12.59 cm); clipped
+    /// at the box`.
+    pub fn message(&self, unit: crate::units::Unit) -> String {
+        let f = |pt: f32| format!("{:.2} {}", pt / unit.to_pt(), unit.name());
+        let who = match (&self.name, &self.within) {
+            (Some(n), _) => format!("{n} ({})", self.node),
+            (None, Some(w)) => format!("{} in {w}", self.node),
+            (None, None) => self.node.clone(),
+        };
+        let (kind, dim) = match self.axis {
+            crate::geom::Axis::Vertical => ("column", "tall"),
+            crate::geom::Axis::Horizontal => ("row", "wide"),
+        };
+        let what = match self.action {
+            OverflowAction::Visible => "it runs past the box".to_string(),
+            OverflowAction::Clipped => "clipped at the box".to_string(),
+            OverflowAction::Shrunk(s) => format!("scaled to {:.0}% to fit", s * 100.0),
+        };
+        let mut msg = format!(
+            "{kind} {who}: content is {} too {dim} (needs {}, has {}); {what}",
+            f(self.excess_pt()),
+            f(self.need_pt),
+            f(self.room_pt),
+        );
+        if !self.children.is_empty() {
+            let parts: Vec<String> = self
+                .children
+                .iter()
+                .map(|(n, v)| format!("{n} {}", f(*v)))
+                .collect();
+            msg.push_str(&format!(" [{}]", parts.join(", ")));
+        }
+        msg
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -168,6 +168,7 @@ fn parse_cross_axis(s: &str) -> Option<CrossAxisAlign> {
         "stretch" => CrossAxisAlign::Stretch,
         "baseline" => CrossAxisAlign::Baseline,
         "cap_middle" => CrossAxisAlign::CapMiddle,
+        "axis" => CrossAxisAlign::Axis,
         _ => return None,
     })
 }
@@ -241,6 +242,7 @@ fn parse_unit(s: &str) -> Option<Unit> {
 fn blank_node(kind: NodeKind) -> RawNode {
     RawNode {
         kind,
+        name: None,
         flex: None,
         width: None,
         height: None,
@@ -251,6 +253,7 @@ fn blank_node(kind: NodeKind) -> RawNode {
         y: None,
         anchor: None,
         rotate: None,
+        axis: None,
         viewbox: None,
         contain: false,
         clip: false,
@@ -262,6 +265,8 @@ fn blank_node(kind: NodeKind) -> RawNode {
         main_axis_alignment: None,
         cross_axis_alignment: None,
         baseline_pitch: None,
+        equal_height: false,
+        overflow: None,
         content: None,
         font_size: None,
         font_family: None,
@@ -1069,6 +1074,49 @@ fn build_engine(base_dir: Option<&Path>) -> Engine {
             checked_paint("absolute", p)
         },
     );
+    // Diagnostics: a human-readable name (an overflow warning uses it).
+    engine.register_fn("name", |n: ScriptNode, s: &str| {
+        set_node(n, |r| r.name = Some(s.to_string()))
+    });
+    // The node's axis for a parent with `.cross("axis")`: `.axis()` marks it
+    // as the axis provider, `.axis(fx, fy)` puts the axis at those fractions.
+    engine.register_fn("axis", |n: ScriptNode| {
+        set_node(n, |r| r.axis = Some(crate::geom::AxisMark::Auto))
+    });
+    engine.register_fn(
+        "axis",
+        |n: ScriptNode, fx: Dynamic, fy: Dynamic| -> NodeResult {
+            let [fx, fy] = nums("axis", "fx, fy", [fx, fy])?;
+            Ok(set_node(n, |r| {
+                r.axis = Some(crate::geom::AxisMark::At([fx, fy]))
+            }))
+        },
+    );
+    // Row: children whose height follows their width share one height and
+    // fill the row's width.
+    engine.register_fn("equal_height", |n: ScriptNode| -> NodeResult {
+        if n.node.kind != NodeKind::Row {
+            return Err(err("`equal_height` applies to a row"));
+        }
+        Ok(set_node(n, |r| r.equal_height = true))
+    });
+    // Column / row: "visible" (default), "clip" or "shrink" on overflow.
+    engine.register_fn("overflow", |n: ScriptNode, mode: &str| -> NodeResult {
+        if !matches!(n.node.kind, NodeKind::Column | NodeKind::Row) {
+            return Err(err("`overflow` applies to a col/row"));
+        }
+        let v = match mode {
+            "visible" => crate::geom::Overflow::Visible,
+            "clip" => crate::geom::Overflow::Clip,
+            "shrink" => crate::geom::Overflow::Shrink,
+            _ => {
+                return Err(err(format!(
+                    "`overflow`: unknown mode `{mode}` (visible, clip, shrink)"
+                )))
+            }
+        };
+        Ok(set_node(n, |r| r.overflow = Some(v)))
+    });
     // Containers: clip the children to the (rounded) box inside the border.
     engine.register_fn("clip", |n: ScriptNode| -> NodeResult {
         if !matches!(
