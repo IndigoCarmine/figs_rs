@@ -1,0 +1,91 @@
+// Connectors: lines between laid-out nodes, wherever they end up — no
+// coordinates in this file:
+//   zoom_link(item, copy, #{ region })   a region outlined and joined to its
+//                                        magnified copy (beside it, or an inset)
+//   callout_to(item, label, #{ at })     a label in a free spot, a leader to a point
+//   flow_link(a, b)                      flowchart links across rows / columns
+//   behind(group, block_arrow_bent(..))  a translucent bent wide arrow behind a group
+//   plot_shift_arrows(a, b, xs)          arrows from one series to another
+//   pile(node, n), backdrop(node)        stacked copies; a translucent panel
+//   labeled(.., #{ position })           labels outside the panel
+// Images and data are synthetic; all names are fictional.
+style(#{ base_size: 10, label_position: "outside-top" });
+
+let u = csv("data/uvvis.csv");
+let region = [0.55, 0.3, 0.75, 0.6];
+
+// (a) The region and its magnified copy side by side.
+let photo = image("img/particles.png");
+let detail = image("img/particles_zoom.png");
+let side_by_side = col([
+    fill_row([photo, detail]),
+    zoom_link(photo, detail, #{ region: region }),
+]);
+
+// (b) The same with the copy as an inset over the photo.
+let photo2 = image("img/particles.png");
+let detail2 = image("img/particles_zoom.png");
+let as_inset = col([
+    inset(photo2, detail2, #{ corner: "bottom-left", width: 3.2 }),
+    zoom_link(photo2, detail2, #{ region: region, color: "#ffd166" }),
+]);
+
+// (c) Callouts: labels in free corners, leaders to points (white over the
+// dark photo, then back to the defaults).
+style(#{ overlay_text_color: "#ffffff", overlay_text_halo: "#000000", callout_color: "#ffffff" });
+let photo3 = image("img/particles.png");
+let callouts = callout_to(
+    callout_to(photo3, "cluster", #{ at: [0.65, 0.45], position: "top-left" }),
+    "single particle", #{ at: [0.2, 0.75], position: "bottom-right", head: "end" });
+style(#{ overlay_text_color: "", overlay_text_halo: "", callout_color: "#000000" });
+
+// (d) A flowchart: links between boxes in different rows and columns, and a
+// translucent bent wide arrow behind the whole chart.
+fn box(s) {
+    col([body(s)]).pad([0.18, 0.3]).fill("#eef3fb").stroke("#4a6fa5")
+        .stroke_width(0.03).radius(0.15).cross("center")
+}
+let s1 = box("Synthesis");
+let s2 = box("Purification");
+let s3 = box("Casting");
+let s4 = box("Annealing");
+let s5 = box("Imaging");
+let s6 = box("Analysis");
+let chart = col([
+    row([s1, s2, s3]).main("space_between"),
+    row([s6, s5, s4]).main("space_between"),
+    flow_link(s1, s2), flow_link(s2, s3), flow_link(s3, s4),
+    flow_link(s4, s5), flow_link(s5, s6),
+    flow_link(s2, s5, #{ dash: [0.12, 0.08], head: "both" }),
+    flow_link(s6, s1, #{ from: "left", to: "left" }),
+]).spacing(1.2).main("space_evenly").stretch();
+let flow = behind(chart, block_arrow_bent(#{ from: "top", to: "right", width: 0.9,
+                                             color: linear(0, ["#4a6fa5", "#e76f51"]) }));
+
+// (e) Heating: arrows from the 20 °C spectrum to the 110 °C one.
+let cold = line_plot(u.wl, u.a20, "20 °C");
+let hot = line_plot(u.wl, u.a110, "110 °C");
+let heating = plot(#{ xlabel: markup("*λ* [nm]"), ylabel: "Abs.", x: [250, 410] }, [
+    cold, hot, plot_shift_arrows(cold, hot, [272, 325, 352, 372], #{ color: "#c0392b" }),
+]);
+
+// (f) Piles of discs and sheets on one axis; a translucent backdrop over a photo.
+let disc = ellipse().width(1.4).height(0.45).fill("#9cc8ea").stroke("#2c5d8a").stroke_width(0.03);
+let sheet = rect().width(1.0).height(1.3).fill("#ffffff").stroke("#555555").stroke_width(0.03);
+let kit = vbox([
+    scheme([
+        step(pile(disc, 5, #{ offset: [0, -0.13] }), "pellets"),
+        arrow_step("press"),
+        step(pile(sheet, 4, #{ opacity: 0.7 }), "films"),
+    ]),
+    overlay(image("img/sunlit.png"), #{ bottom: backdrop(rich("*T* = 25 °C, 10 min"), #{ color: "#ffffffb0" }) }),
+]);
+
+page("a4-landscape", grid(3, [
+    labeled(side_by_side, "(a)"),
+    labeled(as_inset, "(b)"),
+    labeled(callouts, "(c)"),
+    labeled(flow, "(d)"),
+    labeled(heating, "(e)"),
+    labeled(kit, "(f)", #{ position: "outside-left" }),
+]).pad(0.8))

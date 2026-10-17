@@ -206,6 +206,62 @@ fn cycle_arrow_depth() { style_get("cycle_arrow_depth", base_size() * 0.04) }
 fn cycle_arrow_span() { style_get("cycle_arrow_span", 0.7) }
 fn cycle_arrow_gap() { style_get("cycle_arrow_gap", caption_gap() * 0.5) }
 
+// --- Links: zoom insets, callout leaders, flowchart links, wide arrows,
+// piles and backdrops (see "Links" below) ---
+
+// `zoom_link`: colour and width of the region outline and the lines to the
+// magnified copy; the lines' dash (cm) and the outline's ([] = solid);
+// whether the copy gets a frame in the same colour.
+fn zoom_color() { style_get("zoom_color", accent()) }
+fn zoom_width() { style_get("zoom_width", annotation_width()) }
+fn zoom_dash() { style_get("zoom_dash", annotation_dash()) }
+fn zoom_region_dash() { style_get("zoom_region_dash", []) }
+fn zoom_copy_frame() { style_get("zoom_copy_frame", true) }
+
+// `callout_to`: where the label goes (an overlay position inside the item,
+// or "left" / "right" / "above" / "below" beside it), the leader's colour,
+// width, the clear space between label and leader (cm), the label size (pt)
+// and the label-to-item gap of an outside label (cm).
+fn callout_position() { style_get("callout_position", "top-right") }
+fn callout_color() { style_get("callout_color", plot_fg()) }
+fn callout_width() { style_get("callout_width", annotation_width() * 0.75) }
+fn callout_gap() { style_get("callout_gap", caption_gap() * 0.5) }
+fn callout_size() { style_get("callout_size", base_size()) }
+fn callout_side_gap() { style_get("callout_side_gap", gap()) }
+
+// `flow_link`: colour, width, corner radius (cm) of the elbow, and the gap
+// left at each end (cm).
+fn flow_link_color() { style_get("flow_link_color", plot_fg()) }
+fn flow_link_width() { style_get("flow_link_width", annotation_width()) }
+fn flow_link_radius() { style_get("flow_link_radius", base_size() * 0.02) }
+fn flow_link_gap() { style_get("flow_link_gap", 0) }
+
+// `block_link` / `block_arrow_bent`: band width (cm), fill (a colour or a
+// gradient) and opacity of wide arrows between or behind nodes.
+fn block_link_width() { style_get("block_link_width", base_size() * 0.06) }
+fn block_link_color() { style_get("block_link_color", accent()) }
+fn block_link_opacity() { style_get("block_link_opacity", 0.35) }
+
+// `plot_shift_arrows`: the part of each arrow's length left off at both
+// ends (a fraction), so heads stop short of the curves.
+fn shift_arrow_trim() { style_get("shift_arrow_trim", 0.06) }
+
+// `pile`: offset of each copy behind the one in front ([dx, dy] cm; up and
+// to the right by default) and the opacity of the copies behind.
+fn pile_offset() { style_get("pile_offset", [base_size() * 0.012, -base_size() * 0.012]) }
+fn pile_opacity() { style_get("pile_opacity", 1.0) }
+
+// `backdrop`: panel colour (translucent white), padding and corner radius
+// (cm).
+fn backdrop_color() { style_get("backdrop_color", "#ffffffcc") }
+fn backdrop_pad() { style_get("backdrop_pad", base_size() * 0.02) }
+fn backdrop_radius() { style_get("backdrop_radius", base_size() * 0.015) }
+
+// `labeled`: where panel labels go — "inside" (in `label_corner()`), a
+// corner, "outside-left" or "outside-top" — and the gap of an outside label.
+fn label_position() { style_get("label_position", "inside") }
+fn label_outside_gap() { style_get("label_outside_gap", caption_gap()) }
+
 // ---------------------------------------------------------------------------
 // Style presets
 // ---------------------------------------------------------------------------
@@ -292,6 +348,13 @@ fn style_keys() {
         "scalebar_box", "scalebar_box_pad", "scalebar_box_radius", "overlay_text_size",
         "overlay_text_color", "overlay_text_halo", "overlay_text_halo_width", "inset_avoid_band",
         "fill_row_gap",
+        // links, piles, backdrops
+        "zoom_color", "zoom_width", "zoom_dash", "zoom_region_dash", "zoom_copy_frame",
+        "callout_position", "callout_color", "callout_width", "callout_gap", "callout_size",
+        "callout_side_gap", "flow_link_color", "flow_link_width", "flow_link_radius",
+        "flow_link_gap", "block_link_width", "block_link_color", "block_link_opacity",
+        "shift_arrow_trim", "pile_offset", "pile_opacity", "backdrop_color", "backdrop_pad",
+        "backdrop_radius", "label_position", "label_outside_gap",
         // plots
         "plot_line_width", "series_width", "palette", "tick_length", "tick_direction",
         "minor_ticks", "max_ticks", "marker_size", "marker_open", "marker_stroke_width",
@@ -1242,8 +1305,36 @@ fn label_tag(s) {
 // An item that asks for label room (a plot notes `plot_label_room()` as
 // `.meta("label_room")`) first gets that empty band prepended inside it, so
 // the label sits clear of its content.
-fn labeled(item, s) {
-    let tag = pin_in("label_corner", label_tag(s), label_corner(), label_inset());
+// `labeled(item, s, opts)`: `position` — "inside" (default
+// `label_position()`: in `label_corner()`), a corner ("top-right", …),
+// "outside-left" (the label left of the item, tops aligned) or
+// "outside-top" (above it, left-aligned); `gap` (cm) between an outside
+// label and the item (default `label_outside_gap()`).
+fn labeled(item, s) { labeled(item, s, #{}) }
+fn labeled(item, s, opts) {
+    shape_opts("labeled", opts, ["position", "gap"]);
+    let pos = plot_opt(opts, "position", label_position());
+    if pos == "inside" { return labeled_in(item, s, label_corner(), "label_corner"); }
+    if pos == "outside-left" || pos == "outside-top" {
+        let g = plot_opt(opts, "gap", label_outside_gap());
+        // Beside: the item takes the rest of the width; above: the item
+        // keeps its own height (an image stays unletterboxed).
+        let n = as_node(item);
+        return if pos == "outside-left" {
+            row([label_tag(s), n.flex(1)]).spacing(g).cross("start")
+        } else {
+            col([label_tag(s), n]).spacing(g).stretch()
+        };
+    }
+    if !["top-left", "top-right", "bottom-left", "bottom-right"].contains(pos) {
+        throw `labeled(): unknown position "${pos}" (inside, top-left, top-right, bottom-left, bottom-right, outside-left, outside-top)`;
+    }
+    labeled_in(item, s, pos, "labeled")
+}
+
+// The label pinned in `corner` over the item (`who` names what set it).
+fn labeled_in(item, s, corner, who) {
+    let tag = pin_in(who, label_tag(s), corner, label_inset());
     let item = as_node(item);
     let room = item.meta("label_room");
     if type_of(room) != "()" && room > 0.0 {
@@ -2321,6 +2412,232 @@ fn cycle_arrows(item, opts) {
 }
 
 // ---------------------------------------------------------------------------
+// Links (core connectors between laid-out nodes), piles and backdrops
+// ---------------------------------------------------------------------------
+//
+// The core `connect(a, b, opts)` draws a line (or a wide band) between two
+// nodes AFTER layout, wherever they end up — `a` / `b` are node values (or
+// `.id` names) — and takes no room in its parent. The helpers below return
+// such connectors (or arrays of them) to drop anywhere in the tree: an array
+// among a container's children is spliced in,
+//   col([row([photo, detail]), zoom_link(photo, detail, #{ region: r })])
+// and where they sit only decides what they are painted over.
+
+// Options of a link helper: `defaults` with the user's `opts` over them
+// (`connect` checks the keys).
+fn link_opts(who, defaults, opts) {
+    if type_of(opts) != "map" { throw `${who}(): options must be a map (got ${type_of(opts)})`; }
+    for k in opts.keys() { defaults[k] = opts[k]; }
+    defaults
+}
+
+// `zoom_link(item, copy, opts)`: the classic magnification inset — the
+// region `region` of `item` (an image, a panel; [fx0, fy0, fx1, fy1]
+// fractions of its box) outlined, and two lines from the region's corners
+// to the nearest corners of `copy` (the magnified view: an `inset(..)`, an
+// `overlay(..)` item, or a panel beside it), chosen after layout so they
+// never cross the boxes. An array of connectors. Options:
+//   region       [fx0, fy0, fx1, fy1] (default [0.4, 0.4, 0.6, 0.6])
+//   color        outline and lines (default `zoom_color()`)
+//   width        cm (default `zoom_width()`)
+//   dash         the lines' dash (default `zoom_dash()`; [] solid)
+//   region_dash  the outline's dash (default `zoom_region_dash()`: solid)
+//   frame        frame the copy too (default `zoom_copy_frame()`)
+fn zoom_link(item, copy) { zoom_link(item, copy, #{}) }
+fn zoom_link(item, copy, opts) {
+    let who = "zoom_link";
+    shape_opts(who, opts, ["region", "color", "width", "dash", "region_dash", "frame"]);
+    let r = plot_numbers(who, "`region`", plot_opt(opts, "region", [0.4, 0.4, 0.6, 0.6]));
+    if r.len() != 4 || !(r[2] > r[0]) || !(r[3] > r[1]) {
+        throw `${who}(): region is [fx0, fy0, fx1, fy1] fractions of the item's box (fx0 < fx1, fy0 < fy1)`;
+    }
+    let base = #{ stroke: plot_opt(opts, "color", zoom_color()), width: plot_opt(opts, "width", zoom_width()) };
+    let out = link_box(item, r, base + #{ dash: plot_opt(opts, "region_dash", zoom_region_dash()) });
+    if plot_opt(opts, "frame", zoom_copy_frame()) {
+        out += link_box(copy, (), base + #{ dash: plot_opt(opts, "region_dash", zoom_region_dash()) });
+    }
+    let d = plot_opt(opts, "dash", zoom_dash());
+    for k in ["facing-1", "facing-2"] {
+        out.push(connect(item, copy, base + #{ from_box: r, from: k, to: k, dash: d }));
+    }
+    out
+}
+
+// The outline of box `r` of `node` (() = the whole box) as four connectors
+// (square caps close the corners).
+fn link_box(node, r, o) {
+    let cs = ["top-left", "top-right", "bottom-right", "bottom-left"];
+    let out = [];
+    for i in 0..4 {
+        let e = o + #{ from: cs[i], to: cs[(i + 1) % 4], cap: "square" };
+        if type_of(r) != "()" { e.from_box = r; e.to_box = r; }
+        out.push(connect(node, node, e));
+    }
+    out
+}
+
+// `callout_to(item, label)` / `(…, opts)`: `label` (a string — inline
+// markup —, spans or a node) placed in a free spot of `item` or beside it,
+// with a leader line to the point `at` of the item. The item with the label
+// and the leader (a core stack, or a row / column for an outside label).
+// Options:
+//   at        [fx, fy] the point the leader ends at, fractions of the item's
+//             box (default [0.5, 0.5])
+//   position  an overlay position over the item ("top-left", "top", …,
+//             "bottom-right") or "left" / "right" / "above" / "below" beside
+//             it (default `callout_position()`)
+//   color     leader colour (default `callout_color()`)
+//   width     cm (default `callout_width()`)
+//   gap       clear space between label and leader (default `callout_gap()`)
+//   head      "none" (default), "end" (an arrow at the point)
+//   size      label size, pt (default `callout_size()`)
+//   route     "straight" (default), "elbow", "curve"
+// Inside the item the label is in the overlay text style; nest calls for
+// several callouts: `callout_to(callout_to(img, "A", ..), "B", ..)`.
+fn callout_to(item, label) { callout_to(item, label, #{}) }
+fn callout_to(item, label, opts) {
+    let who = "callout_to";
+    shape_opts(who, opts, ["at", "position", "color", "width", "gap", "head", "size", "route"]);
+    let at = plot_numbers(who, "`at`", plot_opt(opts, "at", [0.5, 0.5]));
+    if at.len() != 2 { throw `${who}(): at is [fx, fy] fractions of the item's box`; }
+    let pos = plot_opt(opts, "position", callout_position());
+    let size = plot_opt(opts, "size", callout_size());
+    let sides = ["left", "right", "above", "below"];
+    let inside = ();
+    for p in overlay_positions() { if p[0] == pos { inside = p; } }
+    if type_of(inside) == "()" && !sides.contains(pos) {
+        let names = [];
+        for p in overlay_positions() { names.push(p[0]); }
+        throw `${who}(): unknown position "${pos}" (${list_names(names + sides)})`;
+    }
+    let n = as_node(item);
+    let lab = if type_of(inside) != "()" {
+        let t = overlay_text(who, label, inside[2]);
+        if type_of(label) == "string" || poster_is_rich(label) { t = t.size(size); }
+        t
+    } else {
+        scheme_text(who, label, size, if pos == "left" { "end" } else { "start" })
+    };
+    let leader = connect(lab, n, #{
+        to: at, stroke: plot_opt(opts, "color", callout_color()),
+        width: plot_opt(opts, "width", callout_width()), gap: [plot_opt(opts, "gap", callout_gap()), 0],
+        head: plot_opt(opts, "head", "none"), route: plot_opt(opts, "route", "straight") });
+    let g = callout_side_gap();
+    if pos == "right" { return row([n, lab, leader]).spacing(g).cross("center"); }
+    if pos == "left" { return row([lab, n, leader]).spacing(g).cross("center"); }
+    if pos == "above" { return col([lab, n, leader]).spacing(g).cross("center"); }
+    if pos == "below" { return col([n, lab, leader]).spacing(g).cross("center"); }
+    let m = #{};
+    m[pos] = lab;
+    stack([overlay(n, m), leader])
+}
+
+// `flow_link(a, b)` / `(…, opts)`: a flowchart link from node `a` to node
+// `b` — an elbow route (horizontal / vertical runs from the facing sides,
+// corners rounded by `flow_link_radius()`) with an arrow head, in
+// `flow_link_color()`, `flow_link_width()` wide. `opts` are `connect`
+// options over these (`route: "straight"`, `from: "bottom"`, `dash`, …).
+fn flow_link(a, b) { flow_link(a, b, #{}) }
+fn flow_link(a, b, opts) {
+    connect(a, b, link_opts("flow_link", #{
+        route: "elbow", head: "end", stroke: flow_link_color(), width: flow_link_width(),
+        radius: flow_link_radius(), gap: flow_link_gap() }, opts))
+}
+
+// `block_link(a, b)` / `(…, opts)`: a wide translucent arrow (a filled band
+// with a triangular head) from node `a` to node `b`, `block_link_width()`
+// wide, filled with `block_link_color()` at `block_link_opacity()`. Options
+// are `connect` options, with `width` the band's width and `color` its fill
+// (a colour or a gradient): `#{ route: "elbow", from: "bottom", to: "left",
+// width: 0.8, color: linear(0, ["#ff000040", "#ff0000"]) }`.
+fn block_link(a, b) { block_link(a, b, #{}) }
+fn block_link(a, b, opts) {
+    if type_of(opts) != "map" { throw `block_link(): options must be a map (got ${type_of(opts)})`; }
+    let o = #{};
+    for k in opts.keys() {
+        if k == "width" { o.band = opts.width; } else if k == "color" { o.fill = opts.color; } else { o[k] = opts[k]; }
+    }
+    let w = plot_opt(o, "band", block_link_width());
+    connect(a, b, link_opts("block_link", #{
+        band: w, fill: block_link_color(), opacity: block_link_opacity(), head: "end",
+        radius: w }, o))
+}
+
+// `block_arrow_bent(opts)`: a wide arrow through a group, for `behind(group,
+// ..)`: from the point `from` of the group's box to `to` (sides, corners or
+// [fx, fy]; default "left" -> "bottom"), along an elbow (or `route`) —
+// across the group's middle when the two sides meet at a corner. Options as
+// for `block_link` (`width`, `color`, `opacity`, `head`, `radius`, `gap`:
+// how far the ends reach out of the box, …).
+fn block_arrow_bent() { block_arrow_bent(#{}) }
+fn block_arrow_bent(opts) {
+    if type_of(opts) != "map" { throw `block_arrow_bent(): options must be a map (got ${type_of(opts)})`; }
+    #{ mark: "block_arrow_bent", opts: opts }
+}
+
+// `behind(group, layers)`: `layers` (a node, a `block_arrow_bent(..)`, or an
+// array of them) drawn behind `group`, which keeps its own size: a core
+// `stack([..layers, group])`.
+fn behind(group, layers) {
+    if type_of(layers) != "array" { layers = [layers]; }
+    let g = as_node(group);
+    let out = [];
+    for x in layers {
+        if type_of(x) == "map" && x.contains("mark") && x.mark == "block_arrow_bent" {
+            out.push(block_link(g, g, link_opts("block_arrow_bent", #{
+                from: "left", to: "bottom", route: "elbow" }, x.opts)));
+        } else if type_of(x) == "Node" {
+            out.push(x);
+        } else {
+            throw `behind(): a layer is a node or block_arrow_bent(..) (got ${type_of(x)})`;
+        }
+    }
+    stack(out + [g])
+}
+
+// `pile(node, n)` / `(…, opts)`: `n` copies of `node` stacked, each behind
+// the one in front shifted by `offset` — stacked discs, sheets, cuvettes.
+// The front copy is the node itself (a connector to `node` attaches to it).
+// Options: `offset` [dx, dy] cm per copy (default `pile_offset()`: up and to
+// the right), `opacity` of the copies behind (default `pile_opacity()`).
+// Give `node` a size (`.width` / `.height`, or an icon).
+fn pile(node, n) { pile(node, n, #{}) }
+fn pile(node, n, opts) {
+    shape_opts("pile", opts, ["offset", "opacity"]);
+    if type_of(n) != "i64" || n < 1 { throw `pile(): n must be a positive integer (got ${n})`; }
+    let off = plot_numbers("pile", "`offset`", plot_opt(opts, "offset", pile_offset()));
+    if off.len() != 2 { throw "pile(): offset is [dx, dy] cm"; }
+    let op = plot_opt(opts, "opacity", pile_opacity()).to_float();
+    let x0 = if off[0] < 0.0 { -(n - 1).to_float() * off[0] } else { 0.0 };
+    let y0 = if off[1] < 0.0 { -(n - 1).to_float() * off[1] } else { 0.0 };
+    let m = as_node(node);
+    let parts = [];
+    for i in 0..n {
+        let k = (n - 1 - i).to_float();   // copies from the back
+        let c = m.at(x0 + k * off[0], y0 + k * off[1]);
+        if k > 0.0 && op < 1.0 { c = c.opacity(op); }
+        parts.push(c);
+    }
+    stack(parts)
+}
+
+// `backdrop(node)` / `(…, opts)`: a translucent rounded panel behind `node`
+// (over a photo or a busy plot), hugging it. Options: `color` (default
+// `backdrop_color()`), `pad` (cm or [v, h], `backdrop_pad()`), `radius`
+// (`backdrop_radius()`), `stroke` / `stroke_width` for a border.
+fn backdrop(node) { backdrop(node, #{}) }
+fn backdrop(node, opts) {
+    shape_opts("backdrop", opts, ["color", "pad", "radius", "stroke", "stroke_width"]);
+    let b = col([as_node(node)]).pad(plot_opt(opts, "pad", backdrop_pad()))
+        .fill(plot_opt(opts, "color", backdrop_color())).radius(plot_opt(opts, "radius", backdrop_radius()))
+        .cross("center").main("center");
+    if opts.contains("stroke") {
+        b = b.stroke(opts.stroke).stroke_width(plot_opt(opts, "stroke_width", annotation_width()));
+    }
+    b
+}
+
+// ---------------------------------------------------------------------------
 // Plots (data -> core nodes through `viewbox` stacks/paths and `anchor`)
 // ---------------------------------------------------------------------------
 //
@@ -2735,6 +3052,58 @@ fn plot_dimension_v(x, y1, y2, s, opts) {
                             ["color", "width", "left", "size", "gap", "dash"]);
     a.vertical = true;
     a
+}
+
+// `plot_shift_arrows(from, to, xs)` / `(…, opts)`: at each data x in `xs`,
+// an arrow from series `from`'s y to series `to`'s y (both linearly
+// interpolated at x) — a spectral change on heating, a shift between two
+// conditions. `from` / `to` are series (`line_plot(..)`, `scatter(..)`);
+// x must lie within both. An array of `plot_arrow` annotations: put it
+// among the series (`plot(opts, [a, b, plot_shift_arrows(a, b, [420, 480])])`)
+// or in `marks`. Options: `color` (or a palette index; default `plot_fg()`),
+// `width` (cm), `head` ("end" default, "both", "start"), `dash`, `trim` (the
+// fraction of each arrow left off at both ends, default `shift_arrow_trim()`).
+fn plot_shift_arrows(a, b, xs) { plot_shift_arrows(a, b, xs, #{}) }
+fn plot_shift_arrows(a, b, xs, opts) {
+    let who = "plot_shift_arrows";
+    for sr in [a, b] {
+        if type_of(sr) != "map" || !sr.contains("kind") {
+            throw `${who}(): from and to must be series (line_plot / scatter / bars), got ${type_of(sr)}`;
+        }
+    }
+    shape_opts(who, opts, ["color", "width", "head", "dash", "trim"]);
+    if type_of(xs) != "array" { xs = [xs]; }
+    let trim = plot_opt(opts, "trim", shift_arrow_trim()).to_float();
+    if !(trim >= 0.0 && trim < 0.5) { throw `${who}(): trim is a fraction from 0 to 0.5 (got ${trim})`; }
+    let o = #{};
+    for k in ["color", "width", "head", "dash"] { if opts.contains(k) { o[k] = opts[k]; } }
+    let out = [];
+    for x in plot_numbers(who, "x", xs) {
+        let y0 = plot_interp(who, a, x);
+        let y1 = plot_interp(who, b, x);
+        let d = (y1 - y0) * trim;
+        if y1 != y0 { out.push(plot_arrow(x, y0 + d, x, y1 - d, o)); }
+    }
+    out
+}
+
+// Series `sr`'s y at data x, linearly interpolated (x ascending or descending).
+fn plot_interp(who, sr, x) {
+    let xs = sr.x;
+    let ys = sr.y;
+    if xs.len() == 0 || type_of(xs[0]) == "string" {
+        throw `${who}(): needs series with numeric x values`;
+    }
+    for i in 0..xs.len() {
+        if xs[i] == x { return ys[i]; }
+        if i == 0 { continue; }
+        let x0 = xs[i - 1];
+        let x1 = xs[i];
+        if (x > x0 && x < x1) || (x < x0 && x > x1) {
+            return ys[i - 1] + (ys[i] - ys[i - 1]) * (x - x0) / (x1 - x0);
+        }
+    }
+    throw `${who}(): x = ${x} is outside a series' x range (${xs[0]} .. ${xs[xs.len() - 1]})`;
 }
 
 // --- insets ---
@@ -3202,6 +3571,10 @@ fn plot_build(opts, series) {
     xlog = xlog == "log";
     ylog = ylog == "log";
     if type_of(series) != "array" { series = [series]; }
+    // An array among the series (`plot_shift_arrows(..)`) is spliced in.
+    let flat = [];
+    for x in series { if type_of(x) == "array" { flat += x; } else { flat.push(x); } }
+    series = flat;
     let notes = series.filter(|x| plot_is_annotation(x));
     let series = plot_colored(plot_only_series(series));
     let extra = plot_opt(opts, "marks", []);

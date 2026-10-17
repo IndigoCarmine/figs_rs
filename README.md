@@ -106,7 +106,8 @@ You provide: hierarchy, style, content, and constraints (`flex`, `aspect_ratio`,
   `head_style`; **path** adds `fill`, `closed`, `stroke_align` (closed only).
 - **ellipse**: `fill`, `stroke`, `stroke_width`, `stroke_align`, `dash`, `cap`,
   `join`.
-- **connector**: `from`, `to` (node ids), `from_at`, `to_at`, `route`, `gap`,
+- **connector**: `from`, `to` (node ids), `from_at`, `to_at`, `from_box`,
+  `to_box`, `route`, `gap`,
   `band`, plus `stroke`, `stroke_width`, `dash`, `cap`, `join`, `head`,
   `head_size`, `head_width`, `head_style`, `corner_radius` (elbow corners) and
   `fill` (band) — a line between two laid-out nodes that takes no room (see
@@ -1109,11 +1110,20 @@ gap = [0, 0.1]          # keep the ends off the boxes ([start, end] or one numbe
   `"auto"` (default): the side facing the other end — left/right when the
   boxes are apart horizontally, else top/bottom; two auto ends whose boxes
   overlap across that direction meet in the middle of the overlap, so a link
-  between neighbours runs straight.
+  between neighbours runs straight (boxes apart both ways: the axis with the
+  wider gap). `"facing-1"` / `"facing-2"` are the first / second corner (top
+  or left first) of that facing side: two connectors attached so join a
+  region to its magnified copy without crossing.
+- **Sub-box** (`from_box` / `to_box = [fx0, fy0, fx1, fy1]`): attach to a
+  part of the node's box — a region of an image — the attachment then being
+  relative to it.
 - **Route**: `straight`; `elbow` — horizontal and vertical runs leaving
   each end along its side (both sides horizontal: H-V-H through the middle;
-  both vertical: V-H-V; one of each: a single corner), corners rounded by
-  `corner_radius`; `curve` — a cubic leaving and entering along the sides.
+  both vertical: V-H-V; one of each: a single corner; two sides facing the
+  same way, e.g. left → left: a U 8 pt past the outer end), corners rounded
+  by `corner_radius`; `curve` — a cubic leaving and entering along the sides.
+- **Images**: on an image fitted with `contain`, fractions and sides are those
+  of the visible picture, not of its (letterboxed) box.
 - **Band**: `band = w` fills an outline `w` wide around the route instead of
   stroking it (a block arrow; mitred corners), with triangular `head`s
   (`head_size` long and `head_width` across, default 1 × and 2 × the band),
@@ -1225,14 +1235,16 @@ setters:
   `.font(name | list | #{ latin, cjk, symbol, fallback })`, and the text
   defaults `.scripts(..)`, `.font_synthesis(..)`, `.synthetic_bold_width(em)`,
   `.synthetic_slant(deg)`.
-- **connectors**: `connect(a, b)` / `connect(a, b, #{ from, to, route, head,
+- **connectors**: `connect(a, b)` / `connect(a, b, #{ from, to, from_box, to_box, route, head,
   head_style, head_size, head_width, stroke, width, dash, cap, band, fill,
   radius, gap, opacity })` — `a` / `b` are node values (`let img =
   image(..); … connect(img, inset)`: the node wherever it ends up in the tree,
   its last copy if placed twice) or ids given with `.id("name")`; `from` /
   `to` are attachment points (`"right"`, `[fx, fy]`, …). Place the
   connector anywhere in the tree (it takes no room); see
-  [Connectors](#connectors). `.id(s)` makes `s` the node's document id
+  [Connectors](#connectors). An array among a container's children is
+  spliced in, so a helper may return several connectors:
+  `col([row([a, b]), zoom_link(a, b, ..)])`. `.id(s)` makes `s` the node's document id
   (`""` clears it; `root` / `node<N>` are reserved), `.id()` reads it.
 - **script-only**: `.meta(key, value)` / `.meta(key)` (a note on the node for
   other script code, `()` when unset; never part of the document — how a plot
@@ -1286,7 +1298,7 @@ Components (lengths in cm, font sizes in pt):
 | `grid(ncols, items)` / `grid(ncols, gap, items)` | Rows of `ncols` equal-flex cells (rows share height equally); the last row is padded with empty cells so widths stay equal. |
 | `panels(items)` / `panels(style, items)` | Each item overlaid with an auto label, `label_inset()` in from its `label_corner()` (via core `stack`). `style` is a template whose last `a`/`A`/`1` is the counter: `"(a)"` (default), `"a"`, `"A"`, `"a."`, `"Fig. 1"`. |
 | `panels(items, captions)` / `panels(style, items, captions)` | The same labeled panels, each with its caption below (`captioned`). `captions` must match `items` in length. |
-| `labeled(item, s)` / `panel_label(style, i)` | One labeled panel — `stack([item, pin(label_tag(s), label_corner(), label_inset())])` — / the `i`-th (0-based) label string. |
+| `labeled(item, s)` / `labeled(item, s, opts)` / `panel_label(style, i)` | One labeled panel — `stack([item, pin(label_tag(s), label_corner(), label_inset())])` — / the `i`-th (0-based) label string. Option `position` (default `label_position()` = `"inside"`: in `label_corner()`): a corner, `"outside-left"` (the label left of the item, tops aligned, the item taking the rest of the width) or `"outside-top"` (above it, left-aligned; the item keeps its own height); `gap` between an outside label and the item (`label_outside_gap()`). `style(#{ label_position: "outside-top" })` moves every `panels` label out. |
 | `circle(r)` / `circle(cx, cy, r)` | A square `ellipse` of radius `r`; the 3-argument form is centered on (`cx`, `cy`) of the enclosing `stack` (via `.at`). |
 | `curve` / `curved_arrow` / `brace` / `bracket` `(x1, y1, x2, y2, bend_or_depth)` | Curved annotations built on the core curve builders — see [Curves](#curves). |
 | `block_arrow(x1, y1, x2, y2, shaft_w, head_w, head_len)` | A thick block arrow with its tip at (`x2`, `y2`): a shaft `shaft_w` wide and a triangular head `head_w` across, `head_len` long — one closed 7-corner `path` filled with `accent()`, so `.fill(linear(0, [...]))` gives a gradient and `.shadow(..)` depth. |
@@ -1309,6 +1321,13 @@ Components (lengths in cm, font sizes in pt):
 | `vector_note(item, label)` / `(item, label, opts)` | A straight arrow across a panel (a dipole over a structure, a field over a photo), `label` just beyond its head in its colour (haloed like a panel label). `from` / `to` are `[fx, fy]` **fractions of the item's box** (default `[0.2, 0.75]` → `[0.8, 0.25]`); the label is kept inside the item. Options `color` (`vector_note_color()` = `accent()`), `width`, `size`, `gap`, `head`, `head_size`, `head_width`. |
 | `colorbar(fill, labels)` / `(fill, labels, opts)` | A colour scale: a bar filled with `fill` (colours spread as a gradient, `[offset, colour]` stops, or a ready paint) and `labels` spread evenly along it — the ends flush with the bar's ends, the rest centred. Options `direction` (`"horizontal"`: labels below; `"vertical"`: low at the bottom, labels right), `length` (cm or `"fill"`; `colorbar_length()`), `thickness`, `size`, `gap`, `border` (`""` for none), `discrete: true` (one block per colour), `title`. |
 | `cycle_arrows(item)` / `(item, opts)` | Two curved arrows around a panel or a label (a string): a rotation, a reversible switch. Above and below by default (`sides: "left-right"`), both turning `direction` `"cw"` / `"ccw"`, spanning `cycle_arrow_span()` of the side and bulging `cycle_arrow_depth()` out (core `curved_arrow`s in unit viewboxes, so they follow the item). Options `colors: [a, b]` / `color`, `labels: [a, b]` (beside each arc, in its colour), `width`, `depth`, `span`, `gap`, `size`. |
+| `zoom_link(item, copy, opts)` | The magnification inset: the region `region` (`[fx0, fy0, fx1, fy1]` fractions of `item`'s box — of the visible picture for a letterboxed image) outlined, `copy` framed, and two lines from the region's corners to the copy's nearest corners — chosen **after layout** (core connectors, `facing-1` / `facing-2` corners), so the copy may be a panel beside the item, an `inset(..)` or an `overlay(..)` over it. An array of connectors: drop it anywhere in the tree, `col([fill_row([img, detail]), zoom_link(img, detail, #{ region })])`. Options `color` (`zoom_color()` = `accent()`), `width` (`zoom_width()`), `dash` (the lines, `zoom_dash()`), `region_dash` (the outline, `zoom_region_dash()`: solid), `frame` (frame the copy, `zoom_copy_frame()`). |
+| `callout_to(item, label)` / `(item, label, opts)` | A label in a free spot with a leader line to a point of the item: `at` (`[fx, fy]` of the item's box, default the middle), `position` — an overlay position over the item (`"top-left"`, `"top"`, …; default `callout_position()` = `"top-right"`, in the overlay text style) or `"left"` / `"right"` / `"above"` / `"below"` beside it (`callout_side_gap()` apart). The leader leaves the label's side facing the point, `gap` (`callout_gap()`) off it, in `callout_color()` (`plot_fg()`), `callout_width()`; `head` (`"none"` / `"end"`), `size` (`callout_size()`), `route`. Nest for several: `callout_to(callout_to(img, "A", ..), "B", ..)`. |
+| `flow_link(a, b)` / `(a, b, opts)` | A flowchart link between two nodes anywhere on the page (other rows, columns): an elbow from the facing sides with an arrow head, corners rounded by `flow_link_radius()`, in `flow_link_color()` (`plot_fg()`), `flow_link_width()`, `flow_link_gap()` off the boxes. `opts` are `connect` options over these (`from: "left", to: "left"` loops round in a U; `dash`, `head: "both"`, `route: "straight"`). |
+| `block_link(a, b)` / `(a, b, opts)` | A wide translucent arrow (a filled band, triangular head) between two nodes: `block_link_width()` wide, `block_link_color()` (a colour or gradient) at `block_link_opacity()`. `connect` options, with `width` the band width and `color` its fill. |
+| `behind(group, layers)` / `block_arrow_bent(opts)` | `layers` (nodes, `block_arrow_bent(..)`s) drawn behind `group`, which keeps its size. `block_arrow_bent` is a wide arrow through the group from the point `from` of its box to `to` (sides, corners or `[fx, fy]`; default `"left"` → `"bottom"`) along an elbow — **coordinate-free**, translucent (`block_link` options: `width`, `color` incl. gradients, `opacity`, `head`, `radius`, `gap` to reach out of the box). |
+| `pile(node, n)` / `(node, n, opts)` | `n` copies of a (sized) node, each behind the one in front shifted by `offset` (`pile_offset()`: up and right) at `opacity` (`pile_opacity()`): stacked discs, sheets, cuvettes. A connector to `node` attaches to the front copy. |
+| `backdrop(node)` / `(node, opts)` | A translucent rounded panel behind a node (over a photo or a busy plot), hugging it: `color` (`backdrop_color()` = `#ffffffcc`), `pad` (`backdrop_pad()`), `radius` (`backdrop_radius()`), `stroke` / `stroke_width`. |
 | `pin(node, corner)` / `pin(node, corner, inset)` | Any node pinned `inset` (default `label_inset()`) in from a corner of the enclosing stack — what `labeled` and `scalebar` use. |
 | `captioned(item, c)` | `item` above caption `c` (a string becomes `caption(c)`, a node is used as is), `caption_gap()` apart; the item takes the spare height and the caption spans the item's width, so its centered text sits under the middle of the panel whatever the parent's cross alignment. |
 | `nodes(items)` / `as_node(x)` | Bare-string sugar: a string becomes `body(s)`. Use `col(nodes([...]))` to get it in core containers. |
@@ -1372,6 +1391,15 @@ fn vector_note_color() { "#2a6fdb" }  // vector_note arrow + label (default acce
 fn colorbar_length() { 4 }          // cm, or "fill" (default base_size() * 0.4 = 3.2); colorbar_thickness() 0.24
 fn colorbar_border() { "" }         // colour bar outline (default fg() / black); colorbar_label_size(), _gap
 fn cycle_arrow_color() { "#7b2cbf" }  // cycle_arrows (default accent()); _width, _depth (cm), _span (0.7), _gap
+fn zoom_color() { "#ffd166" }       // zoom_link outline + lines (default accent()); zoom_width(), zoom_dash() (lines),
+                                    // zoom_region_dash() (outline, default [] solid), zoom_copy_frame() (true)
+fn callout_position() { "top-left" }  // callout_to label (default "top-right"); callout_color/_width/_gap/_size/_side_gap
+fn flow_link_radius() { 0.2 }       // flow_link elbow corners, cm (default base_size() * 0.02); _color, _width, _gap
+fn block_link_opacity() { 0.5 }     // block_link / block_arrow_bent (default 0.35); _width (cm), _color
+fn shift_arrow_trim() { 0 }         // plot_shift_arrows: fraction left off both ends (default 0.06)
+fn pile_offset() { [0, -0.1] }      // pile: per copy, cm (default up and right); pile_opacity() (1)
+fn backdrop_color() { "#000000aa" } // backdrop panel (default "#ffffffcc"); backdrop_pad(), backdrop_radius()
+fn label_position() { "outside-top" } // labeled / panels label (default "inside": label_corner())
 fn fg() { "#ffffff" }       // colour of semantic text and (via plot_fg()) plots (default "": renderer black, no colour set)
 fn page_bg() { "#0f1a2e" }  // background of page(preset, root) (default "": none)
 ```
@@ -1597,6 +1625,27 @@ text style (white with a dark halo over photos, once, in the style),
 that doesn't fit its share says so by name (`overflow: "shrink"` scales it
 down to fit) — see [`examples/fit_and_overlay.figs`](examples/fit_and_overlay.figs).
 
+**Links.** Lines between parts of a figure attach to the laid-out nodes
+themselves (core [connectors](#connectors)), so zoom insets, callout leaders,
+flowchart arrows and wide arrows behind a group need no coordinates
+([`examples/connectors.figs`](examples/connectors.figs)):
+
+```rhai
+let img = image("particles.png");
+let detail = image("particles_zoom.png");
+col([fill_row([img, detail]), zoom_link(img, detail, #{ region: [0.55, 0.3, 0.75, 0.6] })])
+callout_to(img, "cluster", #{ at: [0.65, 0.45], position: "top-left" })
+col([row([a, b, c]), row([f, e, d]), flow_link(a, b), flow_link(b, e, #{ dash: [0.1, 0.1] })])
+behind(chart, block_arrow_bent(#{ from: "top", to: "right", color: linear(0, ["#4a6fa5", "#e76f51"]) }))
+plot(#{ xlabel: "λ [nm]" }, [cold, hot, plot_shift_arrows(cold, hot, [272, 325, 352])])
+scheme([step(pile(disc, 5), "pellets"), arrow_step("press"), step(pile(sheet, 4), "films")])
+overlay(photo, #{ bottom: backdrop(rich("*T* = 25 °C")) })
+```
+
+They return connectors (or arrays of them, spliced into any container) that
+take no room; nodes are referred to by value (`connect(img, detail)`), or by
+an `.id("name")`.
+
 **Figure kit.** The furniture of chemistry and materials figures is built in
 too, so a scheme or a panel needs no hand-drawn shapes
 ([`examples/figure_kit.figs`](examples/figure_kit.figs)):
@@ -1670,6 +1719,7 @@ page("double", grid(2, panels([
 | `plot_text(x, y, s)` / `(…, opts)` | Text at the **data point** (x, y), centred on it; goes among the series or in `marks`. Options: `color` (hex or palette index; default `plot_fg()`), `size` (pt, default `base_size()`), `font` (a family or fallback list; default `plot_font()`, the page font), `bold`, `italic`, `markup: true` (`s` is [inline markup](#rich-text-markup) — `"*k* = 0.3 min^{−1}"` becomes rich spans), `anchor: [ax, ay]` (which point of the text sits there, default `[0.5, 0.5]`). |
 | `plot_arrow(x1, y1, x2, y2)` / `(…, opts)` | An arrow between two data points, in `plot_fg()`, `series_width()` wide. Options: `color`, `width` (cm), `head` (`"end"`, `"start"`, `"both"`), `dash`. |
 | `plot_dimension(x1, x2, y, label)` / `(…, opts)` | A dimension line: a double-headed arrow from data `x1` to `x2` at height `y`, `label` (a string or spans) centred above it, `tick_label_pad()` clear of the line; in `plot_fg()`, `plot_line_width()` wide. Options: `color`, `width` (cm), `below: true` (label under the line), `size` (pt), `gap` (cm), `dash`. |
+| `plot_shift_arrows(from, to, xs)` / `(…, opts)` | At each data x of `xs`, an arrow from series `from`'s y to series `to`'s (both linearly interpolated) — a spectral change on heating. An array of `plot_arrow`s: put it among the series (an array there is spliced in: `plot(opts, [a, b, plot_shift_arrows(a, b, [420, 480])])`) or in `marks`. Options `color` (or a palette index; `plot_fg()`), `width`, `head`, `dash`, `trim` (the fraction left off at both ends, `shift_arrow_trim()` = 0.06). |
 | `plot_dimension_v(x, y1, y2, label)` / `(…, opts)` | The same upright, from `y1` to `y2` at data `x`, the label right of its middle (`left: true`: left of it). Options as above, `left` instead of `below`. |
 | `palette_color(i)` | Colour `i` (0-based, wrapping) of `palette()` — to give markers and their fit line one colour; `#{ color: i }` does the same in series options. |
 | `legend(series)` / `legend(style, series)` | The legend as a standalone node (e.g. beside a row of plots), in `legend_style()` or `"swatch"` / `"text"`. |
