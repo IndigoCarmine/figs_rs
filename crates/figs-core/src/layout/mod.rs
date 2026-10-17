@@ -116,31 +116,37 @@ pub const FALLBACK_IMAGE_ASPECT: f32 = 4.0 / 3.0;
 
 /// Where a shaped text block's baselines lie: distances (points) from the
 /// top of the block — the top of the text node's box, where backends draw
-/// it — to the first and the last line's baseline.
+/// it — to the first and the last line's baseline, and to the middle of the
+/// first line's cap height (its optical centre).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TextBaselines {
     pub first: f32,
     pub last: f32,
+    pub cap_middle: f32,
 }
 
 impl TextBaselines {
     /// Baselines for a measurer that can't shape: CSS-like half-leading with
     /// an ascent of 0.8 em and a descent of 0.2 em, the first line at the
-    /// top of a block `height` tall and the last line at its bottom.
+    /// top of a block `height` tall and the last line at its bottom; a cap
+    /// height of 0.7 em.
     pub fn synthetic(text: &TextProps, height: f32) -> Self {
         let size = text.font_size;
         let half_leading = (size * text.line_height - size) / 2.0;
+        let first = half_leading + 0.8 * size;
         TextBaselines {
-            first: half_leading + 0.8 * size,
+            first,
             last: height - half_leading - 0.2 * size,
+            cap_middle: first - 0.35 * size,
         }
     }
 
-    /// The first or the last baseline.
+    /// The first or the last baseline, or the first line's cap middle.
     pub fn get(&self, kind: BaselineKind) -> f32 {
         match kind {
             BaselineKind::First => self.first,
             BaselineKind::Last => self.last,
+            BaselineKind::CapMiddle => self.cap_middle,
         }
     }
 }

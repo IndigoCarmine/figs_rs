@@ -202,6 +202,9 @@ pub enum NodeType {
         axis: Axis,
         children: Vec<usize>,
         spacing: f32,
+        /// Column: first baselines this far apart (see
+        /// `RawNode::baseline_pitch`), points.
+        baseline_pitch: Option<f32>,
         main_axis: MainAxisAlign,
         cross_axis: CrossAxisAlign,
         /// Background / border / clip (`None` = a plain container).
@@ -657,10 +660,16 @@ fn check_anchor(id: &str, raw: &RawNode, anchor: &[AnchorValue; 2]) -> Result<()
     if slots.is_empty() {
         return Ok(());
     }
-    if !matches!(
-        raw.kind,
-        NodeKind::Text | NodeKind::Column | NodeKind::Row | NodeKind::Stack
-    ) {
+    // "cap_middle" falls back to the box middle, so any node has one.
+    let needs_text = slots
+        .iter()
+        .any(|&i| anchor[i].baseline() != Some(crate::geom::BaselineKind::CapMiddle));
+    if needs_text
+        && !matches!(
+            raw.kind,
+            NodeKind::Text | NodeKind::Column | NodeKind::Row | NodeKind::Stack
+        )
+    {
         return Err(invalid(
             "only a text node or a column/row/stack (the baseline of a text inside) has a baseline (use a fraction)".into(),
         ));
@@ -735,6 +744,15 @@ fn convert_node(
         check_anchor(id, raw, anchor)?;
     }
     check_stroke_align(id, raw)?;
+    if raw.baseline_pitch.is_some_and(|p| !p.is_finite())
+        || (raw.baseline_pitch.is_some() && raw.kind != NodeKind::Column)
+    {
+        return Err(ResolveError::InvalidField {
+            node: id.to_string(),
+            field: "baseline_pitch",
+            reason: "a finite length, on a column only".into(),
+        });
+    }
     if raw.wrap.is_some() && raw.kind != NodeKind::Text {
         return Err(ResolveError::InvalidField {
             node: id.to_string(),
@@ -833,6 +851,7 @@ fn convert_node(
                 axis,
                 children,
                 spacing: raw.spacing * factor,
+                baseline_pitch: raw.baseline_pitch.map(|p| p * factor),
                 main_axis: raw.main_axis_alignment.unwrap_or_default(),
                 cross_axis: raw.cross_axis_alignment.unwrap_or_default(),
                 decoration: decoration()?,

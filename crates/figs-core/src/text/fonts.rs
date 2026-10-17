@@ -49,7 +49,13 @@ pub struct FaceMetrics {
     pub underline_thickness: f32,
     pub strike_pos: f32,
     pub strike_thickness: f32,
+    /// Height of the capitals above the baseline (OS/2 `sCapHeight`), em.
+    pub cap_height: f32,
 }
+
+/// The cap height (em) assumed for a face that doesn't record one (no OS/2
+/// v2 table, or a zero value): about that of Latin sans/serif faces.
+pub const FALLBACK_CAP_HEIGHT: f32 = 0.7;
 
 impl Default for FaceMetrics {
     /// Size-based fallbacks for a face that can't be read.
@@ -61,6 +67,7 @@ impl Default for FaceMetrics {
             underline_thickness: 0.05,
             strike_pos: 0.25,
             strike_thickness: 0.05,
+            cap_height: FALLBACK_CAP_HEIGHT,
         }
     }
 }
@@ -196,6 +203,11 @@ fn face_metrics(system: &mut FontSystem, id: fontdb::ID) -> Option<FaceMetrics> 
         underline_thickness,
         strike_pos,
         strike_thickness,
+        cap_height: face
+            .capital_height()
+            .map(|h| h as f32 / upem)
+            .filter(|h| *h > 0.0)
+            .unwrap_or(FALLBACK_CAP_HEIGHT),
     })
 }
 

@@ -378,6 +378,11 @@ pub enum CrossAxisAlign {
     /// baseline (anything but a text node, or a quarter-turned text) sits on
     /// it with its bottom edge. In a column it acts as `start`.
     Baseline,
+    /// Rows: line up the middles of the children's first-line cap heights
+    /// (the optical centre of a line of text, see
+    /// [`BaselineKind::CapMiddle`]); a child with no text inside is centred
+    /// on that line by its box. In a column it acts as `start`.
+    CapMiddle,
 }
 
 /// How a node distributes its children. Determines the main/cross axes.
@@ -400,37 +405,44 @@ pub enum TextAlign {
     Justify,
 }
 
-/// Which line's baseline an anchor refers to.
+/// Which horizontal text line an anchor refers to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BaselineKind {
     /// The first line's baseline (`"baseline"`).
     First,
     /// The last line's baseline (`"last_baseline"`).
     Last,
+    /// Half the cap height above the first line's baseline
+    /// (`"cap_middle"`): the optical vertical centre of a line of text, from
+    /// the font's cap height (0.7 em when the font has none). Unlike the
+    /// baselines, a node with no text inside has one: its box middle.
+    CapMiddle,
 }
 
 impl BaselineKind {
-    /// The schema spelling: `"baseline"` / `"last_baseline"`.
+    /// The schema spelling: `"baseline"` / `"last_baseline"` / `"cap_middle"`.
     pub fn name(self) -> &'static str {
         match self {
             BaselineKind::First => "baseline",
             BaselineKind::Last => "last_baseline",
+            BaselineKind::CapMiddle => "cap_middle",
         }
     }
 
-    /// Parse `"baseline"` / `"last_baseline"`.
+    /// Parse `"baseline"` / `"last_baseline"` / `"cap_middle"`.
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "baseline" => Some(BaselineKind::First),
             "last_baseline" => Some(BaselineKind::Last),
+            "cap_middle" => Some(BaselineKind::CapMiddle),
             _ => None,
         }
     }
 }
 
 /// One component of an `anchor`: a fraction of the footprint along that
-/// axis, or a text baseline (`"baseline"` / `"last_baseline"`): where that
-/// baseline crosses the axis, in the parent's frame (see
+/// axis, or a text line (`"baseline"` / `"last_baseline"` / `"cap_middle"`):
+/// where that line crosses the axis, in the parent's frame (see
 /// [`crate::schema::RawNode::anchor`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AnchorValue {
@@ -483,7 +495,7 @@ impl<'de> Deserialize<'de> for AnchorValue {
         impl serde::de::Visitor<'_> for V {
             type Value = AnchorValue;
             fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                f.write_str(r#"a fraction, "baseline" or "last_baseline""#)
+                f.write_str(r#"a fraction, "baseline", "last_baseline" or "cap_middle""#)
             }
             fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<AnchorValue, E> {
                 Ok(AnchorValue::Frac(v as f32))

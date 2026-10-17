@@ -33,6 +33,7 @@ fn blank(kind: NodeKind) -> RawNode {
         spacing: 0.0,
         main_axis_alignment: None,
         cross_axis_alignment: None,
+        baseline_pitch: None,
         content: None,
         font_size: None,
         font_family: None,

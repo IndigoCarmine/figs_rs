@@ -62,11 +62,14 @@ You provide: hierarchy, style, content, and constraints (`flex`, `aspect_ratio`,
   `[top, right, bottom, left]`). `x`/`y` are only read by a `stack` parent (see
   below); under `column`/`row` and on the root they are ignored. A text's
   (or a column/row/stack's) `anchor` may name its baseline:
-  `anchor = [0, "baseline"]` (see [Baselines](#baselines)).
+  `anchor = [0, "baseline"]`, and any node's its optical middle:
+  `anchor = [0.5, "cap_middle"]` (see [Baselines](#baselines)).
 - **Container** (`column`/`row`): `children`, `spacing`, `main_axis_alignment`
   (`start`/`center`/`end`/`space_between`/`space_around`/`space_evenly`),
-  `cross_axis_alignment` (`start`/`center`/`end`/`stretch`/`baseline` — rows
-  only, see [Baselines](#baselines)). `stretch` fills the cross axis only
+  `cross_axis_alignment` (`start`/`center`/`end`/`stretch`/`baseline`/`cap_middle` —
+  the last two rows only, see [Baselines](#baselines)), `baseline_pitch`
+  (columns: first baselines exactly that far apart, see
+  [Baseline pitch](#baseline-pitch)). `stretch` fills the cross axis only
   for children whose cross size is unconstrained: a child with its own
   `width` (in a column; `height` in a row) keeps it and sits at the start,
   after its margin, as with CSS `align-items: stretch`.
@@ -704,6 +707,44 @@ measures as the tallest part above plus the tallest part below. A child
 without a horizontal baseline (no text inside, or quarter-turned) sits on it
 with its bottom edge. In a column it acts as `start`.
 
+#### Optical middle (`"cap_middle"`)
+
+A line box centred on a point puts the text visibly low or high, by how far
+the font's ascent and descent differ (a Latin title set with a CJK fallback
+face's tall metrics sits low in a bar). `"cap_middle"` is the **optical
+middle** of the first line: half its cap height above its first baseline,
+with the cap height read from the font (OS/2 `sCapHeight`; 0.7 em when the
+font has none; the largest on the line, at each run's base size, so a
+superscript doesn't drag it). It goes wherever `"baseline"` does — the same
+slot, the same rotation rules, containers by their first text — and unlike
+the baselines **any node has one**: without text inside it is the middle of
+the box, so a mixed title (a number and a node) can be anchored by it
+blindly.
+
+```toml
+[nodes.title]            # "Results" optically centred on (5, 1)
+type = "text"
+content = "Results"
+x = 5
+y = 1
+anchor = [0.5, "cap_middle"]
+```
+
+`cross_axis_alignment = "cap_middle"` (script: `.cross("cap_middle")`) lines
+up a row's children by their cap middles — a mark, an icon or a number
+optically centred on a line of text; a child without text is centred on the
+line by its box. The row measures like a baseline row. In a column it acts
+as `start`.
+
+#### Baseline pitch
+
+`baseline_pitch = d` on a column (script: `col(..).baseline_pitch(d)`, in
+the page unit) puts consecutive children's **first baselines exactly `d`
+apart**, whatever their sizes, fonts or margins (a grid of lines, as in a
+typeset list); it replaces `spacing` between two children that both have a
+baseline (and may overlap them if `d` is small), while a pair where either
+has none (a rule, an image) keeps `spacing`. The column measures to match.
+
 #### Unwrapped text (`wrap = false`)
 
 `wrap = false` (script: `.nowrap()`, or `.wrap(bool)`) keeps each paragraph
@@ -1025,7 +1066,7 @@ setters:
   [Shadows, glows & opacity](#shadows-glows--opacity).
 - **user coordinates**: `.viewbox(x0, y0, x1, y1)` (stack/line/arrow/path) and
   `.anchor(ax, ay)` (read by a `stack` parent; on text either may be
-  `"baseline"` / `"last_baseline"`) — see
+  `"baseline"` / `"last_baseline"`, on any node `"cap_middle"`) — see
   [User coordinates](#user-coordinates-viewbox--anchors) and
   [Baselines](#baselines).
 - **offset** (read by a `stack` parent): `.at(x, y)`, `.x(n)`, `.y(n)` — e.g.
@@ -1047,7 +1088,8 @@ setters:
   Rich text: `text([span("ΔG"), span("300K").sub(), …])` (see
   [Rich text](#rich-text-spans)).
 - **container** (`col`/`row`): `.spacing(n)`, `.main("space_between"|…)`,
-  `.cross("start"|"center"|"end"|"stretch"|"baseline")` / `.stretch()`.
+  `.cross("start"|"center"|"end"|"stretch"|"baseline"|"cap_middle")` / `.stretch()`,
+  `.baseline_pitch(d)` (columns; see [Baseline pitch](#baseline-pitch)).
 - **decoration** (`col`/`row`/`stack`): `.fill(hex | gradient)`, `.stroke(hex)`,
   `.stroke_width(n)`, `.stroke_align("inside"|"center"|"outside")`,
   `.radius(n)`, `.dash([on, off, …])`, `.clip()` — see
@@ -1885,12 +1927,14 @@ Modeled on Flutter's `BoxConstraints`/`RenderFlex`:
   with an explicit `width` is wrapped (measured) at that width, as it is
   drawn.
 - **baselines**: the measurer also reports a text block's first/last baseline
-  (`LeafMeasure::text_baselines`, shaped at the box width; a measurer without
-  fonts falls back to a 0.8 / 0.2 em ascent/descent with half-leading). A
+  and first-line cap middle (`LeafMeasure::text_baselines`, shaped at the box
+  width; a measurer without fonts falls back to a 0.8 / 0.2 em ascent/descent
+  with half-leading and a 0.7 em cap height). A
   container's baseline is its child's, found by laying its children out at
   its size (the same slot computation arrange uses). Stacks use them for
-  baseline anchors and rows for `cross_axis_alignment = "baseline"`, in
-  measure and arrange alike. See [Baselines](#baselines).
+  baseline anchors, rows for `cross_axis_alignment = "baseline"` /
+  `"cap_middle"` and columns for `baseline_pitch`, in measure and arrange
+  alike. See [Baselines](#baselines).
 - **stretch**: a stretched cross axis is handed to a child (tight, in measure
   and arrange) only when the child has no explicit size on it; a sized child
   keeps its size and is placed at the start.

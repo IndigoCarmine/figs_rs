@@ -9,7 +9,7 @@ use crate::geom::{
 };
 use crate::schema::{Common, NodeType, RectProps, TextProps};
 
-use super::baseline::{anchor_shift, row_baseline};
+use super::baseline::{anchor_shift, pitch_gaps, row_baseline, row_line};
 use super::computed::{ClipRegion, ComputedNode, FramePaint, PaintContent, PathPaint, TextBox};
 use super::measure::{
     cross_axis, cross_margin, has_cross_size, measure, stack_child_avail, stack_child_constraints,
@@ -314,6 +314,8 @@ pub(super) struct Flex<'a> {
     pub axis: Axis,
     pub children: &'a [usize],
     pub spacing: f32,
+    /// Column: first baselines this far apart (see `pitch_gaps`).
+    pub pitch: Option<f32>,
     pub main_align: MainAxisAlign,
     pub cross_align: CrossAxisAlign,
     /// The container is a column in an unbounded (content-sized) vertical
@@ -329,6 +331,7 @@ impl<'a> Flex<'a> {
             axis,
             children,
             spacing,
+            baseline_pitch,
             main_axis,
             cross_axis,
             ..
@@ -340,6 +343,7 @@ impl<'a> Flex<'a> {
             axis: *axis,
             children,
             spacing: *spacing,
+            pitch: baseline_pitch.filter(|_| *axis == Axis::Vertical),
             main_align: *main_axis,
             cross_align: *cross_axis,
             content_h: *axis == Axis::Vertical && ctx.is_content_h(idx),
@@ -375,6 +379,7 @@ pub(super) fn flex_slots<M: LeafMeasure>(
         axis,
         children,
         spacing,
+        pitch,
         main_align,
         cross_align,
         content_h,
@@ -419,7 +424,13 @@ pub(super) fn flex_slots<M: LeafMeasure>(
         flex.push(common.flex.filter(|w| *w > 0.0 && !content_h));
     }
 
-    let gaps = spacing * (n as f32 - 1.0);
+    // The gap after each child: `spacing`, or what puts the first baselines
+    // `baseline_pitch` apart.
+    let gap_after: Vec<f32> = match pitch {
+        Some(p) => pitch_gaps(ctx, children, &measured, spacing, p),
+        None => vec![spacing; n - 1],
+    };
+    let gaps: f32 = gap_after.iter().sum();
     let margin_main = |i: usize| match axis {
         Axis::Vertical => margins[i].vertical(),
         Axis::Horizontal => margins[i].horizontal(),
@@ -504,15 +515,15 @@ pub(super) fn flex_slots<M: LeafMeasure>(
 
     // A baseline row puts every child's first baseline (or bottom edge) on
     // one line, as low as the child reaching furthest above it needs.
-    let baselines: Option<Vec<f32>> =
-        (axis == Axis::Horizontal && cross_align == CrossAxisAlign::Baseline).then(|| {
-            (0..n)
-                .map(|i| {
-                    let fp = Size::new(main_size[i], cross_size[i]);
-                    row_baseline(ctx, children[i], fp, margins[i])
-                })
-                .collect()
-        });
+    // (`cap_middle`: every child's first-line cap middle, or box middle.)
+    let baselines: Option<Vec<f32>> = row_line(axis, cross_align).map(|kind| {
+        (0..n)
+            .map(|i| {
+                let fp = Size::new(main_size[i], cross_size[i]);
+                row_baseline(ctx, children[i], fp, margins[i], kind)
+            })
+            .collect()
+    });
     let shared_baseline = baselines
         .as_ref()
         .map_or(0.0, |b| b.iter().copied().fold(0.0, f32::max));
@@ -536,7 +547,7 @@ pub(super) fn flex_slots<M: LeafMeasure>(
             Axis::Horizontal => Rect::new(main_pos, cross_pos, bmain, bcross),
         });
 
-        cursor += margin_main(i) + bmain + spacing + extra_gap;
+        cursor += margin_main(i) + bmain + gap_after.get(i).copied().unwrap_or(0.0) + extra_gap;
     }
     slots
 }
@@ -591,7 +602,10 @@ fn cross_axis_offset(align: CrossAxisAlign, content_cross: f32, child_cross: f32
     let slack = (content_cross - child_cross).max(0.0);
     match align {
         // Baseline is resolved by the caller in rows; in a column it is start.
-        CrossAxisAlign::Start | CrossAxisAlign::Stretch | CrossAxisAlign::Baseline => 0.0,
+        CrossAxisAlign::Start
+        | CrossAxisAlign::Stretch
+        | CrossAxisAlign::Baseline
+        | CrossAxisAlign::CapMiddle => 0.0,
         CrossAxisAlign::Center => slack / 2.0,
         CrossAxisAlign::End => slack,
     }

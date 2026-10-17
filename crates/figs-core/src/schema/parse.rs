@@ -232,6 +232,11 @@ pub struct RawNode {
     /// baseline: `y` for upright (and `180`) text, `x` for a quarter-turned
     /// one (`rotate = -90, anchor = ["baseline", 1]` is a label reading
     /// upwards whose baseline is at `x` and which starts at `y`).
+    /// `"cap_middle"` is the line half the first line's cap height above its
+    /// first baseline — the optical centre of a line of text (`anchor = [0.5,
+    /// "cap_middle"]` centres a label on a point by its capitals, not by its
+    /// line box). It goes in the same slot; on a node with no text inside it
+    /// is the middle of the box.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub anchor: Option<[AnchorValue; 2]>,
     /// Rotation in degrees, **clockwise** on the page, about the centre of the
@@ -287,6 +292,12 @@ pub struct RawNode {
     pub main_axis_alignment: Option<MainAxisAlign>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cross_axis_alignment: Option<CrossAxisAlign>,
+    /// Column only: the distance (page unit) between consecutive children's
+    /// first baselines, which then replaces `spacing` between them (it may
+    /// overlap them); a pair where either child has no baseline (no text
+    /// inside) keeps `spacing`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub baseline_pitch: Option<f32>,
 
     // ---- text ----
     #[serde(skip_serializing_if = "Option::is_none")]

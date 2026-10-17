@@ -59,6 +59,11 @@ pub struct ShapedText {
 pub struct ShapedLine {
     /// Baseline y, relative to the block top (points).
     pub baseline: f32,
+    /// Cap height of the line (points): the largest of its glyphs' faces'
+    /// cap heights at their runs' base size (as the line's ascent), so a
+    /// script or a fallback face doesn't drag it. Half of it above
+    /// `baseline` is the line's optical middle (`"cap_middle"`).
+    pub cap_height: f32,
     /// Line advance width (points), without the trailing tracking of its
     /// last character — what alignment centres/right-aligns.
     pub width: f32,
@@ -580,10 +585,12 @@ pub(crate) fn shape(
                 |g: &cosmic_text::LayoutGlyph| &runs[g.metadata.min(runs.len() - 1)].style;
             let (mut lh, mut ascent, mut descent) = (0.0f32, 0.0f32, 0.0f32);
             let (mut ink_up, mut ink_down) = (0.0f32, 0.0f32);
+            let mut cap_height = 0.0f32;
             for g in &ll.glyphs {
                 let st = style_of(g);
                 let m = cache.metrics(system, g.font_id);
                 lh = lh.max(st.base_size * text.line_height);
+                cap_height = cap_height.max(m.cap_height * st.base_size);
                 ascent = ascent.max(m.ascent * st.base_size);
                 descent = descent.max(m.descent * st.base_size);
                 ink_up = ink_up.max(m.ascent * g.font_size + st.shift);
@@ -591,6 +598,7 @@ pub(crate) fn shape(
             }
             if ll.glyphs.is_empty() {
                 lh = node_line;
+                cap_height = super::fonts::FALLBACK_CAP_HEIGHT * text.font_size;
             }
             let lh = lh.max(1.0);
             let baseline = line_top + (lh - (ascent + descent)) / 2.0 + ascent;
@@ -649,6 +657,7 @@ pub(crate) fn shape(
             }
             lines.push(ShapedLine {
                 baseline,
+                cap_height,
                 width: line_w,
                 glyphs,
             });

@@ -17,7 +17,7 @@
 use crate::geom::{Axis, CrossAxisAlign, Edges, Size};
 use crate::schema::{Common, NodeType};
 
-use super::baseline::{anchor_shift, row_baseline};
+use super::baseline::{anchor_shift, pitch_gaps, row_baseline, row_line};
 use super::{cross_of, main_of, Constraints, Ctx, LeafMeasure, FALLBACK_IMAGE_ASPECT};
 
 /// Measure node `idx` under `c`, returning its border-box size (content +
@@ -53,9 +53,18 @@ fn measure_own<M: LeafMeasure>(ctx: &Ctx<M>, idx: usize, c: Constraints) -> Size
             axis,
             children,
             spacing,
+            baseline_pitch,
             cross_axis,
             ..
-        } => measure_container(ctx, *axis, children, *spacing, *cross_axis, &node.common, c),
+        } => measure_container(
+            ctx,
+            *axis,
+            children,
+            (*spacing, baseline_pitch.filter(|_| *axis == Axis::Vertical)),
+            *cross_axis,
+            &node.common,
+            c,
+        ),
         NodeType::Stack {
             children,
             viewbox,
@@ -156,7 +165,7 @@ fn measure_container<M: LeafMeasure>(
     ctx: &Ctx<M>,
     axis: Axis,
     children: &[usize],
-    spacing: f32,
+    (spacing, pitch): (f32, Option<f32>),
     cross_align: CrossAxisAlign,
     common: &Common,
     c: Constraints,
@@ -227,11 +236,20 @@ fn measure_container<M: LeafMeasure>(
         }
     }
 
+    // A pitched column: the gaps that put the first baselines `pitch` apart.
+    let gaps = match pitch {
+        Some(p) if children.len() > 1 => {
+            let szs: Vec<Size> = sizes.iter().map(|s| s.unwrap_or_default()).collect();
+            pitch_gaps(ctx, children, &szs, spacing, p).iter().sum()
+        }
+        _ => gaps,
+    };
+
     let mut main_sum = 0.0f32;
     let mut cross_max = 0.0f32;
     // Baseline rows: the tallest part above the shared baseline plus the
-    // tallest part below it.
-    let baseline_row = axis == Axis::Horizontal && cross_align == CrossAxisAlign::Baseline;
+    // tallest part below it (likewise the shared cap middle).
+    let row_kind = row_line(axis, cross_align);
     let (mut above, mut below) = (0.0f32, 0.0f32);
     for (&child, sz) in children.iter().zip(&sizes) {
         let sz = sz.unwrap_or_default();
@@ -239,13 +257,13 @@ fn measure_container<M: LeafMeasure>(
         let outer = Size::new(sz.w + margin.horizontal(), sz.h + margin.vertical());
         main_sum += main_of(axis, outer);
         cross_max = cross_max.max(cross_of(axis, outer));
-        if baseline_row {
-            let b = row_baseline(ctx, child, sz, margin);
+        if let Some(kind) = row_kind {
+            let b = row_baseline(ctx, child, sz, margin, kind);
             above = above.max(b);
             below = below.max(outer.h - b);
         }
     }
-    if baseline_row {
+    if row_kind.is_some() {
         cross_max = cross_max.max(above + below);
     }
     main_sum += gaps;

@@ -144,12 +144,14 @@ impl LeafMeasure for FontStore {
     }
 
     /// The first and last line's baseline from the shaped block (the same
-    /// shaping the backends draw).
+    /// shaping the backends draw), and the first line's cap middle.
     fn text_baselines(&self, text: &TextProps, max_width: f32) -> Option<TextBaselines> {
         let shaped = self.shape(text, max_width);
+        let first = shaped.lines.first()?;
         Some(TextBaselines {
-            first: shaped.lines.first()?.baseline,
+            first: first.baseline,
             last: shaped.lines.last()?.baseline,
+            cap_middle: first.baseline - first.cap_height / 2.0,
         })
     }
 

@@ -1,6 +1,11 @@
 //! Baselines in layout: `anchor` components `"baseline"` /
-//! `"last_baseline"` in stacks, and `cross_axis_alignment = "baseline"` in
-//! rows.
+//! `"last_baseline"` / `"cap_middle"` in stacks, `cross_axis_alignment =
+//! "baseline"` / `"cap_middle"` in rows, and a column's `baseline_pitch`.
+//!
+//! `"cap_middle"` is the first line's optical middle: half its cap height
+//! above its first baseline (see [`TextBaselines`]); it follows the first
+//! baseline everywhere below, except that a node with no text inside has
+//! one too — the middle of its box.
 //!
 //! A text node's baseline is a horizontal line of its own (unrotated) box,
 //! `TextBaselines` below the box top (where the backends draw the block,
@@ -22,7 +27,9 @@
 //! own baseline only when that runs horizontally in the container — and then
 //! turns with the container like a text's.
 
-use crate::geom::{quarter_turns, AnchorValue, Axis, BaselineKind, Edges, Rect, Size};
+use crate::geom::{
+    quarter_turns, AnchorValue, Axis, BaselineKind, CrossAxisAlign, Edges, Rect, Size,
+};
 use crate::schema::NodeType;
 
 use super::arrange::{flex_slots, layout_stack_contained, stack_slots, Flex};
@@ -119,7 +126,7 @@ fn own_baseline<M: LeafMeasure>(
         baseline_offset(ctx, c, s.size(), Axis::Vertical, kind).map(|b| s.y + b)
     };
     match kind {
-        BaselineKind::First => placed.find_map(at),
+        BaselineKind::First | BaselineKind::CapMiddle => placed.find_map(at),
         BaselineKind::Last => placed.rev().find_map(at),
     }
 }
@@ -127,7 +134,7 @@ fn own_baseline<M: LeafMeasure>(
 /// The offset `(dx, dy)` from a stack child's footprint top-left corner to
 /// its anchor point: per axis the fraction × the footprint size, or where
 /// the named baseline crosses that axis (the far edge when there is none:
-/// a container without any text inside).
+/// a container without any text inside; for `"cap_middle"` the middle).
 pub(super) fn anchor_shift<M: LeafMeasure>(
     ctx: &Ctx<M>,
     idx: usize,
@@ -137,7 +144,10 @@ pub(super) fn anchor_shift<M: LeafMeasure>(
     let [ax, ay] = anchor.unwrap_or_default();
     let one = |v: AnchorValue, axis: Axis, len: f32| match v {
         AnchorValue::Frac(f) => f * len,
-        AnchorValue::Baseline(k) => baseline_offset(ctx, idx, fp, axis, k).unwrap_or(len),
+        AnchorValue::Baseline(k) => baseline_offset(ctx, idx, fp, axis, k).unwrap_or(match k {
+            BaselineKind::CapMiddle => len / 2.0,
+            _ => len,
+        }),
     };
     (
         one(ax, Axis::Horizontal, fp.w),
@@ -145,15 +155,63 @@ pub(super) fn anchor_shift<M: LeafMeasure>(
     )
 }
 
+/// The text line a row's cross alignment lines its children up on:
+/// `"baseline"` / `"cap_middle"`, `None` for the box alignments.
+pub(super) fn row_line(axis: Axis, align: CrossAxisAlign) -> Option<BaselineKind> {
+    match (axis, align) {
+        (Axis::Horizontal, CrossAxisAlign::Baseline) => Some(BaselineKind::First),
+        (Axis::Horizontal, CrossAxisAlign::CapMiddle) => Some(BaselineKind::CapMiddle),
+        _ => None,
+    }
+}
+
 /// Distance from the top of a row child's margin box to the line it sits on
-/// under `cross_axis_alignment = "baseline"`: its first baseline, or — with
-/// none across the row (no text in it, or quarter-turned) — the bottom of
-/// its border box.
+/// under `cross_axis_alignment = "baseline"` (`kind` First): its first
+/// baseline, or — with none across the row (no text in it, or
+/// quarter-turned) — the bottom of its border box; under `"cap_middle"`:
+/// its first line's cap middle, or the middle of its border box.
 pub(super) fn row_baseline<M: LeafMeasure>(
     ctx: &Ctx<M>,
     idx: usize,
     fp: Size,
     margin: Edges,
+    kind: BaselineKind,
 ) -> f32 {
-    margin.top + baseline_offset(ctx, idx, fp, Axis::Vertical, BaselineKind::First).unwrap_or(fp.h)
+    let fallback = match kind {
+        BaselineKind::CapMiddle => fp.h / 2.0,
+        _ => fp.h,
+    };
+    margin.top + baseline_offset(ctx, idx, fp, Axis::Vertical, kind).unwrap_or(fallback)
+}
+
+/// The gap after each child of a column with `baseline_pitch` (all but the
+/// last): `pitch` minus what lies between the two first baselines, so they
+/// end up exactly `pitch` apart (it may be negative), or `spacing` when
+/// either child has no first baseline. `sizes` are the children's border
+/// boxes.
+pub(super) fn pitch_gaps<M: LeafMeasure>(
+    ctx: &Ctx<M>,
+    children: &[usize],
+    sizes: &[Size],
+    spacing: f32,
+    pitch: f32,
+) -> Vec<f32> {
+    let b: Vec<Option<f32>> = children
+        .iter()
+        .zip(sizes)
+        .map(|(&c, &sz)| {
+            let m = ctx.doc.nodes[c].common.margin;
+            baseline_offset(ctx, c, sz, Axis::Vertical, BaselineKind::First).map(|b| m.top + b)
+        })
+        .collect();
+    (1..children.len())
+        .map(|i| match (b[i - 1], b[i]) {
+            (Some(prev), Some(next)) => {
+                let m = ctx.doc.nodes[children[i - 1]].common.margin;
+                let outer = sizes[i - 1].h + m.vertical();
+                pitch + prev - outer - next
+            }
+            _ => spacing,
+        })
+        .collect()
 }

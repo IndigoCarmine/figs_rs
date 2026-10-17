@@ -167,6 +167,7 @@ fn parse_cross_axis(s: &str) -> Option<CrossAxisAlign> {
         "end" => CrossAxisAlign::End,
         "stretch" => CrossAxisAlign::Stretch,
         "baseline" => CrossAxisAlign::Baseline,
+        "cap_middle" => CrossAxisAlign::CapMiddle,
         _ => return None,
     })
 }
@@ -260,6 +261,7 @@ fn blank_node(kind: NodeKind) -> RawNode {
         spacing: 0.0,
         main_axis_alignment: None,
         cross_axis_alignment: None,
+        baseline_pitch: None,
         content: None,
         font_size: None,
         font_family: None,
@@ -588,7 +590,8 @@ fn cast_edges(name: &str, v: Dynamic) -> Result<Edges, Box<EvalAltResult>> {
     Err(bad())
 }
 
-/// One `anchor` component: a fraction, or `"baseline"` / `"last_baseline"`.
+/// One `anchor` component: a fraction, or `"baseline"` / `"last_baseline"` /
+/// `"cap_middle"`.
 fn cast_anchor(v: Dynamic) -> Result<AnchorValue, Box<EvalAltResult>> {
     if let Some(f) = dyn_to_f32(&v) {
         return Ok(AnchorValue::Frac(f));
@@ -598,7 +601,7 @@ fn cast_anchor(v: Dynamic) -> Result<AnchorValue, Box<EvalAltResult>> {
         .and_then(|s| BaselineKind::parse(&s))
         .map(AnchorValue::Baseline)
         .ok_or_else(|| {
-            err(r#"`anchor` expects numbers (ax, ay); on text, "baseline" / "last_baseline" too"#)
+            err(r#"`anchor` expects numbers (ax, ay); "cap_middle" too, and on text "baseline" / "last_baseline""#)
         })
 }
 
@@ -855,6 +858,10 @@ fn build_engine(base_dir: Option<&Path>) -> Engine {
     reg_num(&mut engine, "size", |r, x| r.font_size = Some(x));
     reg_num(&mut engine, "line_height", |r, x| r.line_height = Some(x));
     reg_num(&mut engine, "spacing", |r, x| r.spacing = x);
+    // Column: consecutive children's first baselines exactly this far apart.
+    reg_num(&mut engine, "baseline_pitch", |r, x| {
+        r.baseline_pitch = Some(x)
+    });
     reg_num(&mut engine, "stroke_width", |r, x| r.stroke_width = Some(x));
     reg_num(&mut engine, "radius", |r, x| r.corner_radius = Some(x));
     reg_num(&mut engine, "head_size", |r, x| r.head_size = Some(x));
@@ -904,7 +911,8 @@ fn build_engine(base_dir: Option<&Path>) -> Engine {
         },
     );
     // Which point of the node sits at its offset, as fractions of its size
-    // (or, on text, "baseline" / "last_baseline" across the baseline).
+    // (or, on text, "baseline" / "last_baseline" across the baseline;
+    // "cap_middle": the first line's optical middle, the box middle without text).
     engine.register_fn(
         "anchor",
         |mut n: ScriptNode, ax: Dynamic, ay: Dynamic| -> NodeResult {
